@@ -59,13 +59,14 @@ const EnvSchema = z.object({
   LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS: z.coerce.number().default(86400), // 24 hours
   LANGFUSE_CACHE_PROMPT_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_CACHE_PROMPT_TTL_SECONDS: z.coerce.number().default(3600), // 1h
-  CLICKHOUSE_URL: z.string().url(),
+  // ClickHouse is optional when LANGFUSE_ANALYTICS_BACKEND=doris
+  CLICKHOUSE_URL: z.string().url().optional(),
   CLICKHOUSE_READ_ONLY_URL: z.string().url().optional(),
   CLICKHOUSE_EVENTS_READ_ONLY_URL: z.string().url().optional(),
   CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
   CLICKHOUSE_DB: z.string().default("default"),
-  CLICKHOUSE_USER: z.string(),
-  CLICKHOUSE_PASSWORD: z.string(),
+  CLICKHOUSE_USER: z.string().optional(),
+  CLICKHOUSE_PASSWORD: z.string().optional(),
   CLICKHOUSE_KEEP_ALIVE_IDLE_SOCKET_TTL: z.coerce.number().int().default(9000),
   CLICKHOUSE_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   // Optional to allow for server-setting fallbacks
@@ -89,14 +90,18 @@ const EnvSchema = z.object({
   DORIS_FE_HTTP_URL: z.string().url().default("http://localhost:8030"),
   DORIS_FE_QUERY_PORT: z.coerce.number().positive().default(9030),
   DORIS_DB: z.string().default("langfuse"),
-  DORIS_USER: z.string(),
+  DORIS_USER: z.string().optional(),
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
-  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z.enum(["true", "false"]).default("false"),
+  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
+    .enum(["true", "false"])
+    .default("false"),
 
   // Ingestion backend selection
-  LANGFUSE_ANALYTICS_BACKEND: z.enum(["clickhouse", "doris"]).default("clickhouse"),
+  LANGFUSE_ANALYTICS_BACKEND: z
+    .enum(["clickhouse", "doris"])
+    .default("clickhouse"),
 
   LANGFUSE_INGESTION_QUEUE_DELAY_MS: z.coerce
     .number()
@@ -148,7 +153,7 @@ const EnvSchema = z.object({
     .min(1)
     .max(10)
     .default(3),
-  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: z.string(), // Langfuse requires a bucket name for S3 Event Uploads.
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: z.string().optional(), // Optional for Doris-only deployments
   LANGFUSE_S3_EVENT_UPLOAD_PREFIX: z.string().default(""),
   LANGFUSE_S3_EVENT_UPLOAD_REGION: z.string().optional(),
   LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: z.string().optional(),

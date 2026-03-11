@@ -241,12 +241,12 @@ export const env = createEnv({
         s ? s.split(",").map((h) => h.toLowerCase().trim()) : [],
       ),
 
-    // clickhouse
-    CLICKHOUSE_URL: z.string().url(),
+    // clickhouse - optional when LANGFUSE_ANALYTICS_BACKEND=doris
+    CLICKHOUSE_URL: z.string().url().optional(),
     CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
     CLICKHOUSE_DB: z.string().default("default"),
-    CLICKHOUSE_USER: z.string(),
-    CLICKHOUSE_PASSWORD: z.string(),
+    CLICKHOUSE_USER: z.string().optional(),
+    CLICKHOUSE_PASSWORD: z.string().optional(),
     CLICKHOUSE_CLUSTER_ENABLED: z.enum(["true", "false"]).default("true"),
     CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY: z.coerce
       .number()
