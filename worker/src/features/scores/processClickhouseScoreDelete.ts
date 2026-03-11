@@ -3,6 +3,8 @@ import {
   logger,
   traceException,
   deleteIngestionEventsFromS3AndClickhouseForScores,
+  // Add Doris imports
+  isDorisBackend,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 
@@ -10,8 +12,9 @@ export const processClickhouseScoreDelete = async (
   projectId: string,
   scoreIds: string[],
 ) => {
+  const backendName = isDorisBackend() ? "Doris" : "Clickhouse";
   logger.info(
-    `Deleting scores ${JSON.stringify(scoreIds)} in project ${projectId} from Clickhouse and S3`,
+    `Deleting scores ${JSON.stringify(scoreIds)} in project ${projectId} from ${backendName} and S3`,
   );
 
   try {
@@ -26,7 +29,7 @@ export const processClickhouseScoreDelete = async (
     ]);
   } catch (e) {
     logger.error(
-      `Error deleting scores ${JSON.stringify(scoreIds)} in project ${projectId} from Clickhouse`,
+      `Error deleting scores ${JSON.stringify(scoreIds)} in project ${projectId} from ${backendName}`,
       e,
     );
     traceException(e);

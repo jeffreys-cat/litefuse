@@ -16,14 +16,18 @@ import {
   getValidAggregationsForMeasureType,
 } from "../types";
 import { getViewDeclaration } from "@/src/features/query/dataModel";
+import { viewDeclarationsDoris } from "@/src/features/query/dataModelDoris";
 import {
   FilterList,
   createFilterFromFilterState,
   type Filter,
+  isDorisBackend,
 } from "@langfuse/shared/src/server";
 import { InvalidRequestError } from "@langfuse/shared";
 import { env } from "@/src/env.mjs";
 import { NULL_IF_EMPTY_RE } from "./nullIfEmptyFilter";
+
+
 
 type AppliedDimensionType = {
   table: string;
@@ -101,10 +105,55 @@ export class QueryBuilder {
     }
   }
 
+  private translateAggregationDoris(metric: AppliedMetricType): string {
+    switch (metric.aggregation) {
+      case "sum":
+        return `sum(${metric.alias || metric.sql})`;
+      case "avg":
+        return `avg(${metric.alias || metric.sql})`;
+      case "count":
+        return `count(${metric.alias || metric.sql})`;
+      case "max":
+        return `max(${metric.alias || metric.sql})`;
+      case "min":
+        return `min(${metric.alias || metric.sql})`;
+      case "p50":
+        return `percentile_approx(${metric.alias || metric.sql}, 0.5)`;
+      case "p75":
+        return `percentile_approx(${metric.alias || metric.sql}, 0.75)`;
+      case "p90":
+        return `percentile_approx(${metric.alias || metric.sql}, 0.9)`;
+      case "p95":
+        return `percentile_approx(${metric.alias || metric.sql}, 0.95)`;
+      case "p99":
+        return `percentile_approx(${metric.alias || metric.sql}, 0.99)`;
+      case "histogram":
+        const bins = this.chartConfig?.bins ?? 10;
+        return `histogram(cast(${metric.alias || metric.sql} as double), ${bins})`;
+      default:
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const exhaustiveCheck: never = metric.aggregation;
+        throw new InvalidRequestError(
+          `Invalid aggregation: ${metric.aggregation}`,
+        );
+    }
+  }
+
   private getViewDeclaration(
     viewName: z.infer<typeof views>,
   ): ViewDeclarationType {
     return getViewDeclaration(viewName, this.version);
+  }
+
+  private getViewDeclarationForDoris(
+    viewName: z.infer<typeof views>,
+  ): ViewDeclarationType {
+    if (!(viewName in viewDeclarationsDoris)) {
+      throw new InvalidRequestError(
+        `Invalid view for Doris. Must be one of ${Object.keys(viewDeclarationsDoris)}`,
+      );
+    }
+    return viewDeclarationsDoris[viewName];
   }
 
   private mapDimensions(
@@ -527,10 +576,10 @@ export class QueryBuilder {
     filters.forEach((filter) => {
       // Only add as relation table if it's not the base table
       if (
-        filter.clickhouseTable !== view.name &&
-        filter.clickhouseTable !== actualTableName
+        filter.table !== view.name &&
+        filter.table !== actualTableName
       ) {
-        relationTables.add(filter.clickhouseTable);
+        relationTables.add(filter.table);
       }
     });
     return relationTables;
@@ -659,6 +708,66 @@ export class QueryBuilder {
     return `ARRAY JOIN\n  ${d.sql} AS ${d.alias ?? d.sql},\n  ${d.pairExpand!.valuesSql} AS ${d.pairExpand!.valueAlias}`;
   }
 
+  private buildJoinsDoris(
+    relationTables: Set<string>,
+    view: ViewDeclarationType,
+    filterList: FilterList,
+    query: QueryType,
+  ) {
+    const relationJoins = [];
+    for (const relationTableName of relationTables) {
+      if (!(relationTableName in view.tableRelations)) {
+        throw new InvalidRequestError(
+          `Invalid relationTable: ${relationTableName}. Must be one of ${Object.keys(view.tableRelations)}`,
+        );
+      }
+
+      const relation = view.tableRelations[relationTableName];
+      let joinStatement = `LEFT JOIN ${relation.name} ${relation.joinConditionSql}`;
+
+      // Create time dimension mapping for the relation table
+      const relationTimeDimensionMapping = {
+        uiTableName: relation.timeDimension,
+        uiTableId: relation.timeDimension,
+        clickhouseTableName: relation.name,
+        clickhouseSelect: relation.timeDimension,
+        queryPrefix: relation.name,
+        type: "datetime",
+      };
+
+      // Add relation-specific timestamp filters
+      const fromFilter = createFilterFromFilterState(
+        [
+          {
+            column: relation.timeDimension,
+            operator: ">=",
+            value: new Date(query.fromTimestamp),
+            type: "datetime",
+          },
+        ],
+        [relationTimeDimensionMapping],
+      );
+
+      const toFilter = createFilterFromFilterState(
+        [
+          {
+            column: relation.timeDimension,
+            operator: "<=",
+            value: new Date(query.toTimestamp),
+            type: "datetime",
+          },
+        ],
+        [relationTimeDimensionMapping],
+      );
+
+      // Add filters to the filter list
+      filterList.push(...fromFilter, ...toFilter);
+
+      relationJoins.push(joinStatement);
+    }
+    return relationJoins;
+  }
+
   private buildWhereClause(
     filterList: FilterList,
     parameters: Record<string, unknown>,
@@ -763,6 +872,34 @@ export class QueryBuilder {
     return `${wrappedSql} as time_dimension`;
   }
 
+  private getTimeDimensionSqlDoris(
+    sql: string,
+    granularity: z.infer<typeof granularities>,
+  ): string {
+    switch (granularity) {
+      case "minute":
+        return `date_trunc(${sql}, 'minute')`;
+      case "hour":
+        return `date_trunc(${sql}, 'hour')`;
+      case "day":
+        return `date(${sql})`;
+      case "week":
+        return `date_sub(date(${sql}), dayofweek(${sql}) - 2)`;
+      case "month":
+        return `date_trunc(${sql}, 'month')`;
+      case "auto":
+        throw new Error(
+          `Granularity 'auto' is not supported for getTimeDimensionSqlDoris`,
+        );
+      default:
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const exhaustiveCheck: never = granularity;
+        throw new InvalidRequestError(
+          `Invalid time granularity: ${granularity}. Must be one of minute, hour, day, week, month`,
+        );
+    }
+  }
+
   private buildInnerDimensionsPart(
     appliedDimensions: AppliedDimensionType[],
     query: QueryType,
@@ -808,6 +945,43 @@ export class QueryBuilder {
     return dimensions;
   }
 
+  private buildInnerDimensionsPartDoris(
+    appliedDimensions: AppliedDimensionType[],
+    query: QueryType,
+    view: ViewDeclarationType,
+  ) {
+    let dimensions = "";
+
+    // Add regular dimensions
+    if (appliedDimensions.length > 0) {
+      dimensions += `${appliedDimensions
+        .map(
+          (dimension) =>
+            `any_value(${dimension.table}.${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
+        )
+        .join(",\n")},`;
+    }
+
+    // Add time dimension if specified
+    if (query.timeDimension) {
+      const granularity =
+        query.timeDimension.granularity === "auto"
+          ? this.determineTimeGranularity(
+              query.fromTimestamp,
+              query.toTimestamp,
+            )
+          : query.timeDimension.granularity;
+
+      const timeDimensionSql = this.getTimeDimensionSqlDoris(
+        `${view.name}.${view.timeDimension}`,
+        granularity,
+      );
+      dimensions += `any_value(${timeDimensionSql}) as time_dimension,`;
+    }
+
+    return dimensions;
+  }
+
   private buildInnerMetricsPart(appliedMetrics: AppliedMetricType[]) {
     if (appliedMetrics.length === 0) {
       return "count(*) as count";
@@ -834,6 +1008,28 @@ export class QueryBuilder {
 
         return `${sql} as ${metric.alias || metric.sql}`;
       })
+      .join(",\n");
+  }
+
+  private buildInnerMetricsPartDoris(appliedMetrics: AppliedMetricType[]) {
+    if (appliedMetrics.length === 0) {
+      return "count(*) as count";
+    }
+
+    // Doris 不能处理重复的列名，需要去重相同的 SQL 表达式
+    const uniqueMetrics = new Map<string, string>();
+    
+    appliedMetrics.forEach((metric) => {
+      const columnAlias = metric.alias || metric.sql;
+      // 如果已经有相同的 SQL 表达式，就不重复添加
+      if (!uniqueMetrics.has(metric.sql)) {
+        uniqueMetrics.set(metric.sql, columnAlias);
+      }
+    });
+
+    // 转换为数组并生成 SQL
+    return Array.from(uniqueMetrics.entries())
+      .map(([sql, alias]) => `${sql} as ${alias}`)
       .join(",\n");
   }
 
@@ -895,6 +1091,12 @@ export class QueryBuilder {
   private buildOuterMetricsPart(appliedMetrics: AppliedMetricType[]) {
     return appliedMetrics.length > 0
       ? `${appliedMetrics.map((metric) => `${this.translateAggregation(metric)} as ${metric.aggregation}_${metric.alias || metric.sql}`).join(",\n")}`
+      : "count(*) as count";
+  }
+
+  private buildOuterMetricsPartDoris(appliedMetrics: AppliedMetricType[]) {
+    return appliedMetrics.length > 0
+      ? `${appliedMetrics.map((metric) => `${this.translateAggregationDoris(metric)} as ${metric.aggregation}_${metric.alias || metric.sql}`).join(",\n")}`
       : "count(*) as count";
   }
 
@@ -1101,6 +1303,22 @@ export class QueryBuilder {
       ${limitClause}`;
   }
 
+  private buildOuterSelectDoris(
+    outerDimensionsPart: string,
+    outerMetricsPart: string,
+    innerQuery: string,
+    groupByClause: string,
+    orderByClause: string,
+  ) {
+    return `
+      SELECT
+        ${outerDimensionsPart}
+        ${outerMetricsPart}
+      FROM (${innerQuery}) AS subquery
+      ${groupByClause}
+      ${orderByClause}`;
+  }
+
   /**
    * Validates that the provided orderBy fields exist in the dimensions or metrics
    * and returns the processed orderBy array with fully qualified field names.
@@ -1193,6 +1411,18 @@ export class QueryBuilder {
   }
 
   /**
+   * Convert ClickHouse-specific SQL functions to Doris equivalents
+   */
+  private convertClickHouseFunctionsToDoris(sql: string): string {
+    // Replace position() function with INSTR() function for string operations
+    // ClickHouse: position(field, 'value') = 0
+    // Doris: INSTR(field, 'value') = 0
+    sql = sql.replace(/position\s*\(/g, "INSTR(");
+
+    return sql;
+  }
+
+  /**
    * We want to build a ClickHouse query based on the query provided and the viewDeclaration that was selected.
    *
    * When enableSingleLevelOptimization is false (default), the query follows a two-level pattern:
@@ -1243,6 +1473,11 @@ export class QueryBuilder {
       throw new InvalidRequestError(
         `Invalid query: ${JSON.stringify(parseResult.error.issues)}`,
       );
+    }
+
+    // Check if we should use Doris backend
+    if (isDorisBackend()) {
+      return this.buildDoris(query, projectId);
     }
 
     // Initialize parameters object
@@ -1463,6 +1698,119 @@ export class QueryBuilder {
         limitClause,
       );
     }
+
+    return {
+      query: sql,
+      parameters,
+    };
+  }
+
+  private buildDoris(
+    query: QueryType,
+    projectId: string,
+  ): { query: string; parameters: Record<string, unknown> } {
+    // Initialize parameters object
+    const parameters: Record<string, unknown> = {};
+
+    // Get view declaration (with FINAL removed for Doris)
+    const view = this.getViewDeclarationForDoris(query.view);
+
+    // Map dimensions and metrics
+    const appliedDimensions = this.mapDimensions(query.dimensions, view);
+    const appliedMetrics = this.mapMetrics(query.metrics, view);
+
+    // Create filters: normal WHERE filters + raw WHERE parts (filterSql pruning + exact match)
+    const { whereFilters, whereRawParts } = this.mapFilters(query.filters, view);
+    let filterList = new FilterList(whereFilters);
+
+    // Add standard filters (project_id, timestamps)
+    filterList = this.addStandardFilters(
+      filterList,
+      view,
+      projectId,
+      query.fromTimestamp,
+      query.toTimestamp,
+    );
+
+    // Build the FROM clause with necessary JOINs
+    let fromClause = `FROM ${view.baseCte}`;
+
+    // Handle relation tables
+    const relationTables = this.collectRelationTables(
+      view,
+      appliedDimensions,
+      appliedMetrics,
+      filterList,
+    );
+    if (relationTables.size > 0) {
+      const relationJoins = this.buildJoinsDoris(
+        relationTables,
+        view,
+        filterList,
+        query,
+      );
+      fromClause += ` ${relationJoins.join(" ")}`;
+    }
+
+    // todo 这里需要看是否有不适配的地方
+    fromClause += this.buildWhereClause(filterList, parameters);
+
+    // Append raw WHERE pruning parts (OR'd conditions from filterSql.where)
+    for (const part of whereRawParts) {
+      fromClause += ` AND ${part.query}`;
+      Object.assign(parameters, part.params);
+    }
+
+    // Build inner SELECT parts
+    const innerDimensionsPart = this.buildInnerDimensionsPartDoris(
+      appliedDimensions,
+      query,
+      view,
+    );
+    const innerMetricsPart = this.buildInnerMetricsPartDoris(appliedMetrics);
+
+    // Build inner SELECT
+    const innerQuery = this.buildInnerSelect(
+      view,
+      innerDimensionsPart,
+      innerMetricsPart,
+      fromClause,
+      appliedDimensions,
+    );
+
+    // Build outer SELECT parts
+    const outerDimensionsPart = this.buildOuterDimensionsPart(
+      appliedDimensions,
+      !!query.timeDimension,
+    );
+    const outerMetricsPart = this.buildOuterMetricsPartDoris(appliedMetrics);
+    const groupByClause = this.buildGroupByClause(
+      appliedDimensions,
+      !!query.timeDimension,
+    );
+
+    // Process and validate orderBy fields
+    const processedOrderBy = this.validateAndProcessOrderBy(
+      query.orderBy,
+      appliedDimensions,
+      appliedMetrics,
+      !!query.timeDimension,
+    );
+
+    // Build ORDER BY clause
+    const orderByClause = this.buildOrderByClause(processedOrderBy);
+
+    // Build final query (Doris doesn't support WITH FILL)
+    let sql = this.buildOuterSelectDoris(
+      outerDimensionsPart,
+      outerMetricsPart,
+      innerQuery,
+      groupByClause,
+      orderByClause,
+    );
+
+    // Replace ClickHouse-specific functions with Doris equivalents
+    sql = this.convertClickHouseFunctionsToDoris(sql);
 
     return {
       query: sql,

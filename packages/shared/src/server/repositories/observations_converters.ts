@@ -20,6 +20,22 @@ import {
 } from "../utils/rendering";
 import { logger } from "../logger";
 import type { Model, Price } from "@prisma/client";
+import { isDorisBackend } from "./analytics";
+
+// Helper function to parse timestamps from different backends
+const parseTimestamp = (timestamp: string | Date): Date => {
+  // Only apply special handling for Doris backend
+  if (isDorisBackend() && timestamp instanceof Date) {
+    return timestamp;
+  }
+
+  // Default ClickHouse behavior - always expect string
+  if (typeof timestamp === 'string') {
+    return parseClickhouseUTCDateTimeFormat(timestamp);
+  }
+
+  throw new Error(`Invalid timestamp format: ${typeof timestamp}`);
+};
 
 type ModelWithPrice = Model & { Price: Price[] };
 
@@ -70,9 +86,9 @@ function ensureObservationCoreFields(
   return {
     id: record.id!,
     traceId: record.trace_id ?? null,
-    startTime: parseClickhouseUTCDateTimeFormat(record.start_time!),
+    startTime: parseTimestamp(record.start_time!),
     endTime: record.end_time
-      ? parseClickhouseUTCDateTimeFormat(record.end_time)
+      ? parseTimestamp(record.end_time)
       : null,
     projectId: record.project_id!,
     parentObservationId: record.parent_observation_id ?? null,
@@ -157,7 +173,7 @@ export function convertObservationPartial(
     ...(record.type !== undefined && { type: record.type as ObservationType }),
     ...(record.end_time !== undefined && {
       endTime: record.end_time
-        ? parseClickhouseUTCDateTimeFormat(record.end_time)
+        ? parseTimestamp(record.end_time)
         : null,
     }),
 
@@ -177,14 +193,14 @@ export function convertObservationPartial(
     // Time fields
     ...(record.completion_start_time !== undefined && {
       completionStartTime: record.completion_start_time
-        ? parseClickhouseUTCDateTimeFormat(record.completion_start_time)
+        ? parseTimestamp(record.completion_start_time)
         : null,
     }),
     ...(record.created_at !== undefined && {
-      createdAt: parseClickhouseUTCDateTimeFormat(record.created_at),
+      createdAt: parseTimestamp(record.created_at),
     }),
     ...(record.updated_at !== undefined && {
-      updatedAt: parseClickhouseUTCDateTimeFormat(record.updated_at),
+      updatedAt: parseTimestamp(record.updated_at),
     }),
 
     // IO fields
@@ -268,8 +284,8 @@ export function convertObservationPartial(
     ...((record.end_time !== undefined || record.start_time !== undefined) && {
       latency:
         record.end_time && record.start_time
-          ? (parseClickhouseUTCDateTimeFormat(record.end_time).getTime() -
-              parseClickhouseUTCDateTimeFormat(record.start_time).getTime()) /
+          ? (parseTimestamp(record.end_time).getTime() -
+              parseTimestamp(record.start_time).getTime()) /
             1000
           : null,
     }),
@@ -277,10 +293,10 @@ export function convertObservationPartial(
       record.start_time !== undefined) && {
       timeToFirstToken:
         record.completion_start_time && record.start_time
-          ? (parseClickhouseUTCDateTimeFormat(
+          ? (parseTimestamp(
               record.completion_start_time,
             ).getTime() -
-              parseClickhouseUTCDateTimeFormat(record.start_time).getTime()) /
+              parseTimestamp(record.start_time).getTime()) /
             1000
           : null,
     }),

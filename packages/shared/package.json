@@ -64,6 +64,11 @@
     "ch:dev-tables": "bash clickhouse/scripts/dev-tables.sh",
     "ch:reset": "pnpm run ch:down && pnpm run ch:up && pnpm run ch:seed && pnpm run ch:dev-tables",
     "ch:seed": "dotenv -e ../../.env -- ts-node -r tsconfig-paths/register -r dotenv/config --compiler-options '{\"module\":\"CommonJS\"}' scripts/seeder/seed-clickhouse.ts",
+    "doris:up": "bash doris/scripts/up.sh",
+    "doris:down": "bash doris/scripts/down.sh",
+    "doris:drop": "bash doris/scripts/drop.sh",
+    "doris:seed": "dotenv -e ../../.env -- ts-node -r tsconfig-paths/register -r dotenv/config --compiler-options '{\"module\":\"CommonJS\"}' doris/scripts/seed.ts",
+    "doris:reset": "pnpm run doris:drop && pnpm run doris:up && pnpm run doris:seed",
     "load:setup": "dotenv -e ../../.env -- tsx scripts/seeder/load-seed-clickhouse.ts"
   },
   "prisma": {
@@ -108,6 +113,7 @@
     "langfuse-langchain": "3.38.6",
     "lodash": "^4.17.23",
     "lossless-json": "^4.1.1",
+    "mysql2": "^3.14.1",
     "next-auth": "^4.24.13",
     "nodemailer": "^7.0.11",
     "prisma-extension-kysely": "^3.0.0",

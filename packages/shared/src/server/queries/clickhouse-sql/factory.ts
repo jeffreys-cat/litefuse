@@ -13,7 +13,6 @@ import {
   DateTimeFilter,
   StringOptionsFilter,
   CategoryOptionsFilter,
-  FilterList,
   NumberFilter,
   ArrayOptionsFilter,
   BooleanFilter,
@@ -21,6 +20,7 @@ import {
   StringObjectFilter,
   NullFilter,
 } from "./clickhouse-filter";
+import { FilterList } from "../filter";
 
 export class QueryBuilderError extends Error {
   constructor(message: string) {

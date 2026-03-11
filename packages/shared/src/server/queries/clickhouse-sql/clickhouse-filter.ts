@@ -1,23 +1,10 @@
 import { filterOperators } from "../../../interfaces/filters";
 import { clickhouseCompliantRandomCharacters } from "../../repositories";
+import { Filter,DbFilter } from "../filter";
 
-export type ClickhouseOperator =
-  | (typeof filterOperators)[keyof typeof filterOperators][number]
-  | "!=";
-export interface Filter {
-  apply(): ClickhouseFilter;
-  clickhouseTable: string;
-  tablePrefix?: string;
-  operator: ClickhouseOperator;
-  field: string;
-}
-type ClickhouseFilter = {
-  query: string;
-  params: { [x: string]: any } | {};
-};
 
 export class StringFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public value: string;
   public operator: (typeof filterOperators)["string"][number];
@@ -32,7 +19,7 @@ export class StringFilter implements Filter {
     tablePrefix?: string;
     emptyEqualsNull?: boolean;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -40,7 +27,7 @@ export class StringFilter implements Filter {
     this.emptyEqualsNull = opts.emptyEqualsNull;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const varName = `stringFilter${clickhouseCompliantRandomCharacters()}`;
 
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
@@ -96,7 +83,7 @@ export class StringFilter implements Filter {
 }
 
 export class NumberFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public value: number;
   public operator: (typeof filterOperators)["number"][number] | "!=";
@@ -111,7 +98,7 @@ export class NumberFilter implements Filter {
     tablePrefix?: string;
     clickhouseTypeOverwrite?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -119,7 +106,7 @@ export class NumberFilter implements Filter {
     this.clickhouseTypeOverwrite = opts.clickhouseTypeOverwrite;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `numberFilter${uid}`;
     const type = this.clickhouseTypeOverwrite ?? "Decimal64(12)";
@@ -131,7 +118,7 @@ export class NumberFilter implements Filter {
 }
 
 export class DateTimeFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public value: Date;
   public operator: (typeof filterOperators)["datetime"][number];
@@ -144,14 +131,14 @@ export class DateTimeFilter implements Filter {
     value: Date;
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
     this.tablePrefix = opts.tablePrefix;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `dateTimeFilter${uid}`;
     return {
@@ -162,7 +149,7 @@ export class DateTimeFilter implements Filter {
 }
 
 export class StringOptionsFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public values: string[];
   public operator: (typeof filterOperators.stringOptions)[number];
@@ -177,7 +164,7 @@ export class StringOptionsFilter implements Filter {
     tablePrefix?: string;
     emptyEqualsNull?: boolean;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.values = opts.values;
     this.operator = opts.operator;
@@ -185,7 +172,7 @@ export class StringOptionsFilter implements Filter {
     this.emptyEqualsNull = opts.emptyEqualsNull;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `stringOptionsFilter${uid}`;
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
@@ -215,7 +202,7 @@ export class StringOptionsFilter implements Filter {
 }
 
 export class CategoryOptionsFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public key: string;
   public values: string[];
@@ -230,7 +217,7 @@ export class CategoryOptionsFilter implements Filter {
     values: string[];
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.key = opts.key;
     this.values = opts.values;
@@ -238,7 +225,7 @@ export class CategoryOptionsFilter implements Filter {
     this.tablePrefix = opts.tablePrefix;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `categoryOptionsFilter${uid}`;
 
@@ -272,7 +259,7 @@ export class CategoryOptionsFilter implements Filter {
 // For events tables (events_core, events_full): uses Array columns (metadata_names/metadata_values)
 // We can only filter efficiently on the first level of a json obj.
 export class StringObjectFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public key: string;
   public value: string;
@@ -287,7 +274,7 @@ export class StringObjectFilter implements Filter {
     value: string;
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -295,7 +282,7 @@ export class StringObjectFilter implements Filter {
     this.key = opts.key;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const varKeyName = `stringObjectKeyFilter${clickhouseCompliantRandomCharacters()}`;
     const varValueName = `stringObjectValueFilter${clickhouseCompliantRandomCharacters()}`;
     const prefix = this.tablePrefix ? this.tablePrefix + "." : "";
@@ -306,7 +293,7 @@ export class StringObjectFilter implements Filter {
       "events_proto",
       "events_core",
       "events_full",
-    ].includes(this.clickhouseTable);
+    ].includes(this.table);
 
     let query: string;
     if (isEventsTable) {
@@ -368,7 +355,7 @@ export class StringObjectFilter implements Filter {
 
 // this is used when we want to filter multiple values on a clickhouse column which is also an array
 export class ArrayOptionsFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public values: string[];
   public operator: (typeof filterOperators.arrayOptions)[number];
@@ -381,14 +368,14 @@ export class ArrayOptionsFilter implements Filter {
     values: string[];
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.values = opts.values;
     this.operator = opts.operator;
     this.tablePrefix = opts.tablePrefix;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `arrayOptionsFilter${uid}`;
     let query: string;
@@ -415,7 +402,7 @@ export class ArrayOptionsFilter implements Filter {
 }
 
 export class NullFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public operator: (typeof filterOperators)["null"][number];
   public tablePrefix?: string;
@@ -428,14 +415,14 @@ export class NullFilter implements Filter {
     tablePrefix?: string;
     emptyEqualsNull?: boolean;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.operator = opts.operator;
     this.tablePrefix = opts.tablePrefix;
     this.emptyEqualsNull = opts.emptyEqualsNull;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // '' ≡ NULL: treat empty string and NULL as the same value
@@ -457,7 +444,7 @@ export class NullFilter implements Filter {
 }
 
 export class NumberObjectFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public key: string;
   public value: number;
@@ -472,7 +459,7 @@ export class NumberObjectFilter implements Filter {
     value: number;
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -480,7 +467,7 @@ export class NumberObjectFilter implements Filter {
     this.key = opts.key;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const varKeyName = `numberObjectKeyFilter${clickhouseCompliantRandomCharacters()}`;
     const varValueName = `numberObjectValueFilter${clickhouseCompliantRandomCharacters()}`;
     const column = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
@@ -492,7 +479,7 @@ export class NumberObjectFilter implements Filter {
 }
 
 export class BooleanFilter implements Filter {
-  public clickhouseTable: string;
+  public table: string;
   public field: string;
   public operator: (typeof filterOperators)["boolean"][number];
   public value: boolean;
@@ -505,14 +492,14 @@ export class BooleanFilter implements Filter {
     value: boolean;
     tablePrefix?: string;
   }) {
-    this.clickhouseTable = opts.clickhouseTable;
+    this.table = opts.clickhouseTable;
     this.field = opts.field;
     this.value = opts.value;
     this.tablePrefix = opts.tablePrefix;
     this.operator = opts.operator;
   }
 
-  apply(): ClickhouseFilter {
+  apply(): DbFilter {
     const uid = clickhouseCompliantRandomCharacters();
     const varName = `booleanFilter${uid}`;
     return {
@@ -522,60 +509,4 @@ export class BooleanFilter implements Filter {
   }
 }
 
-export class FilterList {
-  private filters: Filter[];
 
-  constructor(filters: Filter[] = []) {
-    this.filters = filters;
-  }
-
-  push(...filter: Filter[]) {
-    this.filters.push(...filter);
-  }
-
-  find(predicate: (filter: Filter) => boolean) {
-    return this.filters.find(predicate);
-  }
-
-  filter(predicate: (filter: Filter) => boolean) {
-    return new FilterList(this.filters.filter(predicate));
-  }
-
-  map(predicate: (filter: Filter) => Filter) {
-    return new FilterList(this.filters.map(predicate));
-  }
-
-  some(predicate: (filter: Filter) => boolean) {
-    return this.filters.some(predicate);
-  }
-
-  forEach(callback: (filter: Filter) => void) {
-    this.filters.forEach(callback);
-  }
-
-  length() {
-    return this.filters.length;
-  }
-
-  public apply(): ClickhouseFilter {
-    if (this.filters.length === 0) {
-      return {
-        query: "",
-        params: {},
-      };
-    }
-    const compiledQueries = this.filters.map((filter) => filter.apply());
-    const { params, queries } = compiledQueries.reduce(
-      (acc, { params, query }) => {
-        acc.params = { ...acc.params, ...params };
-        acc.queries.push(query);
-        return acc;
-      },
-      { params: {}, queries: [] as string[] },
-    );
-    return {
-      query: queries.join(" AND "),
-      params,
-    };
-  }
-}

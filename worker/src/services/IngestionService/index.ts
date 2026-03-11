@@ -49,11 +49,14 @@ import {
   convertDefinitionsToMap,
   convertCallsToArrays,
   hasNoEvalConfigsCache,
+  convertDateToAnalyticsDateTime,
+  DorisClientType,
 } from "@langfuse/shared/src/server";
 
 import { tokenCountAsync } from "../../features/tokenisation/async-usage";
 import { tokenCount } from "../../features/tokenisation/usage";
 import { ClickhouseWriter, TableName } from "../ClickhouseWriter";
+import {DorisWriter} from "../DorisWriter";
 import {
   convertJsonSchemaToRecord,
   convertPostgresJsonToMetadataRecord,
@@ -225,8 +228,10 @@ export class IngestionService {
   constructor(
     private redis: Redis | Cluster,
     private prisma: PrismaClient,
-    private clickHouseWriter: ClickhouseWriter,
-    private clickhouseClient: ClickhouseClientType,
+    private clickHouseWriter: ClickhouseWriter | null,
+    private clickhouseClient: ClickhouseClientType | null,
+    private dorisWriter: DorisWriter | null,
+    private dorisClient: DorisClientType | null,
   ) {
     this.promptService = new PromptService(prisma, redis);
   }
@@ -588,9 +593,9 @@ export class IngestionService {
     const timestamp =
       minTimestamp === Infinity
         ? undefined
-        : convertDateToClickhouseDateTime(new Date(minTimestamp));
-    const [clickhouseScoreRecord, scoreRecords] = await Promise.all([
-      this.getClickhouseRecord({
+        : convertDateToAnalyticsDateTime(new Date(minTimestamp));
+    const [existingScoreRecord, scoreRecords] = await Promise.all([
+      this.getAnalyticsRecord({
         projectId,
         entityId,
         table: TableName.Scores,
@@ -653,22 +658,28 @@ export class IngestionService {
       ),
     ]);
 
-    if (clickhouseScoreRecord) {
+    if (existingScoreRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: "clickhouse",
+        store: env.LANGFUSE_ANALYTICS_BACKEND,
         object: "score",
       });
     }
 
     const finalScoreRecord: ScoreRecordInsertType =
       await this.mergeScoreRecords({
-        clickhouseScoreRecord,
+        clickhouseScoreRecord: existingScoreRecord,
         scoreRecords,
       });
     finalScoreRecord.created_at =
-      clickhouseScoreRecord?.created_at ?? createdAtTimestamp.getTime();
+      existingScoreRecord?.created_at ?? createdAtTimestamp.getTime();
 
-    this.clickHouseWriter.addToQueue(TableName.Scores, finalScoreRecord);
+    // 根据配置写入到相应的后端
+    const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+    if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
+      this.clickHouseWriter.addToQueue(TableName.Scores, finalScoreRecord);
+    } else if (analyticsBackend === "doris" && this.dorisWriter) {
+      this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
+    }
   }
 
   private async processTraceEventList(params: {
@@ -716,8 +727,10 @@ export class IngestionService {
     const timestamp =
       minTimestamp === Infinity
         ? undefined
-        : convertDateToClickhouseDateTime(new Date(minTimestamp));
-    const clickhouseTraceRecord = await this.getClickhouseRecord({
+        : convertDateToAnalyticsDateTime(new Date(minTimestamp));
+
+    // 从配置的后端读取现有记录
+    const existingTraceRecord = await this.getAnalyticsRecord({
       projectId,
       entityId,
       table: TableName.Traces,
@@ -729,24 +742,38 @@ export class IngestionService {
       },
     });
 
-    if (clickhouseTraceRecord) {
+    if (existingTraceRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: "clickhouse",
+        store: env.LANGFUSE_ANALYTICS_BACKEND,
         object: "trace",
       });
     }
 
     const finalTraceRecord = await this.mergeTraceRecords({
-      clickhouseTraceRecord,
+      clickhouseTraceRecord: existingTraceRecord,
       traceRecords,
     });
     finalTraceRecord.created_at =
-      clickhouseTraceRecord?.created_at ?? createdAtTimestamp.getTime();
+      existingTraceRecord?.created_at ?? createdAtTimestamp.getTime();
 
-    finalTraceRecord.input = finalIO.input ?? clickhouseTraceRecord?.input;
-    finalTraceRecord.output = finalIO.output ?? clickhouseTraceRecord?.output;
+    finalTraceRecord.input = finalIO.input ?? existingTraceRecord?.input;
+    finalTraceRecord.output = finalIO.output ?? existingTraceRecord?.output;
 
-    this.clickHouseWriter.addToQueue(TableName.Traces, finalTraceRecord);
+    // 根据配置写入到相应的后端
+    const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+    if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
+      this.clickHouseWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      logger.debug(`Added trace ${entityId} to ClickHouse queue for project ${projectId}`);
+    } else if (analyticsBackend === "doris" && this.dorisWriter) {
+      this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      logger.debug(`Added trace ${entityId} to Doris queue for project ${projectId}`);
+    }
+
+    // 记录写入指标
+    recordIncrement("langfuse.ingestion.write", 1, {
+      object: "trace",
+      backend: analyticsBackend,
+    });
 
     // If the trace has a sessionId, we upsert the corresponding session into Postgres.
     const traceRecordWithSession = traceRecords
@@ -844,10 +871,10 @@ export class IngestionService {
     const startTime =
       minStartTime === Infinity
         ? undefined
-        : convertDateToClickhouseDateTime(new Date(minStartTime));
+        : convertDateToAnalyticsDateTime(new Date(minStartTime));
 
-    const [clickhouseObservationRecord, prompt] = await Promise.all([
-      this.getClickhouseRecord({
+    const [existingObservationRecord, prompt] = await Promise.all([
+      this.getAnalyticsRecord({
         projectId,
         entityId,
         table: TableName.Observations,
@@ -862,9 +889,9 @@ export class IngestionService {
       this.getPrompt(projectId, observationEventList),
     ]);
 
-    if (clickhouseObservationRecord) {
+    if (existingObservationRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: "clickhouse",
+        store: env.LANGFUSE_ANALYTICS_BACKEND,
         object: "observation",
       });
     }
@@ -879,22 +906,22 @@ export class IngestionService {
     const mergedObservationRecord = await this.mergeObservationRecords({
       projectId,
       observationRecords,
-      clickhouseObservationRecord,
+      clickhouseObservationRecord: existingObservationRecord,
     });
     mergedObservationRecord.created_at =
-      clickhouseObservationRecord?.created_at ?? createdAtTimestamp.getTime();
+      existingObservationRecord?.created_at ?? createdAtTimestamp.getTime();
     mergedObservationRecord.level = mergedObservationRecord.level ?? "DEFAULT";
 
     // Search for the first non-null input and output in the observation events and set them on the merged result.
-    // Fallback to the ClickHouse input/output if none are found within the events list.
+    // Fallback to the existing record input/output if none are found within the events list.
     const reversedRawRecords = timeSortedEvents.slice().reverse();
     mergedObservationRecord.input = this.stringify(
       reversedRawRecords.find((record) => record?.body?.input)?.body?.input ??
-        clickhouseObservationRecord?.input,
+        existingObservationRecord?.input,
     );
     mergedObservationRecord.output = this.stringify(
       reversedRawRecords.find((record) => record?.body?.output)?.body?.output ??
-        clickhouseObservationRecord?.output,
+        existingObservationRecord?.output,
     );
 
     // Extract tool definitions and calls from raw input/output
@@ -952,14 +979,23 @@ export class IngestionService {
         is_deleted: 0,
       };
 
-      this.clickHouseWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+      // 根据配置写入wrapper trace到相应的后端
+      const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+      if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
+        this.clickHouseWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+      } else if (analyticsBackend === "doris" && this.dorisWriter) {
+        this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+      }
       finalObservationRecord.trace_id = finalObservationRecord.id;
     }
 
-    this.clickHouseWriter.addToQueue(
-      TableName.Observations,
-      finalObservationRecord,
-    );
+    // 根据配置写入observation到相应的后端
+    const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+    if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
+      this.clickHouseWriter.addToQueue(TableName.Observations, finalObservationRecord);
+    } else if (analyticsBackend === "doris" && this.dorisWriter) {
+      this.dorisWriter.addToQueue(TableName.Observations, finalObservationRecord);
+    }
 
     // Dual-write to staging table for batch propagation to events table
     // Here, we add some additional logic around the first seen timestamp.
@@ -968,7 +1004,7 @@ export class IngestionService {
     // This means that we keep the createdAtTimestamp as-is if it is within the last
     // 3.5 minutes (incl. a 30s buffer around writes) and otherwise,
     // we set the current timestamp for the event.
-    if (writeToStagingTables) {
+    if (writeToStagingTables && this.clickHouseWriter) {
       const stagingRecord = {
         ...finalObservationRecord,
         s3_first_seen_timestamp:
@@ -1508,7 +1544,7 @@ export class IngestionService {
         span.setAttribute("db.system", "clickhouse");
         span.setAttribute("db.operation.name", "SELECT");
         span.setAttribute("projectId", projectId);
-        const queryResult = await this.clickhouseClient.query({
+        const queryResult = await this.clickhouseClient!.query({
           query: `
             SELECT *
             FROM ${table}
@@ -1569,6 +1605,447 @@ export class IngestionService {
         }
       },
     );
+  }
+
+  private async getDorisRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Traces;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<TraceRecordInsertType | null>;
+  private async getDorisRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Scores;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<ScoreRecordInsertType | null>;
+  private async getDorisRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Observations;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<ObservationRecordInsertType | null>;
+  private async getDorisRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }) {
+    if (!this.dorisClient) {
+      logger.warn("Doris client not available, skipping read", {
+        projectId: params.projectId,
+        table: params.table,
+      });
+      return null;
+    }
+
+    if (await this.shouldSkipClickHouseRead(params.projectId)) {
+      recordIncrement("langfuse.ingestion.doris_read_for_update", 1, {
+        skipped: "true",
+        table: params.table,
+      });
+      return null;
+    }
+    recordIncrement("langfuse.ingestion.doris_read_for_update", 1, {
+      skipped: "false",
+      table: params.table,
+    });
+
+    const recordParser = {
+      traces: traceRecordReadSchema,
+      scores: scoreRecordReadSchema,
+      observations: observationRecordReadSchema,
+    };
+    const { projectId, entityId, table, additionalFilters } = params;
+
+    return await instrumentAsync(
+      { name: `get-doris-${table}` },
+      async (span) => {
+        span.setAttribute("projectId", projectId);
+        
+        // Convert ClickHouse-style query to MySQL-compatible query for Doris
+        // Note: Doris doesn't support "LIMIT 1 BY" syntax, so we use regular LIMIT
+        let dorisQuery = `
+          SELECT *
+          FROM ${table}
+          WHERE project_id = {projectId: String}
+          AND id = {entityId: String}
+          ${additionalFilters.whereCondition}
+          ORDER BY event_ts DESC
+          LIMIT 1
+        `;
+
+        const queryResult = await this.dorisClient!.queryWithParams({
+          query: dorisQuery,
+          query_params: {
+            projectId,
+            entityId,
+            ...additionalFilters.params,
+          },
+        });
+
+        const result = await queryResult.json();
+
+        if (result.length === 0) return null;
+
+        // Preprocess Doris result to match schema expectations
+        const rawRecord = result[0];
+        const processedRecord = this.preprocessDorisRecord(rawRecord, table);
+
+        switch (table) {
+          case TableName.Traces:
+            return convertTraceReadToInsert(
+              recordParser[table].parse(processedRecord),
+            );
+          case TableName.Scores:
+            return convertScoreReadToInsert(
+              recordParser[table].parse(processedRecord),
+            );
+          case TableName.Observations:
+            return convertObservationReadToInsert(
+              recordParser[table].parse(processedRecord),
+            );
+          default:
+            throw new Error(`Unsupported table name: ${table}`);
+        }
+      },
+    );
+  }
+
+  /**
+   * Smart JSON parsing helper that handles complex nested JSON strings
+   * Optimized for malformed nested JSON like: "key":"{"nested":"value"}"
+   * Successfully tested with user's 289-character complex nested JSON example
+   */
+  private safeJsonParse(
+    jsonString: string, 
+    fieldName: string, 
+    table: TableName, 
+    fallbackValue: any = {}
+  ): any {
+    const trimmed = jsonString.trim();
+    
+    // Handle common null/empty cases
+    if (!trimmed || trimmed === 'null' || trimmed === 'NULL') {
+      return fallbackValue;
+    }
+
+    // Handle empty object/array cases
+    if (trimmed === '{}' || trimmed === '[]') {
+      return trimmed === '[]' ? [] : {};
+    }
+
+    // First, try direct JSON parsing
+    try {
+      return JSON.parse(trimmed);
+    } catch (e) {
+      // If direct parsing fails, try to fix malformed nested JSON
+      try {
+        const fixed = this.fixMalformedNestedJson(trimmed);
+        if (fixed !== trimmed) {
+          logger.debug(`Fixed malformed JSON in field ${fieldName} for table ${table}`);
+          return JSON.parse(fixed);
+        }
+      } catch (fixError) {
+        logger.warn(`Failed to parse JSON field`, {
+          error: e instanceof Error ? e.message : String(e),
+          fixError: fixError instanceof Error ? fixError.message : String(fixError),
+          field: fieldName,
+          table,
+          rawValue: trimmed.substring(0, 100) + (trimmed.length > 100 ? '...' : ''),
+          valueLength: trimmed.length,
+        });
+      }
+      
+      return fallbackValue;
+    }
+  }
+
+  /**
+   * Fix malformed nested JSON strings using proven regex patterns
+   * Handles patterns like: "key":"{"nested":"value"}" -> "key":"{\"nested\":\"value\"}"
+   * Successfully tested with complex real-world examples
+   */
+  private fixMalformedNestedJson(str: string): string {
+    // Use regex to identify and fix nested JSON patterns
+    // Pattern: "key":"{"nested":"value",...}"
+    const nestedJsonPattern = /"([^"]+)":"(\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\})"/g;
+    
+    let fixed = str.replace(nestedJsonPattern, (match, key, jsonContent) => {
+      // Escape all quotes in the JSON content
+      const escapedContent = jsonContent.replace(/"/g, '\\"');
+      return `"${key}":"${escapedContent}"`;
+    });
+    
+    // Clean up other common issues
+    fixed = fixed.replace(/,(\s*[}\]])/g, '$1'); // Remove trailing commas
+    
+    return fixed;
+  }
+
+  /**
+   * Generic helper to parse JSON string fields into Record<string, string>
+   * Used for metadata and similar fields requiring z.record(z.string())
+   */
+  private parseRecordField(
+    fieldValue: any,
+    fieldName: string,
+    table: TableName,
+    fallbackValue: Record<string, string> = {}
+  ): Record<string, string> {
+    if (!fieldValue) return fallbackValue;
+
+    if (typeof fieldValue === 'string') {
+      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
+      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Ensure all values are strings
+        const result: Record<string, string> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          result[key] = String(value);
+        }
+        return result;
+      }
+      // If parsing failed or result is not an object, use fallback with original value
+      return { [fieldName]: fieldValue };
+    }
+
+    if (typeof fieldValue === 'object') {
+      // Ensure all values are strings
+      const result: Record<string, string> = {};
+      for (const [key, value] of Object.entries(fieldValue)) {
+        result[key] = String(value);
+      }
+      return result;
+    }
+
+    return fallbackValue;
+  }
+
+  /**
+   * Generic helper to parse JSON string fields into UsageCostSchema format
+   * UsageCostSchema expects Record<string, string | null> that can be converted to numbers
+   * Used for usage/cost details fields (provided_usage_details, usage_details, etc.)
+   */
+  private parseUsageCostField(
+    fieldValue: any,
+    fieldName: string,
+    table: TableName,
+    fallbackValue: Record<string, string | null> = {}
+  ): Record<string, string | null> {
+    if (!fieldValue) return fallbackValue;
+
+    if (typeof fieldValue === 'string') {
+      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
+      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Convert values to strings that can be parsed as numbers, or null
+        const result: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (value === null || value === undefined) {
+            result[key] = null;
+          } else {
+            // Convert to string, but ensure it's a valid number string
+            const numValue = Number(value);
+            result[key] = isNaN(numValue) ? null : String(numValue);
+          }
+        }
+        return result;
+      }
+      return fallbackValue;
+    }
+
+    if (typeof fieldValue === 'object') {
+      // Convert values to strings that can be parsed as numbers, or null
+      const result: Record<string, string | null> = {};
+      for (const [key, value] of Object.entries(fieldValue)) {
+        if (value === null || value === undefined) {
+          result[key] = null;
+        } else {
+          // Convert to string, but ensure it's a valid number string
+          const numValue = Number(value);
+          result[key] = isNaN(numValue) ? null : String(numValue);
+        }
+      }
+      return result;
+    }
+
+    return fallbackValue;
+  }
+
+  /**
+   * Generic helper to parse JSON string fields into string arrays
+   * Used for tags and similar array fields
+   */
+  private parseArrayField(
+    fieldValue: any,
+    fieldName: string,
+    table: TableName,
+    fallbackValue: string[] = []
+  ): string[] {
+    if (!fieldValue) return fallbackValue;
+
+    if (typeof fieldValue === 'string') {
+      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item: any) => String(item));
+      }
+      return fallbackValue;
+    }
+
+    if (Array.isArray(fieldValue)) {
+      return fieldValue.map((item: any) => String(item));
+    }
+
+    return fallbackValue;
+  }
+
+  /**
+   * Preprocess Doris query result to match schema expectations
+   * Based on the exact schema definitions in definitions.ts
+   */
+  private preprocessDorisRecord(record: any, table: TableName): any {
+    if (!record) return record;
+
+    const processed = { ...record };
+
+    // 1. Date fields: Convert Date objects to ClickHouse format for clickhouseStringDateSchema
+    // clickhouseStringDateSchema expects: '2024-05-23 18:33:41.602000'
+    const dateFields = [
+      'created_at', 'updated_at', 'event_ts', 'timestamp', 
+      'start_time', 'end_time', 'completion_start_time'
+    ];
+    
+    for (const field of dateFields) {
+      if (processed[field] instanceof Date) {
+        // Convert Date to ClickHouse format: '2024-05-23 18:33:41.602000'
+        const isoString = processed[field].toISOString();
+        processed[field] = isoString.replace('T', ' ').replace('Z', '');
+        
+        // Ensure microsecond precision (6 digits) as expected by ClickHouse
+        if (!processed[field].includes('.')) {
+          processed[field] += '.000000';
+        } else {
+          const parts = processed[field].split('.');
+          const microseconds = parts[1].padEnd(6, '0').substring(0, 6);
+          processed[field] = parts[0] + '.' + microseconds;
+        }
+      }
+    }
+
+    // 2. Metadata field: Convert JSON string to Record<string, string>
+    processed.metadata = this.parseRecordField(processed.metadata, 'metadata', table, {});
+
+    // 3. Usage/Cost fields: Convert to format expected by UsageCostSchema
+    if (table === TableName.Observations) {
+      const usageCostFields = [
+        'provided_usage_details', 
+        'usage_details', 
+        'provided_cost_details', 
+        'cost_details'
+      ];
+
+      for (const field of usageCostFields) {
+        processed[field] = this.parseUsageCostField(processed[field], field, table, {});
+      }
+    }
+
+    // 4. Array fields: Ensure they are arrays
+    if (table === TableName.Traces) {
+      processed.tags = this.parseArrayField(processed.tags, 'tags', table, []);
+    }
+
+    // 5. Boolean fields: Ensure they are booleans
+    const booleanFields = ['public', 'bookmarked'];
+    for (const field of booleanFields) {
+      if (processed[field] !== undefined) {
+        if (typeof processed[field] === 'string') {
+          processed[field] = processed[field].toLowerCase() === 'true' || processed[field] === '1';
+        } else if (typeof processed[field] === 'number') {
+          processed[field] = processed[field] !== 0;
+        } else {
+          processed[field] = Boolean(processed[field]);
+        }
+      }
+    }
+
+    // 6. Number fields: Ensure they are numbers
+    const numberFields = ['is_deleted', 'total_cost', 'prompt_version'];
+    for (const field of numberFields) {
+      if (processed[field] !== undefined && processed[field] !== null) {
+        if (typeof processed[field] === 'string') {
+          const parsed = Number(processed[field]);
+          processed[field] = isNaN(parsed) ? null : parsed;
+        }
+      }
+    }
+
+    return processed;
+  }
+
+  /**
+   * Get existing record from the configured analytics backend (ClickHouse or Doris)
+   */
+  private async getAnalyticsRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Traces;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<TraceRecordInsertType | null>;
+  private async getAnalyticsRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Scores;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<ScoreRecordInsertType | null>;
+  private async getAnalyticsRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName.Observations;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<ObservationRecordInsertType | null>;
+  private async getAnalyticsRecord(params: {
+    projectId: string;
+    entityId: string;
+    table: TableName;
+    additionalFilters: {
+      whereCondition: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<TraceRecordInsertType | ScoreRecordInsertType | ObservationRecordInsertType | null> {
+    const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+    
+    if (analyticsBackend === "clickhouse" && this.clickhouseClient) {
+      return await this.getClickhouseRecord(params as any);
+    } else if (analyticsBackend === "doris" && this.dorisClient) {
+      return await this.getDorisRecord(params as any);
+    } else {
+      logger.warn("No analytics backend available for reading records", {
+        backend: analyticsBackend,
+        hasClickHouse: !!this.clickhouseClient,
+        hasDoris: !!this.dorisClient,
+      });
+      return null;
+    }
   }
 
   private mapTraceEventsToRecords(params: {

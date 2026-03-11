@@ -95,6 +95,23 @@ const EnvSchema = z.object({
 
   LANGFUSE_USE_AZURE_BLOB: z.enum(["true", "false"]).default("false"),
 
+  // Doris ingestion configuration
+  LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE: z.coerce
+    .number()
+    .positive()
+    .default(10000),
+  LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
+    .number()
+    .positive()
+    .default(1000),
+  LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
+    .number()
+    .positive()
+    .default(3),
+
+  // Analytics backend selection
+  LANGFUSE_ANALYTICS_BACKEND: z.enum(["clickhouse", "doris"]).default("clickhouse"),
+
   CLICKHOUSE_URL: z.string().url(),
   CLICKHOUSE_USER: z.string(),
   CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
@@ -105,6 +122,15 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(500),
+
+  // Doris configuration
+  DORIS_URL: z.string().optional(),
+  DORIS_FE_HTTP_URL: z.string().url().optional(),
+  DORIS_FE_QUERY_PORT: z.coerce.number().positive().default(9030).optional(),
+  DORIS_DB: z.string().default("langfuse").optional(),
+  DORIS_USER: z.string().optional(),
+  DORIS_PASSWORD: z.string().optional(),
+  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z.enum(["true", "false"]).default("false"),
   LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY: z.coerce
     .number()
     .positive()

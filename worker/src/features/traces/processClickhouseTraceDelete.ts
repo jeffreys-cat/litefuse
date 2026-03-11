@@ -7,6 +7,8 @@ import {
   logger,
   removeIngestionEventsFromS3AndDeleteClickhouseRefsForTraces,
   traceException,
+  // Add Doris imports
+  isDorisBackend,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { prisma } from "@langfuse/shared/src/db";
@@ -122,8 +124,9 @@ export const processClickhouseTraceDelete = async (
   projectId: string,
   traceIds: string[],
 ) => {
+  const backendName =isDorisBackend() ? "Doris" : "Clickhouse";
   logger.info(
-    `Deleting traces ${JSON.stringify(traceIds)} in project ${projectId} from Clickhouse`,
+    `Deleting traces ${JSON.stringify(traceIds)} in project ${projectId} from ${backendName}`,
   );
 
   await deleteMediaItemsForTraces(projectId, traceIds);
@@ -145,7 +148,7 @@ export const processClickhouseTraceDelete = async (
     ]);
   } catch (e) {
     logger.error(
-      `Error deleting trace ${JSON.stringify(traceIds)} in project ${projectId} from Clickhouse`,
+      `Error deleting trace ${JSON.stringify(traceIds)} in project ${projectId} from ${backendName}`,
       e,
     );
     traceException(e);

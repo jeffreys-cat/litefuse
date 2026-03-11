@@ -5,8 +5,6 @@ export {
   type ObservationPriceFields,
 } from "./createGenerationsQuery";
 export {
-  type Filter,
-  FilterList,
   StringFilter,
   DateTimeFilter,
   StringOptionsFilter,
@@ -17,8 +15,12 @@ export {
   NumberObjectFilter,
   StringObjectFilter,
   NullFilter,
-  type ClickhouseOperator,
 } from "./clickhouse-sql/clickhouse-filter";
+export {
+  FilterList,
+  type Filter,
+  type DbOperator,
+} from "./filter";
 export {
   orderByToClickhouseSql,
   orderByToEntries,

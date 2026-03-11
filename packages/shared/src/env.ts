@@ -84,6 +84,20 @@ const EnvSchema = z.object({
     .enum(["sync", "async", "auto"])
     .default("auto"),
 
+  // Doris configuration
+  DORIS_URL: z.string().url().optional(),
+  DORIS_FE_HTTP_URL: z.string().url().default("http://localhost:8030"),
+  DORIS_FE_QUERY_PORT: z.coerce.number().positive().default(9030),
+  DORIS_DB: z.string().default("langfuse"),
+  DORIS_USER: z.string(),
+  DORIS_PASSWORD: z.string().default(""),
+  DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
+  DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
+  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z.enum(["true", "false"]).default("false"),
+
+  // Ingestion backend selection
+  LANGFUSE_ANALYTICS_BACKEND: z.enum(["clickhouse", "doris"]).default("clickhouse"),
+
   LANGFUSE_INGESTION_QUEUE_DELAY_MS: z.coerce
     .number()
     .nonnegative()

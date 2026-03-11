@@ -18,6 +18,12 @@ import {
   traceException,
   getDatasetItems,
   getDatasetItemsCount,
+  // Add Doris imports
+  queryDoris,
+  commandDoris,
+  isDorisBackend,
+  convertDateToAnalyticsDateTime,
+  dorisClient,
 } from "@langfuse/shared/src/server";
 import Decimal from "decimal.js";
 import groupBy from "lodash/groupBy";

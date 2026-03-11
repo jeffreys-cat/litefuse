@@ -6,17 +6,21 @@ import {
   upsertClickhouse,
 } from "./clickhouse";
 import {
+  convertDateToAnalyticsDateTime,
+  isDorisBackend,
+} from "./analytics";
+import {
   createFilterFromFilterState,
   getProjectIdDefaultFilter,
 } from "../queries/clickhouse-sql/factory";
 import { FilterState } from "../../types";
 import {
   DateTimeFilter,
-  FilterList,
   StringFilter,
 } from "../queries/clickhouse-sql/clickhouse-filter";
+import { FilterList } from "../queries";
 import { TraceRecordReadType } from "./definitions";
-import { tracesTableUiColumnDefinitions } from "../tableMappings/mapTracesTable";
+import { tracesTableUiColumnDefinitions, tracesTableUiColumnDefinitionsForDoris } from "../tableMappings/mapTracesTable";
 import { UiColumnMappings, ColumnDefinition } from "../../tableDefinitions";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import {
@@ -38,6 +42,16 @@ import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
 import { logger } from "../logger";
 import { traceException } from "../instrumentation";
 import { prisma } from "../../db";
+import {
+  createDorisFilterFromFilterState,
+  getDorisProjectIdDefaultFilter,
+} from "../queries/doris-sql/factory";
+import { queryDoris, upsertDoris, commandDoris, queryDorisStream } from "./doris";
+import {
+  StringFilter as DorisStringFilter,
+  DateTimeFilter as DorisDateTimeFilter,
+} from "../queries/doris-sql/doris-filter";
+import { dorisSearchCondition, DorisSearchContext } from "../queries/doris-sql/search";
 
 /**
  * Checks if trace exists in clickhouse.
@@ -70,6 +84,88 @@ export const checkTraceExistsAndGetTimestamp = async ({
   maxTimeStamp: Date | undefined;
   exactTimestamp?: Date;
 }): Promise<{ exists: boolean; timestamp?: Date }> => {
+  if (isDorisBackend()) {
+    const { tracesFilter } = getDorisProjectIdDefaultFilter(projectId, {
+      tracesPrefix: "t",
+    });
+
+    const timeStampFilter = tracesFilter.find(
+      (f) =>
+        f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
+    ) as DorisDateTimeFilter | undefined;
+
+    tracesFilter.push(
+      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+      new DorisStringFilter({
+        dorisTable: "t",
+        field: "id",
+        operator: "=",
+        value: traceId,
+        tablePrefix: "t",
+      }),
+    );
+
+    const observationFilter = tracesFilter.find(
+      (f) => f.table === "observations",
+    );
+    const tracesFilterRes = tracesFilter.apply();
+    const observationFilterRes = observationFilter?.apply();
+
+    // Helper function to convert Date to Doris DateTime string format
+    const toDorisDateTime = (date: Date, offsetSeconds: number = 0) => {
+      const adjustedDate = new Date(date.getTime() + offsetSeconds * 1000);
+      return adjustedDate.toISOString().replace('T', ' ').replace('Z', '');
+    };
+
+    // Doris version of the complex query
+    const query = `
+      WITH observations_agg AS (
+          SELECT
+              CASE
+                WHEN COUNT(CASE WHEN level = 'ERROR' THEN 1 END) > 0 THEN 'ERROR'
+                WHEN COUNT(CASE WHEN level = 'WARNING' THEN 1 END) > 0 THEN 'WARNING'
+                WHEN COUNT(CASE WHEN level = 'DEFAULT' THEN 1 END) > 0 THEN 'DEFAULT'
+                ELSE 'DEBUG'
+              END AS aggregated_level,
+              COUNT(CASE WHEN level = 'ERROR' THEN 1 END) as error_count,
+              COUNT(CASE WHEN level = 'WARNING' THEN 1 END) as warning_count,
+              COUNT(CASE WHEN level = 'DEFAULT' THEN 1 END) as default_count,
+              COUNT(CASE WHEN level = 'DEBUG' THEN 1 END) as debug_count,
+              trace_id,
+              project_id
+          FROM observations o
+          WHERE o.project_id = '${projectId}'
+          ${timeStampFilter ? `AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'` : ""}
+          AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'
+          GROUP BY trace_id, project_id
+      )
+      SELECT
+        t.id as id,
+        t.project_id as project_id
+      FROM traces t
+      ${observationFilterRes ? `INNER JOIN observations_agg o ON t.id = o.trace_id AND t.project_id = o.project_id` : ""}
+      WHERE ${tracesFilterRes.query}
+      AND t.project_id = '${projectId}'
+      AND timestamp >= '${toDorisDateTime(timestamp, -172800)}'
+      ${maxTimeStamp ? `AND timestamp <= '${toDorisDateTime(maxTimeStamp)}'` : ""}
+      ${!maxTimeStamp ? `AND timestamp <= '${toDorisDateTime(timestamp, 172800)}'` : ""}
+      ${exactTimestamp ? `AND timestamp = '${toDorisDateTime(exactTimestamp)}'` : ""}
+      GROUP BY t.id, t.project_id
+    `;
+
+    const rows = await queryDoris<{ id: string; project_id: string }>({
+      query,
+      params: {},
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "exists",
+        projectId,
+      },
+    });
+    return { exists: rows.length > 0 };
+  }
+
   const { tracesFilter } = getProjectIdDefaultFilter(projectId, {
     tracesPrefix: "t",
   });
@@ -94,7 +190,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
   );
 
   const observationFilter = tracesFilter.find(
-    (f) => f.clickhouseTable === "observations",
+    (f) => f.table === "observations",
   );
   const tracesFilterRes = tracesFilter.apply();
   const observationFilterRes = observationFilter?.apply();
@@ -196,8 +292,24 @@ export const checkTraceExistsAndGetTimestamp = async ({
  * id, project_id, and timestamp must always be provided.
  */
 export const upsertTrace = async (trace: Partial<TraceRecordReadType>) => {
+
   if (!["id", "project_id", "timestamp"].every((key) => key in trace)) {
     throw new Error("Identifier fields must be provided to upsert Trace.");
+  }
+
+  if (isDorisBackend()) {
+    await upsertDoris({
+      table: "traces",
+      records: [trace as TraceRecordReadType],
+      eventBodyMapper: convertClickhouseToDomain,
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "upsert",
+        projectId: trace.project_id ?? "",
+      },
+    });
+    return;
   }
 
   await upsertClickhouse({
@@ -219,6 +331,57 @@ export const getTracesByIds = async (
   timestamp?: Date,
   clickhouseConfigs?: ClickHouseClientConfigOptions | undefined,
 ) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        id,
+        timestamp,
+        name,
+        user_id,
+        cast(metadata as json) as metadata,
+        environment,
+        \`release\`,
+        version,
+        project_id,
+        public,
+        bookmarked,
+        tags,
+        input,
+        output,
+        session_id,
+        created_at,
+        updated_at,
+        event_ts,
+        is_deleted
+      FROM (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        FROM traces
+        WHERE id IN ({traceIds: Array(String)})
+        AND project_id = {projectId: String}
+        ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
+      ) ranked
+      WHERE rn = 1
+      ORDER BY event_ts DESC`;
+
+    const records = await queryDoris<TraceRecordReadType>({
+      query,
+      params: {
+        traceIds,
+        projectId,
+        timestamp: timestamp ? convertDateToAnalyticsDateTime(timestamp) : null,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "byId",
+        projectId,
+      },
+    });
+
+    return records.map(convertClickhouseToDomain);
+  }
+
   const records = await measureAndReturn({
     operationName: "getTracesByIds",
     projectId,
@@ -268,6 +431,67 @@ export const getTracesBySessionId = async (
   sessionIds: string[],
   timestamp?: Date,
 ) => {
+  if (isDorisBackend()) {
+    // Doris implementation using window function to achieve LIMIT 1 BY semantics
+    const query = `
+      SELECT
+        id,
+        timestamp,
+        name,
+        user_id,
+        cast(metadata as json) as metadata,
+        environment,
+        \`release\`,
+        version,
+        project_id,
+        public,
+        bookmarked,
+        tags,
+        input,
+        output,
+        session_id,
+        created_at,
+        updated_at,
+        event_ts,
+        is_deleted
+      FROM (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        FROM traces
+        WHERE session_id IN ({sessionIds: Array(String)})
+        AND project_id = {projectId: String}
+        ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
+      ) ranked
+      WHERE rn = 1
+      ORDER BY event_ts DESC`;
+
+    const records = await queryDoris<TraceRecordReadType>({
+      query,
+      params: {
+        sessionIds,
+        projectId,
+        timestamp: timestamp ? convertDateToAnalyticsDateTime(timestamp) : null,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "list",
+        projectId,
+      },
+    });
+
+    const traces = records.map(convertClickhouseToDomain);
+
+    traces.forEach((trace) => {
+      recordDistribution(
+        "langfuse.traces_by_session_id_age",
+        new Date().getTime() - trace.timestamp.getTime(),
+      );
+    });
+
+    return traces;
+  }
+
   const records = await measureAndReturn({
     operationName: "getTracesBySessionId",
     projectId,
@@ -321,6 +545,30 @@ export const getTracesBySessionId = async (
 };
 
 export const hasAnyTrace = async (projectId: string) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT 1
+      FROM traces
+      WHERE project_id = {projectId: String}
+      LIMIT 1
+    `;
+
+    const rows = await queryDoris<{ 1: number }>({
+      query,
+      params: {
+        projectId,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "hasAny",
+        projectId,
+      },
+    });
+
+    return rows.length > 0;
+  }
+
   // Check PostgreSQL flag first — once set, it's never reverted
   try {
     const project = await prisma.project.findUnique({
@@ -401,6 +649,36 @@ export const getTraceCountsByProjectInCreationInterval = async ({
   start: Date;
   end: Date;
 }) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        project_id,
+        count(*) as count
+      FROM traces
+      WHERE created_at >= {start: DateTime}
+      AND created_at < {end: DateTime}
+      GROUP BY project_id
+    `;
+
+    const rows = await queryDoris<{ project_id: string; count: string }>({
+      query,
+      params: {
+        start: convertDateToAnalyticsDateTime(start),
+        end: convertDateToAnalyticsDateTime(end),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+      },
+    });
+
+    return rows.map((row) => ({
+      projectId: row.project_id,
+      count: Number(row.count),
+    }));
+  }
+
   return measureAndReturn({
     operationName: "getTraceCountsByProjectInCreationInterval",
     projectId: "__CROSS_PROJECT__",
@@ -451,6 +729,31 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
   projectIds: string[];
   start: Date;
 }) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        count(*) as count
+      FROM traces
+      WHERE project_id IN ({projectIds: Array(String)})
+      AND created_at >= {start: DateTime}
+    `;
+
+    const rows = await queryDoris<{ count: string }>({
+      query,
+      params: {
+        projectIds,
+        start: convertDateToAnalyticsDateTime(start),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+      },
+    });
+
+    return Number(rows[0]?.count ?? 0);
+  }
+
   return measureAndReturn({
     operationName: "getTraceCountOfProjectsSinceCreationDate",
     projectId: "__CROSS_PROJECT__",
@@ -514,6 +817,77 @@ export const getTraceById = async ({
   /** When true, sets input/output columns to empty in the query to reduce database load */
   excludeInputOutput?: boolean;
 }) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        id,
+        timestamp,
+        name,
+        user_id,
+        cast(metadata as json) as metadata,
+        environment,
+        \`release\`,
+        version,
+        project_id,
+        public,
+        bookmarked,
+        tags,
+        input,
+        output,
+        session_id,
+        created_at,
+        updated_at,
+        event_ts,
+        is_deleted
+      FROM traces
+      WHERE id = {traceId: String}
+      AND project_id = {projectId: String}
+      ${timestamp ? `AND DATE(timestamp) = DATE({timestamp: DateTime})` : ""}
+      ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime}` : ""}
+      ORDER BY event_ts DESC
+      LIMIT 1
+    `;
+
+    const records = await queryDoris<TraceRecordReadType>({
+      query,
+      params: {
+        traceId,
+        projectId,
+        ...(timestamp
+          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+          : {}),
+        ...(fromTimestamp
+          ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "byId",
+        projectId,
+      },
+    });
+
+    logger.info(`Doris getTraceById records:`, {
+      recordsCount: records.length,
+      records: records.length > 0 ? records : "No records found",
+    });
+
+    const res = records.map(convertClickhouseToDomain);
+
+    res.forEach((trace) => {
+      recordDistribution(
+        "langfuse.query_by_id_age",
+        new Date().getTime() - trace.timestamp.getTime(),
+        {
+          table: "traces",
+        },
+      );
+    });
+
+    return res.shift();
+  }
+
   const records = await measureAndReturn({
     operationName: "getTraceById",
     projectId,
@@ -608,6 +982,48 @@ export const getTracesGroupedByName = async (
   tableDefinitions: UiColumnMappings = tracesTableUiColumnDefinitions,
   timestampFilter?: FilterState,
 ) => {
+  if (isDorisBackend()) {
+    const dorisFilter = timestampFilter
+      ? createDorisFilterFromFilterState(timestampFilter, tableDefinitions)
+      : undefined;
+
+    const timestampFilterRes = dorisFilter
+      ? new FilterList(dorisFilter).apply()
+      : undefined;
+
+    const query = `
+        select 
+          name as name,
+          count(*) as count
+        from traces t
+        WHERE t.project_id = {projectId: String}
+        AND t.name IS NOT NULL
+        ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
+        GROUP BY name
+        ORDER BY count(*) desc
+        LIMIT 1000;
+      `;
+
+    const rows = await queryDoris<{
+      name: string;
+      count: string;
+    }>({
+      query: query,
+      params: {
+        projectId: projectId,
+        ...(timestampFilterRes ? timestampFilterRes.params : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return rows;
+  }
+
   const chFilter = timestampFilter
     ? createFilterFromFilterState(timestampFilter, tableDefinitions)
     : undefined;
@@ -669,6 +1085,61 @@ export const getTracesGroupedBySessionId = async (
   columns?: UiColumnMappings,
   columnDefinitions?: ColumnDefinition[],
 ) => {
+  if (isDorisBackend()) {
+    const { tracesFilter } = getDorisProjectIdDefaultFilter(projectId, {
+      tracesPrefix: "t",
+    });
+
+    tracesFilter.push(
+      ...createDorisFilterFromFilterState(
+        filter,
+        columns ?? tracesTableUiColumnDefinitions,
+      ),
+    );
+
+    const tracesFilterRes = tracesFilter.apply();
+    const search = dorisSearchCondition(searchQuery, undefined, {
+      type: "traces",
+    });
+
+    const query = `
+        select 
+          user_id as user,
+          count(*) as count
+        from traces t
+        WHERE t.project_id = {projectId: String}
+        AND t.user_id IS NOT NULL
+        AND t.user_id != ''
+        ${tracesFilterRes?.query ? `AND ${tracesFilterRes.query}` : ""}
+        ${search.query}
+        GROUP BY user
+        ORDER BY count desc
+        ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+    `;
+
+    const rows = await queryDoris<{
+      user: string;
+      count: string;
+    }>({
+      query: query,
+      params: {
+        limit,
+        offset,
+        projectId,
+        ...(tracesFilterRes ? tracesFilterRes.params : {}),
+        ...(searchQuery ? search.params : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return rows;
+  }
+
   const { tracesFilter } = getProjectIdDefaultFilter(projectId, {
     tracesPrefix: "t",
   });
@@ -816,6 +1287,43 @@ export type GroupedTracesQueryProp = {
 export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
   const { projectId, filter, columns, columnDefinitions } = props;
 
+  if (isDorisBackend()) {
+    const dorisFilter = createDorisFilterFromFilterState(
+      filter,
+      columns ?? tracesTableUiColumnDefinitions,
+    );
+
+    const filterRes = new FilterList(dorisFilter).apply();
+
+    // Doris uses LATERAL VIEW explode to unnest array elements (standard syntax)
+    const query = `
+      select distinct(tag) as value
+      from traces t
+      LATERAL VIEW explode(tags) tmp as tag
+      WHERE t.project_id = {projectId: String}
+      ${filterRes?.query ? `AND ${filterRes.query}` : ""}
+      LIMIT 1000;
+    `;
+
+    const rows = await queryDoris<{
+      value: string;
+    }>({
+      query: query,
+      params: {
+        projectId: projectId,
+        ...(filterRes ? filterRes.params : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return rows;
+  }
+
   const chFilter = createFilterFromFilterState(
     filter,
     columns ?? tracesTableUiColumnDefinitions,
@@ -864,6 +1372,65 @@ export const getTracesIdentifierForSession = async (
   projectId: string,
   sessionId: string,
 ) => {
+  if (isDorisBackend()) {
+    // Use window function to achieve LIMIT 1 BY semantics in Doris
+    const query = `
+      SELECT
+        id,
+        user_id,
+        name,
+        timestamp,
+        project_id,
+        environment
+      FROM (
+        SELECT
+          id,
+          user_id,
+          name,
+          timestamp,
+          project_id,
+          environment,
+          ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY timestamp ASC) as rn
+        FROM traces
+        WHERE (project_id = {projectId: String})
+        AND (session_id = {sessionId: String})
+      ) ranked
+      WHERE rn = 1
+      ORDER BY timestamp ASC;
+    `;
+
+    const rows = await queryDoris<{
+      id: string;
+      user_id: string;
+      name: string;
+      timestamp: string | Date;
+      environment: string;
+    }>({
+      query: query,
+      params: {
+        projectId,
+        sessionId,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "list",
+        projectId,
+      },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      name: row.name,
+      timestamp:
+        isDorisBackend() && row.timestamp instanceof Date
+          ? row.timestamp
+          : parseClickhouseUTCDateTimeFormat(row.timestamp as string),
+      environment: row.environment,
+    }));
+  }
+
   const rows = await measureAndReturn({
     operationName: "getTracesIdentifierForSession",
     projectId,
@@ -920,6 +1487,28 @@ export const getTracesIdentifierForSession = async (
 };
 
 export const deleteTraces = async (projectId: string, traceIds: string[]) => {
+  if (isDorisBackend()) {
+    const query = `
+      DELETE FROM traces
+      WHERE project_id = {projectId: String}
+      AND id IN ({traceIds: Array(String)});
+    `;
+    await commandDoris({
+      query: query,
+      params: {
+        projectId,
+        traceIds,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "delete",
+        projectId,
+      },
+    });
+    return;
+  }
+
   await measureAndReturn({
     operationName: "deleteTraces",
     projectId,
@@ -991,6 +1580,32 @@ export const hasAnyTraceOlderThan = async (
   projectId: string,
   beforeDate: Date,
 ) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT 1
+      FROM traces
+      WHERE project_id = {projectId: String}
+      AND timestamp < {cutoffDate: DateTime}
+      LIMIT 1
+    `;
+
+    const rows = await queryDoris<{ 1: number }>({
+      query,
+      params: {
+        projectId,
+        cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "hasAnyOlderThan",
+        projectId,
+      },
+    });
+
+    return rows.length > 0;
+  }
+
   const query = `
     SELECT 1
     FROM traces
@@ -1020,6 +1635,33 @@ export const deleteTracesOlderThanDays = async (
   projectId: string,
   beforeDate: Date,
 ): Promise<boolean> => {
+  if (isDorisBackend()) {
+    const hasData = await hasAnyTraceOlderThan(projectId, beforeDate);
+    if (!hasData) {
+      return false;
+    }
+
+    const query = `
+      DELETE FROM traces
+      WHERE project_id = {projectId: String}
+      AND timestamp < {cutoffDate: DateTime};
+    `;
+    await commandDoris({
+      query: query,
+      params: {
+        projectId,
+        cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "delete",
+        projectId,
+      },
+    });
+    return true;
+  }
+
   const hasData = await hasAnyTraceOlderThan(projectId, beforeDate);
   if (!hasData) {
     return false;
@@ -1063,6 +1705,31 @@ export const deleteTracesOlderThanDays = async (
 export const deleteTracesByProjectId = async (
   projectId: string,
 ): Promise<boolean> => {
+  if (isDorisBackend()) {
+    const hasData = await hasAnyTrace(projectId);
+    if (!hasData) {
+      return false;
+    }
+
+    const query = `
+      DELETE FROM traces
+      WHERE project_id = {projectId: String};
+    `;
+    await commandDoris({
+      query: query,
+      params: {
+        projectId,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "delete",
+        projectId,
+      },
+    });
+    return true;
+  }
+
   const hasData = await hasAnyTrace(projectId);
   if (!hasData) {
     return false;
@@ -1103,6 +1770,32 @@ export const deleteTracesByProjectId = async (
 };
 
 export const hasAnyUser = async (projectId: string) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT 1
+      FROM traces
+      WHERE project_id = {projectId: String}
+      AND user_id IS NOT NULL
+      AND user_id != ''
+      LIMIT 1
+    `;
+
+    const rows = await queryDoris<{ 1: number }>({
+      query,
+      params: {
+        projectId,
+      },
+      tags: {
+        feature: "tracing",
+        type: "user",
+        kind: "hasAny",
+        projectId,
+      },
+    });
+
+    return rows.length > 0;
+  }
+
   return measureAndReturn({
     operationName: "hasAnyUser",
     projectId,
@@ -1144,6 +1837,44 @@ export const getTotalUserCount = async (
   filter: FilterState,
   searchQuery?: string,
 ): Promise<{ totalCount: bigint }[]> => {
+  if (isDorisBackend()) {
+    const { tracesFilter } = getDorisProjectIdDefaultFilter(projectId, {
+      tracesPrefix: "t",
+    });
+
+    tracesFilter.push(
+      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+    );
+
+    const tracesFilterRes = tracesFilter.apply();
+    const search = dorisSearchCondition(searchQuery, undefined, {
+      type: "traces",
+    });
+
+    const query = `
+      SELECT COUNT(DISTINCT t.user_id) AS totalCount
+      FROM traces t
+      WHERE ${tracesFilterRes.query}
+      ${search.query}
+      AND t.user_id IS NOT NULL
+      AND t.user_id != ''
+    `;
+
+    return queryDoris({
+      query,
+      params: {
+        ...tracesFilterRes.params,
+        ...search.params,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+  }
+
   const { tracesFilter } = getProjectIdDefaultFilter(projectId, {
     tracesPrefix: "t",
   });
@@ -1201,6 +1932,167 @@ export const getUserMetrics = async (
 ) => {
   if (userIds.length === 0) {
     return [];
+  }
+
+  // Helper function to parse timestamps from different backends
+  const parseTimestamp = (timestamp: string | Date): Date => {
+    // Only apply special handling for Doris backend
+    if (isDorisBackend() && timestamp instanceof Date) {
+      return timestamp;
+    }
+    
+    // Default ClickHouse behavior - always expect string
+    if (typeof timestamp === 'string') {
+      return parseClickhouseUTCDateTimeFormat(timestamp);
+    }
+    
+    throw new Error(`Invalid timestamp format: ${typeof timestamp}`);
+  };
+
+  if (isDorisBackend()) {
+    // Use the same pattern as other methods - get default filter first
+    const { tracesFilter } = getDorisProjectIdDefaultFilter(projectId, {
+      tracesPrefix: "t",
+    });
+
+    tracesFilter.push(
+      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+    );
+
+    const tracesFilterRes = tracesFilter.apply();
+
+    const timestampFilter = tracesFilter.find(
+      (f) => f.field === "timestamp" && f.operator === ">=",
+    ) as DorisDateTimeFilter | undefined;
+
+    // Doris version using map format with proper null handling
+    const query = `
+        WITH stats as (
+          SELECT
+              t.user_id as user_id,
+              MAX(t.environment) as environment,
+              count(distinct o.id) as obs_count,
+              sum(o.total_cost) as sum_total_cost,
+              max(t.timestamp) as max_timestamp,
+              min(t.timestamp) as min_timestamp,
+              count(distinct t.id) as trace_count,
+              sum(if(MAP_CONTAINS_KEY(o.usage_details,'input'),o.usage_details['input'],0)) as input_usage,
+              sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'),o.usage_details['output'],0)) as output_usage,
+              sum(if(MAP_CONTAINS_KEY(o.usage_details,'total'),o.usage_details['total'],0)) as total_usage
+          FROM
+              (
+                  SELECT
+                      o.project_id,
+                      o.trace_id,
+                      o.usage_details,
+                      o.total_cost,
+                      id,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY id
+                          ORDER BY
+                              event_ts DESC
+                      ) AS rn
+                  FROM
+                      observations o
+                  WHERE
+                      o.project_id = {projectId: String}
+                      ${timestampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
+                      AND o.trace_id in (
+                          SELECT
+                              distinct id
+                          from
+                              traces t
+                          where
+                              user_id IN ({userIds: Array(String) })
+                              AND project_id = {projectId: String}
+                              ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
+                      )
+                      AND o.type = 'GENERATION'
+              ) as o
+              JOIN (
+                  SELECT
+                      t.id,
+                      t.user_id,
+                      t.project_id,
+                      t.timestamp,
+                      t.environment,
+                      ROW_NUMBER() OVER (
+                          PARTITION BY id
+                          ORDER BY
+                              event_ts DESC
+                      ) AS rn
+                  FROM
+                      traces t
+                  WHERE
+                      t.user_id IN ({userIds: Array(String) })
+                      AND t.project_id = {projectId: String}
+                      ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
+              ) as t on t.id = o.trace_id
+              and t.project_id = o.project_id
+          WHERE
+              o.rn = 1
+              and t.rn = 1
+          group by
+              t.user_id
+      )
+      SELECT
+          input_usage,
+          output_usage,
+          total_usage,
+          obs_count,
+          trace_count,
+          user_id,
+          environment,
+          sum_total_cost,
+          max_timestamp,
+          min_timestamp
+      FROM
+          stats
+    `;
+
+    const rows = await queryDoris<{
+      user_id: string;
+      environment: string;
+      max_timestamp: string | Date;
+      min_timestamp: string | Date;
+      input_usage: string;
+      output_usage: string;
+      total_usage: string;
+      obs_count: string;
+      trace_count: string;
+      sum_total_cost: string;
+    }>({
+      query,
+      params: {
+        projectId,
+        userIds,
+        ...(tracesFilterRes ? tracesFilterRes.params : {}),
+        ...(timestampFilter
+          ? {
+              traceTimestamp: convertDateToAnalyticsDateTime(timestampFilter.value),
+            }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return rows.map((row) => ({
+      userId: row.user_id,
+      environment: row.environment,
+      maxTimestamp: parseTimestamp(row.max_timestamp),
+      minTimestamp: parseTimestamp(row.min_timestamp),
+      inputUsage: Number(row.input_usage),
+      outputUsage: Number(row.output_usage),
+      totalUsage: Number(row.total_usage),
+      observationCount: Number(row.obs_count),
+      traceCount: Number(row.trace_count),
+      totalCost: Number(row.sum_total_cost),
+    }));
   }
 
   // filter state contains date range filter for traces so far.
@@ -1351,6 +2243,48 @@ export const getTracesForBlobStorageExport = function (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        id,
+        timestamp,
+        name,
+        environment,
+        project_id,
+        metadata,
+        user_id,
+        session_id,
+        \`release\`,
+        version,
+        public,
+        bookmarked,
+        tags,
+        input,
+        output
+      FROM traces
+      WHERE project_id = {projectId: String}
+      AND timestamp >= {minTimestamp: DateTime}
+      AND timestamp <= {maxTimestamp: DateTime}
+    `;
+
+    const records = queryDorisStream<Record<string, unknown>>({
+      query,
+      params: {
+        projectId,
+        minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
+        maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
+      },
+      tags: {
+        feature: "blobstorage",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return records;
+  }
+
   const traceTable = "traces";
 
   const query = `
@@ -1401,6 +2335,86 @@ export const getTracesForAnalyticsIntegrations = async function* (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
+  if (isDorisBackend()) {
+    const query = `
+      WITH observations_agg AS (
+        SELECT o.project_id,
+               o.trace_id,
+               sum(total_cost) as total_cost,
+               count(*) as observation_count,
+               milliseconds_diff(
+                 CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
+                 CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
+               ) as latency_milliseconds
+        FROM observations o
+        WHERE o.project_id = {projectId: String}
+        AND o.start_time >= DATE_SUB({minTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})
+        GROUP BY o.project_id, o.trace_id
+      )
+
+      SELECT
+        t.id as id,
+        t.timestamp as timestamp,
+        t.name as name,
+        t.session_id as session_id,
+        t.user_id as user_id,
+        t.\`release\` as \`release\`,
+        t.version as version,
+        t.tags as tags,
+        t.metadata['$posthog_session_id'] as posthog_session_id,
+        o.total_cost as total_cost,
+        o.latency_milliseconds / 1000 as latency,
+        o.observation_count as observation_count
+      FROM traces t
+      LEFT JOIN observations_agg o ON t.id = o.trace_id AND t.project_id = o.project_id
+      WHERE t.project_id = {projectId: String}
+      AND t.timestamp >= {minTimestamp: DateTime}
+      AND t.timestamp <= {maxTimestamp: DateTime}
+    `;
+
+    const records = queryDorisStream<Record<string, unknown>>({
+      query,
+      params: {
+        projectId,
+        minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
+        maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
+      },
+      tags: {
+        feature: "posthog",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    const baseUrl = env.NEXTAUTH_URL?.replace("/api/auth", "");
+    for await (const record of records) {
+      yield {
+        timestamp: record.timestamp,
+        langfuse_id: record.id,
+        langfuse_trace_name: record.name,
+        langfuse_url: `${baseUrl}/project/${projectId}/traces/${encodeURIComponent(record.id as string)}`,
+        langfuse_cost_usd: record.total_cost,
+        langfuse_count_observations: record.observation_count,
+        langfuse_session_id: record.session_id,
+        langfuse_project_id: projectId,
+        langfuse_user_id: record.user_id || "langfuse_unknown_user",
+        langfuse_latency: record.latency,
+        langfuse_release: record.release,
+        langfuse_version: record.version,
+        langfuse_tags: record.tags,
+        langfuse_event_version: "1.0.0",
+        $session_id: record.posthog_session_id ?? null,
+        $set: {
+          langfuse_user_url: record.user_id
+            ? `${baseUrl}/project/${projectId}/users/${encodeURIComponent(record.user_id as string)}`
+            : null,
+        },
+      };
+    }
+    return;
+  }
+
   // Determine which trace table to use based on experiment flag
   const traceTable = "traces";
 
@@ -1496,6 +2510,39 @@ export const getTracesForAnalyticsIntegrations = async function* (
  * We expect at most 10s of calls per day, so this is acceptable.
  */
 export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
+  if (isDorisBackend()) {
+    // Use window function to achieve LIMIT 1 BY semantics in Doris
+    const query = `
+        SELECT id, project_id
+        FROM (
+          SELECT id, project_id,
+                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+          FROM traces
+          WHERE id IN ({traceIds: Array(String)})
+        ) ranked
+        WHERE rn = 1
+        ORDER BY event_ts DESC;`;
+    const records = await queryDoris<{
+      id: string;
+      project_id: string;
+    }>({
+      query,
+      params: {
+        traceIds,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "list",
+      },
+    });
+
+    return records.map((record) => ({
+      id: record.id,
+      projectId: record.project_id,
+    }));
+  }
+
   return measureAndReturn({
     operationName: "getTracesByIdsForAnyProject",
     projectId: "__CROSS_PROJECT__",
@@ -1534,6 +2581,61 @@ export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   });
 };
 
+export const traceWithSessionIdExists = async (
+  projectId: string,
+  sessionId: string,
+) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT id, project_id
+      FROM traces
+      WHERE session_id = {sessionId: String}
+      AND project_id = {projectId: String}
+      LIMIT 1
+    `;
+
+    const result = await queryDoris<{ id: string; project_id: string }>({
+      query,
+      params: {
+        sessionId,
+        projectId,
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "exists",
+        projectId,
+      },
+    });
+
+    return result.length > 0;
+  }
+
+  const query = `
+    SELECT id, project_id
+    FROM traces
+    WHERE session_id = {sessionId: String}
+    AND project_id = {projectId: String}
+    LIMIT 1
+  `;
+
+  const result = await queryClickhouse<{ id: string; project_id: string }>({
+    query,
+    params: {
+      sessionId,
+      projectId,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "exists",
+      projectId,
+    },
+  });
+
+  return result.length > 0;
+};
+
 export async function getAgentGraphData(params: {
   projectId: string;
   traceId: string;
@@ -1541,6 +2643,33 @@ export async function getAgentGraphData(params: {
   chMaxStartTime: string;
 }) {
   const { projectId, traceId, chMinStartTime, chMaxStartTime } = params;
+
+  if (isDorisBackend()) {
+    const query = `
+            SELECT
+              id,
+              parent_observation_id,
+              metadata['langgraph_node'] AS node,
+              metadata['langgraph_step'] AS step
+            FROM
+              observations
+            WHERE
+              project_id = {projectId: String}
+              AND trace_id = {traceId: String}
+              AND start_time >= {chMinStartTime: DateTime}
+              AND start_time <= {chMaxStartTime: DateTime}
+          `;
+
+    return queryDoris({
+      query,
+      params: {
+        traceId,
+        projectId,
+        chMinStartTime,
+        chMaxStartTime,
+      },
+    });
+  }
 
   const query = `
           SELECT

@@ -8,6 +8,22 @@ import {
   DEFAULT_RENDERING_PROPS,
   applyInputOutputRendering,
 } from "../utils/rendering";
+import { isDorisBackend } from "./analytics";
+
+// Helper function to parse timestamps from different backends
+const parseTimestamp = (timestamp: string | Date): Date => {
+  // Only apply special handling for Doris backend
+  if (isDorisBackend() && timestamp instanceof Date) {
+    return timestamp;
+  }
+
+  // Default ClickHouse behavior - always expect string
+  if (typeof timestamp === "string") {
+    return parseClickhouseUTCDateTimeFormat(timestamp);
+  }
+
+  throw new Error(`Invalid timestamp format: ${typeof timestamp}`);
+};
 
 export const convertTraceDomainToClickhouse = (
   trace: TraceDomain,
@@ -39,13 +55,29 @@ export const convertClickhouseToDomain = (
   record: TraceRecordReadType,
   renderingProps: RenderingProps = DEFAULT_RENDERING_PROPS,
 ): TraceDomain => {
+  // Parse tags array - handle Doris string format
+  let tags: string[] = [];
+  if (typeof record.tags === 'string') {
+    try {
+      tags = JSON.parse(record.tags);
+      if (!Array.isArray(tags)) {
+        tags = [];
+      }
+    } catch (e) {
+      console.error('Failed to parse tags JSON:', e);
+      tags = [];
+    }
+  } else if (Array.isArray(record.tags)) {
+    tags = record.tags;
+  }
+
   return {
     id: record.id,
     projectId: record.project_id,
     name: record.name ?? null,
-    timestamp: parseClickhouseUTCDateTimeFormat(record.timestamp),
+    timestamp: parseTimestamp(record.timestamp),
     environment: record.environment,
-    tags: record.tags,
+    tags: tags,
     bookmarked: record.bookmarked,
     release: record.release ?? null,
     version: record.version ?? null,
@@ -55,8 +87,8 @@ export const convertClickhouseToDomain = (
     input: applyInputOutputRendering(record.input, renderingProps),
     output: applyInputOutputRendering(record.output, renderingProps),
     metadata: parseMetadataCHRecordToDomain(record.metadata),
-    createdAt: parseClickhouseUTCDateTimeFormat(record.created_at),
-    updatedAt: parseClickhouseUTCDateTimeFormat(record.updated_at),
+    createdAt: parseTimestamp(record.created_at),
+    updatedAt: parseTimestamp(record.updated_at),
   };
 };
 
