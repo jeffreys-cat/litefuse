@@ -82,7 +82,7 @@ export const tracesTableUiColumnDefinitions: UiColumnMappings = [
     uiTableName: "Release",
     uiTableId: "release",
     clickhouseTableName: "traces",
-    clickhouseSelect: "release",
+    clickhouseSelect: "`release`",
     queryPrefix: "t",
   },
   {
@@ -271,7 +271,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Release",
     uiTableId: "release",
     clickhouseTableName: "traces",
-    clickhouseSelect: "release",
+    clickhouseSelect: "`release`",
   },
   {
     uiTableName: "Environment",

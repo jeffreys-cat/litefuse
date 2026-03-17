@@ -7,6 +7,7 @@ import {
 } from "../../domain/scores";
 import {
   commandClickhouse,
+  parseClickhouseUTCDateTimeFormat,
   queryClickhouse,
   queryClickhouseStream,
   upsertClickhouse,
@@ -42,10 +43,10 @@ import { ClickHouseClientConfigOptions } from "@clickhouse/client";
 import { recordDistribution } from "../instrumentation";
 import { prisma } from "../../db";
 import { measureAndReturn } from "../clickhouse/measureAndReturn";
-import { scoresColumnsTableUiColumnDefinitions } from "../tableMappings/mapScoresColumnsTable";
+import { scoresColumnsTableUiColumnDefinitions, scoresColumnsTableUiColumnDefinitionsForDoris } from "../tableMappings/mapScoresColumnsTable";
 import { scoresTableCols } from "../../tableDefinitions/scoresTable";
 import { eventsTraceMetadata } from "../queries/clickhouse-sql/query-fragments";
-import { isDorisBackend, convertDateToAnalyticsDateTime } from "./analytics";
+import { isDorisBackend, convertDateToAnalyticsDateTime, dq } from "./analytics";
 import { queryDoris, upsertDoris, commandDoris, queryDorisStream } from "./doris";
 import {
   createDorisFilterFromFilterState,
@@ -119,7 +120,7 @@ export const searchExistingAnnotationScore = async (
         projectId,
       },
     });
-    return rows.map((row) => convertToScore(row)).shift();
+    return rows.map((row) => convertClickhouseScoreToDomain(row)).shift();
   }
 
   const query = `
@@ -206,7 +207,7 @@ export const upsertScore = async (score: Partial<ScoreRecordReadType>) => {
     await upsertDoris({
       table: "scores",
       records: [score as ScoreRecordReadType],
-      eventBodyMapper: convertToScore,
+      eventBodyMapper: convertClickhouseScoreToDomain,
       tags: {
         feature: "tracing",
         type: "score",
@@ -286,7 +287,7 @@ const formatMetadataSelect = (
       "trace_id",
       "session_id",
       "observation_id",
-      "value",
+      dq("value"),
       "source",
       "comment",
       "author_user_id",
@@ -303,7 +304,7 @@ const formatMetadataSelect = (
 
     const selectColumns = excludeMetadata 
       ? baseColumns 
-      : [...baseColumns, "cast(metadata as json) as metadata"];
+      : [...baseColumns, "metadata"];
 
     return [
       selectColumns.join(", "),
@@ -374,7 +375,7 @@ export const getScoresForSessions = async <
       },
     });
 
-    return rows.map(convertToScore);
+    return rows.map((r) => convertClickhouseScoreToDomain(r));
   }
 
   const query = `
@@ -461,7 +462,7 @@ export const getScoresForDatasetRuns = async <
       },
     });
 
-    return rows.map(convertToScore);
+    return rows.map((r) => convertClickhouseScoreToDomain(r));
   }
 
   const query = `
@@ -508,6 +509,12 @@ export const getTraceScoresForDatasetRuns = async (
   datasetRunIds: string[],
 ): Promise<Array<{ dataset_run_id: string } & any>> => {
   if (datasetRunIds.length === 0) return [];
+
+  if (isDorisBackend()) {
+    // Doris does not have the dataset_run_items_rmt table.
+    // Dataset run items are managed via PostgreSQL; return empty for now.
+    return [];
+  }
 
   const query = `
     SELECT
@@ -644,7 +651,7 @@ const getScoresForTracesInternal = async <
     });
 
     return rows.map((row) => {
-      const score = convertToScore({
+      const score = convertClickhouseScoreToDomain({
         ...row,
         metadata: excludeMetadata ? {} : row.metadata,
       });
@@ -829,7 +836,7 @@ export const getScoresForObservations = async <
     });
 
     return rows.map((row) => ({
-      ...convertToScore({
+      ...convertClickhouseScoreToDomain({
         ...row,
         metadata: excludeMetadata ? {} : row.metadata,
       }),
@@ -903,31 +910,26 @@ export const getScoresGroupedByNameSourceType = async ({
   fromTimestamp?: Date;
   toTimestamp?: Date;
 }) => {
-  const scoresFilter = new FilterList();
-  scoresFilter.push(
-    ...createFilterFromFilterState(
-      filter,
-      scoresColumnsTableUiColumnDefinitions,
-      scoresTableCols,
-    ),
-  );
-  const scoresFilterRes = scoresFilter.apply();
-
-  // Only join dataset run items and traces if there is a dataset run items filter
-  const performDatasetRunItemsAndTracesJoin = scoresFilter.some(
-    (f) => f.clickhouseTable === "dataset_run_items_rmt",
-  );
-
   if (isDorisBackend()) {
+    const dorisScoresFilter = new FilterList();
+    dorisScoresFilter.push(
+      ...createDorisFilterFromFilterState(
+        filter,
+        scoresColumnsTableUiColumnDefinitionsForDoris,
+      ),
+    );
+    const dorisScoresFilterRes = dorisScoresFilter.apply();
+
     const query = `
-      select 
+      select
         name,
         source,
         data_type
       from scores s
       WHERE s.project_id = {projectId: String}
-      ${timestamp ? `AND s.timestamp >= {timestamp: DateTime}` : ""}
-      AND s.dataset_run_id IN ({datasetRunIds: Array(String)})
+      ${dorisScoresFilterRes?.query ? `AND ${dorisScoresFilterRes.query}` : ""}
+      ${fromTimestamp ? `AND s.timestamp >= {fromTimestamp: DateTime}` : ""}
+      ${toTimestamp ? `AND s.timestamp <= {toTimestamp: DateTime}` : ""}
       GROUP BY name, source, data_type
       ORDER BY count() desc
       LIMIT 1000;
@@ -941,10 +943,13 @@ export const getScoresGroupedByNameSourceType = async ({
       query: query,
       params: {
         projectId: projectId,
-        ...(timestamp
-          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+        ...(fromTimestamp
+          ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
           : {}),
-        datasetRunIds: datasetRunIds,
+        ...(toTimestamp
+          ? { toTimestamp: convertDateToAnalyticsDateTime(toTimestamp) }
+          : {}),
+        ...(dorisScoresFilterRes ? dorisScoresFilterRes.params : {}),
       },
       tags: {
         feature: "tracing",
@@ -957,9 +962,24 @@ export const getScoresGroupedByNameSourceType = async ({
     return rows.map((row) => ({
       name: row.name,
       source: row.source as ScoreSourceType,
-      dataType: row.data_type as ScoreDataType,
+      dataType: row.data_type as ScoreDataTypeType,
     }));
   }
+
+  const scoresFilter = new FilterList();
+  scoresFilter.push(
+    ...createFilterFromFilterState(
+      filter,
+      scoresColumnsTableUiColumnDefinitions,
+      scoresTableCols,
+    ),
+  );
+  const scoresFilterRes = scoresFilter.apply();
+
+  // Only join dataset run items and traces if there is a dataset run items filter
+  const performDatasetRunItemsAndTracesJoin = scoresFilter.some(
+    (f) => f.table === "dataset_run_items_rmt",
+  );
 
   // We mainly use queries like this to retrieve filter options.
   // Therefore, we can skip final as some inaccuracy in count is acceptable.
@@ -1403,29 +1423,27 @@ const getScoresUiGeneric = async <T>(props: {
           s.project_id,
           s.environment,
           s.name,
-          s.value,
+          s.${dq("value")},
           s.string_value,
           s.timestamp,
           s.source,
           s.data_type,
           s.comment,
-          ${excludeMetadata ? "" : "cast(s.metadata as json) as metadata,"}
+          ${excludeMetadata ? "" : "s.metadata,"}
           s.trace_id,
           s.session_id,
           s.observation_id,
           s.author_user_id,
-          t.user_id,
-          t.name,
-          t.tags,
           s.created_at,
           s.updated_at,
-          s.source,
           s.config_id,
           s.queue_id,
+          s.is_deleted,
+          s.event_ts,
           t.user_id,
           t.name as trace_name,
           t.tags as trace_tags
-          ${includeHasMetadataFlag ? ",array_size(map_keys(s.metadata)) > 0 AS has_metadata" : ""}
+          ${includeHasMetadataFlag ? ",CASE WHEN s.metadata IS NULL THEN 0 WHEN array_size(map_keys(s.metadata)) > 0 THEN 1 ELSE 0 END AS has_metadata" : ""}
         `;
 
     const { scoresFilter } = getDorisProjectIdDefaultFilter(projectId, {
@@ -1639,7 +1657,7 @@ const getScoresUiGenericFromEvents = async <T>(props: {
   );
 
   const scoreOnlyFilters = scoresFilter.filter(
-    (f) => f.clickhouseTable !== "traces",
+    (f) => f.table !== "traces",
   );
   const scoreOnlyFilterRes = scoreOnlyFilters.apply();
 
@@ -2737,12 +2755,12 @@ export const getScoresForAnalyticsIntegrations = async function* (
         s.id as id,
         s.timestamp as timestamp,
         s.name as name,
-        s.value as value,
+        s.${dq("value")} as ${dq("value")},
         s.comment as comment,
         t.name as trace_name,
         t.session_id as trace_session_id,
         t.user_id as trace_user_id,
-        t.release as trace_release,
+        t.${dq("release")} as trace_release,
         t.tags as trace_tags,
         t.metadata['$posthog_session_id'] as posthog_session_id
       FROM scores s

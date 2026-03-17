@@ -18,6 +18,7 @@ import {
   traceException,
   compareVersions,
   ResourceSpan,
+  dorisClient,
 } from "@langfuse/shared/src/server";
 import {
   applyIngestionMasking,
@@ -27,6 +28,7 @@ import { env } from "../env";
 import { IngestionService } from "../services/IngestionService";
 import { prisma } from "@langfuse/shared/src/db";
 import { ClickhouseWriter } from "../services/ClickhouseWriter";
+import { DorisWriter } from "../services/DorisWriter";
 import {
   ForbiddenError,
   convertEventRecordToObservationForEval,
@@ -302,11 +304,29 @@ export const otelIngestionQueueProcessor: Processor = async (
     if (!redis) throw new Error("Redis not available");
     if (!prisma) throw new Error("Prisma not available");
 
+    // Initialize the correct analytics backend writer (same pattern as ingestionQueue)
+    const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
+    let clickhouseWriter: ClickhouseWriter | null = null;
+    let dorisWriter: DorisWriter | null = null;
+
+    if (analyticsBackend === "clickhouse") {
+      clickhouseWriter = ClickhouseWriter.getInstance();
+    } else if (analyticsBackend === "doris") {
+      dorisWriter = DorisWriter.getInstance();
+    }
+
+    const clickhouseClientInstance =
+      analyticsBackend === "clickhouse" ? clickhouseClient() : null;
+    const dorisClientInstance =
+      analyticsBackend === "doris" ? dorisClient() : null;
+
     const ingestionService = new IngestionService(
       redis,
       prisma,
-      ClickhouseWriter.getInstance(),
-      clickhouseClient(),
+      clickhouseWriter,
+      clickhouseClientInstance,
+      dorisWriter,
+      dorisClientInstance,
     );
 
     // Decide whether observations should be processed via new flow (directly to events table)

@@ -34,7 +34,7 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "Identifier of the session triggering the trace.",
     },
     release: {
-      sql: "release",
+      sql: "`release`",
       type: "string",
       description: "Release version of the trace.",
     },
@@ -168,7 +168,7 @@ export const observationsViewDoris: ViewDeclarationType = {
         "Identifier of the parent observation. Empty for the root span.",
     },
     type: {
-      sql: "type",
+      sql: "`type`",
       type: "string",
       description:
         "Type of the observation. Can be a SPAN, GENERATION, or EVENT.",
@@ -227,7 +227,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       description: "Identifier of the session triggering the observation.",
     },
     traceRelease: {
-      sql: "release",
+      sql: "`release`",
       alias: "traceRelease",
       type: "string",
       relationTable: "traces",
@@ -433,7 +433,7 @@ export const scoreBaseDimensionsDoris = {
     description: "Identifier of the session triggering the trace.",
   },
   traceRelease: {
-    sql: "release",
+    sql: "`release`",
     alias: "traceRelease",
     type: "string",
     relationTable: "traces",
@@ -504,7 +504,7 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
       unit: "scores",
     },
     value: {
-      sql: "any_value(value)",
+      sql: "any_value(`value`)",
       alias: "value",
       type: "number",
       description: "Value of the score.",
@@ -514,13 +514,13 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
     traces: {
       name: "traces",
       joinConditionSql:
-        "ON scores.trace_id = traces.id AND scores.project_id = traces.project_id",
+        "ON scores_numeric.trace_id = traces.id AND scores_numeric.project_id = traces.project_id",
       timeDimension: "timestamp",
     },
     observations: {
       name: "observations",
       joinConditionSql:
-        "ON scores.observation_id = observations.id AND scores.project_id = observations.project_id",
+        "ON scores_numeric.observation_id = observations.id AND scores_numeric.project_id = observations.project_id",
       timeDimension: "start_time",
     },
   },
@@ -563,13 +563,13 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
     traces: {
       name: "traces",
       joinConditionSql:
-        "ON scores.trace_id = traces.id AND scores.project_id = traces.project_id",
+        "ON scores_categorical.trace_id = traces.id AND scores_categorical.project_id = traces.project_id",
       timeDimension: "timestamp",
     },
     observations: {
       name: "observations",
       joinConditionSql:
-        "ON scores.observation_id = observations.id AND scores.project_id = observations.project_id",
+        "ON scores_categorical.observation_id = observations.id AND scores_categorical.project_id = observations.project_id",
       timeDimension: "start_time",
     },
   },

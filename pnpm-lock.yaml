@@ -217,6 +217,9 @@ importers:
       ajv-formats:
         specifier: ^3.0.1
         version: 3.0.1(ajv@8.17.1)
+      axios:
+        specifier: ^1.8.2
+        version: 1.12.2
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3

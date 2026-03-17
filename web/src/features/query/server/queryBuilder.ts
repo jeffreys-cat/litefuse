@@ -20,6 +20,7 @@ import { viewDeclarationsDoris } from "@/src/features/query/dataModelDoris";
 import {
   FilterList,
   createFilterFromFilterState,
+  createDorisFilterFromFilterState,
   type Filter,
   isDorisBackend,
 } from "@langfuse/shared/src/server";
@@ -130,6 +131,8 @@ export class QueryBuilder {
       case "histogram":
         const bins = this.chartConfig?.bins ?? 10;
         return `histogram(cast(${metric.alias || metric.sql} as double), ${bins})`;
+      case "uniq":
+        return `count(distinct ${metric.alias || metric.sql})`;
       default:
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const exhaustiveCheck: never = metric.aggregation;
@@ -1040,10 +1043,12 @@ export class QueryBuilder {
     fromClause: string,
     appliedDimensions: AppliedDimensionType[],
   ) {
-    const actualTableName = this.actualTableName(view);
+    const alias = this.tableAlias(view);
     // Use actual SQL from view definition for id column (handles events.span_id -> id mapping)
-    const idSql = view.dimensions.id?.sql || `${actualTableName}.id`;
-    const projectIdSql = `${actualTableName}.project_id`;
+    const rawIdSql = view.dimensions.id?.sql || "id";
+    // Qualify id with table alias to avoid ambiguity in JOINs
+    const idSql = rawIdSql.includes(".") ? rawIdSql : `${alias}.${rawIdSql}`;
+    const projectIdSql = `${alias}.project_id`;
 
     // Build inner GROUP BY - include exploded array dimensions (they must be in GROUP BY after arrayJoin)
     // Also include pairExpand dimensions (their key column is in scope after ARRAY JOIN clause)
@@ -1476,8 +1481,16 @@ export class QueryBuilder {
     }
 
     // Check if we should use Doris backend
+    console.error(`[queryBuilder.build] isDorisBackend=${isDorisBackend()} view=${query.view}`);
     if (isDorisBackend()) {
-      return this.buildDoris(query, projectId);
+      try {
+        return this.buildDoris(query, projectId);
+      } catch (e) {
+        const fs = require("fs");
+        const msg = e instanceof Error ? e.stack || e.message : String(e);
+        fs.appendFileSync("/tmp/doris-errors.log", `[buildDoris] view=${query.view}\n${msg}\n---\n`);
+        throw e;
+      }
     }
 
     // Initialize parameters object
@@ -1705,6 +1718,235 @@ export class QueryBuilder {
     };
   }
 
+  /**
+   * Build Doris-compatible filters using the Doris filter factory
+   * instead of the ClickHouse filter factory (which generates DateTime64(3) syntax).
+   */
+  private mapFiltersDoris(
+    filters: z.infer<typeof queryModel>["filters"],
+    view: ViewDeclarationType,
+  ): MappedFilters {
+    this.validateFilters(filters, view);
+
+    const actualTableName = this.actualTableName(view);
+
+    const result: MappedFilters = {
+      whereFilters: [],
+      whereRawParts: [],
+    };
+
+    const normalFilters: z.infer<typeof queryModel>["filters"] = [];
+    const normalMappings: Array<{
+      uiTableName: string;
+      uiTableId: string;
+      clickhouseTableName: string;
+      clickhouseSelect: string;
+      queryPrefix: string;
+      type: string;
+      emptyEqualsNull?: boolean;
+    }> = [];
+
+    for (const filter of filters) {
+      const dimension = this.resolveDimension(filter.column, view);
+
+      if (dimension?.filterSql) {
+        result.whereRawParts.push(
+          this.buildFilterSqlWhereCondition({
+            filter,
+            whereCols: dimension.filterSql.where,
+            dimensionSql: dimension.sql,
+            tableName: actualTableName,
+          }),
+        );
+        continue;
+      }
+
+      let clickhouseSelect: string;
+      let queryPrefix: string = this.tableAlias(view);
+      let clickhouseTableName: string = actualTableName;
+      let type: string;
+      let emptyEqualsNull: boolean | undefined;
+
+      if (dimension) {
+        const nullIfMatch = NULL_IF_EMPTY_RE.exec(dimension.sql);
+        if (nullIfMatch) {
+          clickhouseSelect = nullIfMatch[1];
+          emptyEqualsNull = true;
+        } else {
+          clickhouseSelect = dimension.sql;
+        }
+        type = "string";
+        if (dimension.relationTable) {
+          clickhouseTableName = dimension.relationTable;
+          queryPrefix = dimension.relationTable;
+        }
+      } else if (filter.column === view.timeDimension) {
+        clickhouseSelect = view.timeDimension;
+        queryPrefix = clickhouseTableName;
+        type = "datetime";
+      } else if (filter.column === "metadata") {
+        clickhouseSelect = "metadata";
+        queryPrefix = clickhouseTableName;
+        type = "stringObject";
+      } else if (filter.column.endsWith("Name")) {
+        clickhouseSelect = "name";
+        queryPrefix = clickhouseTableName;
+        type = "string";
+      } else {
+        throw new InvalidRequestError(
+          `Invalid filter column ${filter.column}. Must be one of ${Object.keys(view.dimensions)} or ${view.timeDimension}`,
+        );
+      }
+
+      normalFilters.push(filter);
+      normalMappings.push({
+        uiTableName: filter.column,
+        uiTableId: filter.column,
+        clickhouseTableName,
+        clickhouseSelect,
+        queryPrefix,
+        type,
+        emptyEqualsNull,
+      });
+    }
+
+    // Use Doris filter factory instead of ClickHouse filter factory
+    result.whereFilters = createDorisFilterFromFilterState(
+      normalFilters,
+      normalMappings,
+    );
+    return result;
+  }
+
+  /**
+   * Add standard filters (project_id, timestamps) using Doris filter factory.
+   */
+  private addStandardFiltersDoris(
+    filterList: FilterList,
+    view: ViewDeclarationType,
+    projectId: string,
+    fromTimestamp: string,
+    toTimestamp: string,
+  ) {
+    const alias = this.tableAlias(view);
+
+    const projectIdMapping = {
+      uiTableName: "project_id",
+      uiTableId: "project_id",
+      clickhouseTableName: alias,
+      clickhouseSelect: "project_id",
+      queryPrefix: alias,
+      type: "string",
+    };
+
+    const timeDimensionMapping = {
+      uiTableName: view.timeDimension,
+      uiTableId: view.timeDimension,
+      clickhouseTableName: alias,
+      clickhouseSelect: view.timeDimension,
+      queryPrefix: alias,
+      type: "datetime",
+    };
+
+    const projectIdFilter = createDorisFilterFromFilterState(
+      [
+        {
+          column: "project_id",
+          operator: "=",
+          value: projectId,
+          type: "string",
+        },
+      ],
+      [projectIdMapping],
+    );
+
+    const fromFilter = createDorisFilterFromFilterState(
+      [
+        {
+          column: view.timeDimension,
+          operator: ">=",
+          value: new Date(fromTimestamp),
+          type: "datetime",
+        },
+      ],
+      [timeDimensionMapping],
+    );
+
+    const toFilter = createDorisFilterFromFilterState(
+      [
+        {
+          column: view.timeDimension,
+          operator: "<=",
+          value: new Date(toTimestamp),
+          type: "datetime",
+        },
+      ],
+      [timeDimensionMapping],
+    );
+
+    filterList.push(...projectIdFilter, ...fromFilter, ...toFilter);
+    return filterList;
+  }
+
+  /**
+   * Build JOINs for Doris using Doris filter factory for timestamp filters.
+   */
+  private buildJoinsDorisWithDorisFilters(
+    relationTables: Set<string>,
+    view: ViewDeclarationType,
+    filterList: FilterList,
+    query: QueryType,
+  ) {
+    const relationJoins = [];
+    for (const relationTableName of relationTables) {
+      if (!(relationTableName in view.tableRelations)) {
+        throw new InvalidRequestError(
+          `Invalid relationTable: ${relationTableName}. Must be one of ${Object.keys(view.tableRelations)}`,
+        );
+      }
+
+      const relation = view.tableRelations[relationTableName];
+      let joinStatement = `LEFT JOIN ${relation.name} ${relation.joinConditionSql}`;
+
+      const relationTimeDimensionMapping = {
+        uiTableName: relation.timeDimension,
+        uiTableId: relation.timeDimension,
+        clickhouseTableName: relation.name,
+        clickhouseSelect: relation.timeDimension,
+        queryPrefix: relation.name,
+        type: "datetime",
+      };
+
+      const fromFilter = createDorisFilterFromFilterState(
+        [
+          {
+            column: relation.timeDimension,
+            operator: ">=",
+            value: new Date(query.fromTimestamp),
+            type: "datetime",
+          },
+        ],
+        [relationTimeDimensionMapping],
+      );
+
+      const toFilter = createDorisFilterFromFilterState(
+        [
+          {
+            column: relation.timeDimension,
+            operator: "<=",
+            value: new Date(query.toTimestamp),
+            type: "datetime",
+          },
+        ],
+        [relationTimeDimensionMapping],
+      );
+
+      filterList.push(...fromFilter, ...toFilter);
+      relationJoins.push(joinStatement);
+    }
+    return relationJoins;
+  }
+
   private buildDoris(
     query: QueryType,
     projectId: string,
@@ -1719,12 +1961,12 @@ export class QueryBuilder {
     const appliedDimensions = this.mapDimensions(query.dimensions, view);
     const appliedMetrics = this.mapMetrics(query.metrics, view);
 
-    // Create filters: normal WHERE filters + raw WHERE parts (filterSql pruning + exact match)
-    const { whereFilters, whereRawParts } = this.mapFilters(query.filters, view);
+    // Create filters using Doris filter factory (not ClickHouse)
+    const { whereFilters, whereRawParts } = this.mapFiltersDoris(query.filters, view);
     let filterList = new FilterList(whereFilters);
 
-    // Add standard filters (project_id, timestamps)
-    filterList = this.addStandardFilters(
+    // Add standard filters using Doris filter factory
+    filterList = this.addStandardFiltersDoris(
       filterList,
       view,
       projectId,
@@ -1743,7 +1985,7 @@ export class QueryBuilder {
       filterList,
     );
     if (relationTables.size > 0) {
-      const relationJoins = this.buildJoinsDoris(
+      const relationJoins = this.buildJoinsDorisWithDorisFilters(
         relationTables,
         view,
         filterList,
@@ -1752,7 +1994,6 @@ export class QueryBuilder {
       fromClause += ` ${relationJoins.join(" ")}`;
     }
 
-    // todo 这里需要看是否有不适配的地方
     fromClause += this.buildWhereClause(filterList, parameters);
 
     // Append raw WHERE pruning parts (OR'd conditions from filterSql.where)
@@ -1811,6 +2052,8 @@ export class QueryBuilder {
 
     // Replace ClickHouse-specific functions with Doris equivalents
     sql = this.convertClickHouseFunctionsToDoris(sql);
+
+    console.error(`[buildDoris] view=${query.view} sql_length=${sql.length} sql_preview=${sql.substring(0, 200)}`);
 
     return {
       query: sql,

@@ -32,6 +32,7 @@ import { shouldSkipObservationsFinal } from "../queries/clickhouse-sql/query-opt
 import {
   isDorisBackend,
   convertDateToAnalyticsDateTime,
+  dq,
 } from "../repositories/analytics";
 import { queryDoris } from "../repositories/doris";
 import {
@@ -266,7 +267,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         os.observation_count as observation_count,
         s.scores_avg as scores_avg,
         s.score_categories as score_categories,
-        t.\`public\` as \`public\``;
+        t.${dq("public")} as ${dq("public")}`;
       break;
     case "rows":
       sqlSelect = `
@@ -276,12 +277,12 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         t.tags as tags,
         t.bookmarked as bookmarked,
         t.name as name,
-        t.\`release\` as \`release\`,
+        t.${dq("release")} as ${dq("release")},
         t.version as version,
         t.user_id as user_id,
         t.environment as environment,
         t.session_id as session_id,
-        t.\`public\` as \`public\``;
+        t.${dq("public")} as ${dq("public")}`;
       break;
     case "identifiers":
       sqlSelect = `
@@ -406,8 +407,8 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           agg.default_count,
           agg.debug_count,
           agg.aggregated_level,
-          maps.usage_details,
-          maps.cost_details
+          usage_maps.usage_details,
+          cost_maps.cost_details
         FROM (
           SELECT
             trace_id,
@@ -447,36 +448,35 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           GROUP BY trace_id, project_id
         ) agg
         LEFT JOIN (
-          SELECT
-            trace_id,
-            project_id,
-            -- 在这个独立查询中重建 map
-            map_agg(usage_key, usage_sum) as usage_details,
-            map_agg(cost_key, cost_sum) as cost_details
+          SELECT trace_id, project_id,
+            map_agg(usage_key, usage_sum) as usage_details
           FROM (
-            SELECT
-              o.trace_id,
-              o.project_id,
-              usage_key,
-              sum(usage_value) as usage_sum,
-              cost_key,
-              sum(cost_value) as cost_sum
+            SELECT o.trace_id, o.project_id, usage_key, sum(usage_value) as usage_sum
             FROM observations o
             LATERAL VIEW explode_map(usage_details) usage_exploded AS usage_key, usage_value
-            LATERAL VIEW explode_map(cost_details) cost_exploded AS cost_key, cost_value
             WHERE o.project_id = {projectId: String}
             ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
             ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
             AND usage_details IS NOT NULL
-            AND cost_details IS NOT NULL
-            GROUP BY 
-              o.trace_id,
-              o.project_id,
-              usage_key,
-              cost_key
-          ) kv_pairs
+            GROUP BY o.trace_id, o.project_id, usage_key
+          ) u
           GROUP BY trace_id, project_id
-        ) maps ON agg.trace_id = maps.trace_id AND agg.project_id = maps.project_id
+        ) usage_maps ON agg.trace_id = usage_maps.trace_id AND agg.project_id = usage_maps.project_id
+        LEFT JOIN (
+          SELECT trace_id, project_id,
+            map_agg(cost_key, cost_sum) as cost_details
+          FROM (
+            SELECT o.trace_id, o.project_id, cost_key, sum(cost_value) as cost_sum
+            FROM observations o
+            LATERAL VIEW explode_map(cost_details) cost_exploded AS cost_key, cost_value
+            WHERE o.project_id = {projectId: String}
+            ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+            ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
+            AND cost_details IS NOT NULL
+            GROUP BY o.trace_id, o.project_id, cost_key
+          ) c
+          GROUP BY trace_id, project_id
+        ) cost_maps ON agg.trace_id = cost_maps.trace_id AND agg.project_id = cost_maps.project_id
       )` : "";
 
     const scores_avg_cte = select === "metrics" || requiresScoresJoin ? `
@@ -538,6 +538,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.id` : ""}
       ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.id` : ""}
       WHERE t.project_id = {projectId: String}
+      ${timeStampFilter ? `AND t.timestamp_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
       ${tracesFilterRes ? `AND ${tracesFilterRes.query}` : ""}
       ${search.query}
       ${dorisOrderBy}
@@ -1019,6 +1020,33 @@ export const getTracesTableMetrics = async (props: {
   page?: number;
   clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 }): Promise<Array<Omit<TracesMetricsUiReturnType, "scores">>> => {
+  // Doris has a bug where IN/OR with multiple values on non-leading UNIQUE KEY
+  // columns returns empty results. Workaround: query each traceId individually.
+  if (isDorisBackend()) {
+    const idFilter = props.filter.find(
+      (f) => f.type === "stringOptions" && f.column === "ID" && f.operator === "any of",
+    );
+    const traceIds = idFilter?.type === "stringOptions" ? idFilter.value : [];
+    const otherFilters = props.filter.filter((f) => f !== idFilter);
+
+    if (traceIds.length > 1) {
+      const results = await Promise.all(
+        traceIds.map((id) =>
+          getTracesTableGeneric({
+            select: "metrics",
+            tags: { kind: "analytic" },
+            ...props,
+            filter: [
+              ...otherFilters,
+              { type: "stringOptions", operator: "any of", column: "ID", value: [id] },
+            ],
+          }).then((rows) => rows.map(convertToUITableMetrics)),
+        ),
+      );
+      return results.flat();
+    }
+  }
+
   const countRows = await getTracesTableGeneric({
     select: "metrics",
     tags: { kind: "analytic" },

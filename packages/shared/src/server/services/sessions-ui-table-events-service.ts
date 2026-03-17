@@ -185,7 +185,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
   ) as StringOptionsFilter | undefined;
 
   const requiresScoresJoin =
-    sessionFilters.some((f) => f.clickhouseTable === "scores") ||
+    sessionFilters.some((f) => f.table === "scores") ||
     sessionCols.find(
       (c) =>
         c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,

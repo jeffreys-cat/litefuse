@@ -185,7 +185,7 @@ export class OtelIngestionProcessor {
 
     // Upload to S3
     await getS3EventStorageClient(
-      env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET,
+      env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET!,
     ).uploadJson(fileKey, resourceSpans as Record<string, unknown>[]);
 
     // Add queue job
@@ -1758,6 +1758,7 @@ export class OtelIngestionProcessor {
     const userIdKeys = [
       "langfuse.user.id",
       "user.id",
+      "openclaw.userId",
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_user_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_user_id`,
       `ai.telemetry.metadata.userId`,
@@ -1775,16 +1776,18 @@ export class OtelIngestionProcessor {
   private extractSessionId(
     attributes: Record<string, unknown>,
   ): string | undefined {
-    const userIdKeys = [
+    const sessionIdKeys = [
       "langfuse.session.id",
       "session.id",
       "gen_ai.conversation.id",
+      "openclaw.sessionId",
+      "openclaw.sessionKey",
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_session_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_session_id`,
       `ai.telemetry.metadata.sessionId`,
     ];
 
-    for (const key of userIdKeys) {
+    for (const key of sessionIdKeys) {
       if (attributes[key]) {
         return typeof attributes[key] === "string"
           ? (attributes[key] as string)
@@ -1914,6 +1917,7 @@ export class OtelIngestionProcessor {
       "llm.response.model",
       "llm.model_name",
       "model",
+      "openclaw.model",
     ];
     for (const key of modelNameKeys) {
       if (attributes[key]) {
@@ -2121,6 +2125,28 @@ export class OtelIngestionProcessor {
         input_cache_read: cacheReadTokens,
         input_cache_creation: cacheWriteTokens,
       };
+    }
+
+    // OpenClaw tokens: openclaw.tokens.input, openclaw.tokens.output, etc.
+    const openclawTokenKeys = Object.keys(attributes).filter((key) =>
+      key.startsWith("openclaw.tokens."),
+    );
+    if (openclawTokenKeys.length > 0) {
+      const result: Record<string, number> = {};
+      for (const key of openclawTokenKeys) {
+        const shortKey = key.replace("openclaw.tokens.", "");
+        const val = attributes[key];
+        const num =
+          typeof val === "number"
+            ? val
+            : typeof val === "object" && val !== null && "low" in val
+              ? (val as any).low
+              : Number(val);
+        if (!Number.isNaN(num)) {
+          result[shortKey] = num;
+        }
+      }
+      if (Object.keys(result).length > 0) return result;
     }
 
     const usageDetails = Object.keys(attributes).filter(

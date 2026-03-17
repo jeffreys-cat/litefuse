@@ -52,7 +52,7 @@ export class DorisClient {
       feHttpUrl: config.feHttpUrl || env.DORIS_FE_HTTP_URL,
       feQueryPort: config.feQueryPort || env.DORIS_FE_QUERY_PORT,
       database: config.database || env.DORIS_DB,
-      username: config.username || env.DORIS_USER,
+      username: config.username || env.DORIS_USER || "root",
       password: config.password || env.DORIS_PASSWORD,
       timeout: config.timeout || env.DORIS_REQUEST_TIMEOUT_MS,
       maxRetries: config.maxRetries || 3,
@@ -75,7 +75,7 @@ export class DorisClient {
       // Enable automatic redirect following for Stream Load
       maxRedirects: 5,
       // Preserve auth headers on redirect
-      beforeRedirect: (options, { headers }) => {
+      beforeRedirect: (options: any, { headers }: { headers: Record<string, string> }) => {
         if (options.auth) {
           const authString = Buffer.from(`${options.auth.username}:${options.auth.password}`).toString('base64');
           headers.authorization = `Basic ${authString}`;
@@ -84,7 +84,7 @@ export class DorisClient {
     });
 
     // Add request interceptor for OpenTelemetry tracing
-    this.httpClient.interceptors.request.use((config) => {
+    this.httpClient.interceptors.request.use((config: any) => {
       const activeSpan = getCurrentSpan();
       if (activeSpan && config.headers) {
         propagation.inject(context.active(), config.headers);
@@ -94,8 +94,8 @@ export class DorisClient {
 
     // Add response interceptor for error handling
     this.httpClient.interceptors.response.use(
-      (response) => response,
-      (error) => {
+      (response: any) => response,
+      (error: any) => {
         logger.error("Doris HTTP request failed", {
           url: error.config?.url,
           method: error.config?.method,
@@ -341,7 +341,7 @@ export class DorisClient {
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
         maxRedirects: 0, // Disable automatic redirects
-        validateStatus: (status) => status >= 200 && status < 400, // Accept redirect status codes
+        validateStatus: (status: number) => status >= 200 && status < 400, // Accept redirect status codes
       });
 
       // Handle redirect manually if we get a 307 (this is normal behavior for Doris FE)

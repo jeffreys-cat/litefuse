@@ -237,8 +237,8 @@ function extractTimeFilter(
     (f) =>
       // For events tables, match any events_* prefix (events_proto, events_core, events_full)
       (tableName === "events_proto"
-        ? f.clickhouseTable.startsWith("events_")
-        : f.clickhouseTable === tableName) &&
+        ? f.table.startsWith("events_")
+        : f.table === tableName) &&
       f.field === fieldName &&
       (f.operator === ">=" || f.operator === ">"),
   );
@@ -921,7 +921,7 @@ function buildObservationsQueryComponents(
 
   // Determine if we need to join traces (check both simple params and advanced filters)
   const hasTraceFilter = observationsFilter.some(
-    (f) => f.clickhouseTable === "traces",
+    (f) => f.table === "traces",
   );
 
   // Extract time filter and apply filters
@@ -1269,7 +1269,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
 
   // Check if any filters reference the scores table
   const filtersNeedScores = tracesFilter.some(
-    (f) => f.clickhouseTable === "scores",
+    (f) => f.table === "scores",
   );
 
   // Check if filters specifically reference score aggregation columns

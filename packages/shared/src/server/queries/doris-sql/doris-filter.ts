@@ -180,19 +180,34 @@ export class StringOptionsFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
-    // 转义每个值的单引号
-    const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
-    const valuesList = escapedValues.join(', ');
-    
-    const query = this.operator === "any of"
-      ? `${fieldWithPrefix} IN (${valuesList})`
-      : `${fieldWithPrefix} NOT IN (${valuesList})`;
 
-    return {
-      query,
-      params: {}, // Doris 不使用参数化查询
-    };
+    // Escape single quotes in values
+    const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
+
+    if (this.values.length === 1) {
+      const query = this.operator === "any of"
+        ? `${fieldWithPrefix} = ${escapedValues[0]}`
+        : `${fieldWithPrefix} != ${escapedValues[0]}`;
+      return { query, params: {} };
+    }
+
+    // Doris has a bug where IN/NOT IN with multiple values fails on
+    // UNIQUE KEY merge-on-write tables (OR also fails).
+    // Workaround: use a subquery with UNION ALL for "any of",
+    // and keep NOT IN with CAST for "none of" (which does work).
+    if (this.operator === "any of") {
+      const unionParts = escapedValues.map(v => `SELECT ${v} AS val`);
+      return {
+        query: `${fieldWithPrefix} IN (${unionParts.join(' UNION ALL ')})`,
+        params: {},
+      };
+    } else {
+      const valuesList = escapedValues.join(', ');
+      return {
+        query: `CAST(${fieldWithPrefix} AS VARCHAR(65533)) NOT IN (${valuesList})`,
+        params: {},
+      };
+    }
   }
 }
 
@@ -278,24 +293,24 @@ export class ArrayOptionsFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
-    // 转义每个值的单引号
+
+    // Escape single quotes in values
     const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
-    
+
     let query: string;
     switch (this.operator) {
       case "any of":
-        // 检查数组是否包含任何指定值，使用ARRAY_OVERLAP函数
-        query = `ARRAY_OVERLAP(${fieldWithPrefix}, ARRAY[${escapedValues.join(', ')}])`;
+        // Use arrays_overlap with array() function syntax for Doris
+        query = `arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(', ')}))`;
         break;
       case "none of":
-        // 检查数组不包含任何指定值
-        query = `NOT ARRAY_OVERLAP(${fieldWithPrefix}, ARRAY[${escapedValues.join(', ')}])`;
+        // Check array does not contain any of the specified values
+        query = `NOT arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(', ')}))`;
         break;
       case "all of":
-        // 检查数组包含所有指定值，需要遍历检查
-        const allChecks = escapedValues.map(value => 
-          `ARRAY_CONTAINS(${fieldWithPrefix}, ${value})`
+        // Check array contains all specified values
+        const allChecks = escapedValues.map(value =>
+          `array_contains(${fieldWithPrefix}, ${value})`
         ).join(' AND ');
         query = `(${allChecks})`;
         break;
@@ -335,29 +350,29 @@ export class CategoryOptionsFilter implements Filter {
   }
 
   apply(): DbFilter {
-    // 将分类值扁平化为 "key:value" 格式
+    // Flatten category values to "key:value" format
     const flattenedValues: string[] = [];
     this.values.forEach((child) => {
       flattenedValues.push(`${this.key}:${child}`);
     });
 
     const fieldRef = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
-    // 转义每个值
+
+    // Escape values
     const escapedValues = flattenedValues.map(value => `'${value.replace(/'/g, "''")}'`);
     const valuesList = escapedValues.join(', ');
 
     switch (this.operator) {
       case "any of":
-        // 检查数组是否包含任何指定值
+        // Use arrays_overlap with array() function syntax for Doris
         return {
-          query: `ARRAY_OVERLAP(${fieldRef}, [${valuesList}])`,
+          query: `arrays_overlap(${fieldRef}, array(${valuesList}))`,
           params: {},
         };
       case "none of":
-        // 检查数组不包含任何指定值
+        // Check array does not contain any of the specified values
         return {
-          query: `NOT ARRAY_OVERLAP(${fieldRef}, [${valuesList}])`,
+          query: `NOT arrays_overlap(${fieldRef}, array(${valuesList}))`,
           params: {},
         };
       default:

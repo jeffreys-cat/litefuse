@@ -1,7 +1,7 @@
 import { ClickHouseClientConfigOptions } from "@clickhouse/client";
 import { OrderByState } from "../../interfaces/orderBy";
 import { sessionCols } from "../tableMappings/mapSessionTable";
-import { sessionColsForDoris } from "../../tableDefinitions/mapSessionTable";
+import { sessionColsForDoris } from "../tableMappings/mapSessionTable";
 import { FilterState } from "../../types";
 import { sessionsViewCols } from "../../tableDefinitions/sessionsView";
 import { convertDateToClickhouseDateTime } from "../clickhouse/client";
@@ -383,25 +383,33 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       ? convertDateToAnalyticsDateTime(traceTimestampFilter.value)
       : null;
 
-    const res = await queryDoris<T>({
-      query: query,
-      params: {
-        projectId,
-        limit: limit,
-        offset: limit && page ? limit * page : 0,
-        ...tracesFilterRes.params,
-        ...singleTraceFilter?.params,
-        ...(obsStartTimeValue
-          ? { observationsStartTime: obsStartTimeValue }
-          : {}),
-      },
-      tags: {
-        ...(props.tags ?? {}),
-        feature: "tracing",
-        type: "sessions-table",
-        projectId,
-      },
-    });
+    let res: T[];
+    try {
+      res = await queryDoris<T>({
+        query: query,
+        params: {
+          projectId,
+          limit: limit,
+          offset: limit && page ? limit * page : 0,
+          ...tracesFilterRes.params,
+          ...singleTraceFilter?.params,
+          ...(obsStartTimeValue
+            ? { observationsStartTime: obsStartTimeValue }
+            : {}),
+        },
+        tags: {
+          ...(props.tags ?? {}),
+          feature: "tracing",
+          type: "sessions-table",
+          projectId,
+        },
+      });
+    } catch (e) {
+      const fs = require("fs");
+      const msg = e instanceof Error ? e.stack || e.message : String(e);
+      fs.appendFileSync("/tmp/doris-errors.log", `[sessions] ${msg}\n---\n`);
+      throw e;
+    }
 
     // Post-process Doris results to match ClickHouse format
     if (select === "metrics") {
@@ -596,7 +604,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     filters.length > 0 ? new FilterList(filters).apply() : undefined;
 
   const requiresScoresJoin =
-    tracesFilter.find((f) => f.clickhouseTable === "scores") !== undefined ||
+    tracesFilter.find((f) => f.table === "scores") !== undefined ||
     sessionCols.find(
       (c) =>
         c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,

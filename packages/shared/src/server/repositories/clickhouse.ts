@@ -167,7 +167,7 @@ export async function upsertClickhouse<
           }
 
           return getS3StorageServiceClient(
-            env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET,
+            env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET!,
           ).uploadJson(bucketPath, [
             {
               id: eventId,

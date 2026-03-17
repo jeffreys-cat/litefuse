@@ -1,4 +1,4 @@
-import z from "zod";
+import z from "zod/v4";
 import { singleFilter } from "../../../interfaces/filters";
 import { FilterCondition } from "../../../types";
 import { isValidTableName } from "../../clickhouse/schemaUtils";
@@ -32,7 +32,11 @@ export const createDorisFilterFromFilterState = (
   filter: FilterCondition[],
   columnMapping: UiColumnMappings,
 ) => {
-  return filter.map((frontEndFilter) => {
+  return filter
+    .filter(
+      (frontEndFilter) => frontEndFilter.type !== "positionInTrace",
+    )
+    .map((frontEndFilter) => {
     // checks if the column exists in the doris schema
     const column = matchAndVerifyTracesUiColumn(frontEndFilter, columnMapping);
 

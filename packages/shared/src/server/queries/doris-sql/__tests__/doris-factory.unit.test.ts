@@ -159,7 +159,7 @@ describe("createDorisFilterFromFilterState", () => {
 
     it("should map null filter to NullFilter", () => {
       const filters: FilterCondition[] = [
-        { column: "name", operator: "is null", type: "null" },
+        { column: "name", operator: "is null", type: "null", value: "" as const },
       ];
       const result = createDorisFilterFromFilterState(
         filters,

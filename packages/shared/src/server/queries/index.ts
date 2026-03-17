@@ -26,6 +26,7 @@ export {
   orderByToEntries,
 } from "./clickhouse-sql/orderby-factory";
 export { createFilterFromFilterState } from "./clickhouse-sql/factory";
+export { createDorisFilterFromFilterState } from "./doris-sql/factory";
 export { clickhouseSearchCondition } from "./clickhouse-sql/search";
 export {
   convertApiProvidedFilterToClickhouseFilter,

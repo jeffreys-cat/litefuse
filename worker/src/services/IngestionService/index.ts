@@ -7,6 +7,7 @@ import {
   PrismaClient,
   Prompt,
 } from "@langfuse/shared";
+import { env } from "../../env";
 import {
   ClickhouseClientType,
   convertDateToClickhouseDateTime,
@@ -1651,7 +1652,11 @@ export class IngestionService {
       return null;
     }
 
-    if (await this.shouldSkipClickHouseRead(params.projectId)) {
+    if (
+      await ClickhouseReadSkipCache.getInstance(
+        this.prisma,
+      ).shouldSkipClickHouseRead(params.projectId)
+    ) {
       recordIncrement("langfuse.ingestion.doris_read_for_update", 1, {
         skipped: "true",
         table: params.table,

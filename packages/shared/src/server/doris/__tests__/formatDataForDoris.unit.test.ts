@@ -100,8 +100,8 @@ describe("formatDataForDoris", () => {
         [{ timestamp: "2024-06-15T12:00:00.000Z" }],
         "traces",
       );
-      expect(result[0].timestamp_date).toBeDefined();
-      expect(result[0].timestamp_date).toBe("2024-06-15T12:00:00.000Z");
+      expect((result[0] as any).timestamp_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBe("2024-06-15T12:00:00.000Z");
     });
 
     it("should not overwrite existing timestamp_date", () => {
@@ -114,12 +114,12 @@ describe("formatDataForDoris", () => {
         ],
         "traces",
       );
-      expect(result[0].timestamp_date).toBe("2024-06-14T00:00:00.000Z");
+      expect((result[0] as any).timestamp_date).toBe("2024-06-14T00:00:00.000Z");
     });
 
     it("should not generate date field when timestamp is null", () => {
       const result = formatDataForDoris([{ timestamp: null }], "traces");
-      expect(result[0].timestamp_date).toBeUndefined();
+      expect((result[0] as any).timestamp_date).toBeUndefined();
     });
   });
 
@@ -129,7 +129,7 @@ describe("formatDataForDoris", () => {
         [{ start_time: "2024-06-15T12:00:00.000Z" }],
         "observations",
       );
-      expect(result[0].start_time_date).toBeDefined();
+      expect((result[0] as any).start_time_date).toBeDefined();
     });
   });
 
@@ -139,7 +139,7 @@ describe("formatDataForDoris", () => {
         [{ timestamp: "2024-06-15T12:00:00.000Z" }],
         "scores",
       );
-      expect(result[0].timestamp_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBeDefined();
     });
   });
 
@@ -154,15 +154,15 @@ describe("formatDataForDoris", () => {
         ],
         "unknown_table",
       );
-      expect(result[0].timestamp_date).toBeDefined();
-      expect(result[0].start_time_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBeDefined();
+      expect((result[0] as any).start_time_date).toBeDefined();
     });
 
     it("should try both date fields when no table name provided", () => {
       const result = formatDataForDoris([
         { timestamp: "2024-06-15T12:00:00.000Z" },
       ]);
-      expect(result[0].timestamp_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBeDefined();
     });
   });
 
@@ -176,8 +176,8 @@ describe("formatDataForDoris", () => {
         "traces",
       );
       expect(result).toHaveLength(2);
-      expect(result[0].timestamp_date).toBeDefined();
-      expect(result[1].timestamp_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBeDefined();
+      expect((result[1] as any).timestamp_date).toBeDefined();
     });
   });
 });

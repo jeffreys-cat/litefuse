@@ -118,3 +118,14 @@ export function isDorisBackend(): boolean {
 export function isClickHouseBackend(): boolean {
   return getAnalyticsBackend() === "clickhouse";
 }
+
+// Doris reserved words that need backtick quoting
+const DORIS_RESERVED = new Set(["release", "public", "user", "key", "value", "index", "type"]);
+
+/**
+ * Quote a column name for Doris if it's a reserved word.
+ * Returns `col` as-is for non-reserved words, or wraps in backticks.
+ */
+export function dq(col: string): string {
+  return DORIS_RESERVED.has(col.toLowerCase()) ? "`" + col + "`" : col;
+}

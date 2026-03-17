@@ -1,14 +1,13 @@
 import { filterOperators } from "../../interfaces/filters";
 import {
-  FilterList,
   DateTimeFilter,
   ArrayOptionsFilter,
   StringOptionsFilter,
   CategoryOptionsFilter,
   StringFilter,
   NumberFilter,
-  type ClickhouseOperator,
 } from "./clickhouse-sql/clickhouse-filter";
+import { FilterList, type DbOperator as ClickhouseOperator } from "./filter";
 import { z } from "zod/v4";
 import type { FilterState } from "../../types";
 import type {
@@ -71,7 +70,7 @@ const TRACES_COLUMN_DEFINITIONS = [
   {
     id: "release",
     name: "Release",
-    column: "release",
+    column: "`release`",
     filterType: "StringFilter",
   },
   {

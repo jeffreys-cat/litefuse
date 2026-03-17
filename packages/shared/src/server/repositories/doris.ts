@@ -82,6 +82,10 @@ export async function queryDoris<T>(opts: {
     span.setAttribute("doris.query.text", processedQuery);
 
     try {
+      if (env.NODE_ENV === "development") {
+        logger.info(`doris:query:processed ${processedQuery}`);
+      }
+
       const client = dorisClient(opts.dorisConfigs);
       const result = await client.queryWithParams({
         query: processedQuery,
@@ -91,19 +95,14 @@ export async function queryDoris<T>(opts: {
 
       const data = await result.json();
 
-      if (env.NODE_ENV === "development") {
-        logger.info(`doris:query ${opts.query}`);
-      }
-
       span.setAttribute("doris.records.count", data.length);
       
       return data as T[];
     } catch (error) {
-      logger.error("Doris query failed", {
-        query: opts.query,
-        error: error instanceof Error ? error.message : String(error),
-        tags: opts.tags,
-      });
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const fs = require("fs");
+      fs.appendFileSync("/tmp/doris-errors.log", `[${new Date().toISOString()}] ERROR: ${errMsg}\nSQL: ${processedQuery.replace(/\n/g, ' ').substring(0, 800)}\n---\n`);
+      logger.error("Doris query failed", { error: errMsg });
       throw error;
     }
   });

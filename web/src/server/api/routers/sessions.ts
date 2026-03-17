@@ -369,19 +369,27 @@ export const sessionRouter = createTRPCRouter({
     )
     .query(async ({ input, ctx }) => {
       if (input.sessionIds.length === 0) return [];
-      const finalFilter = await getPublicSessionsFilter(input.projectId, [
-        {
-          column: "id",
-          type: "stringOptions",
-          operator: "any of",
-          value: input.sessionIds,
-        },
-      ]);
-      const sessions = await getSessionsWithMetrics({
-        projectId: input.projectId,
-        filter: finalFilter,
-      });
+      let finalFilter, sessions;
+      try {
+        finalFilter = await getPublicSessionsFilter(input.projectId, [
+          {
+            column: "id",
+            type: "stringOptions",
+            operator: "any of",
+            value: input.sessionIds,
+          },
+        ]);
+        sessions = await getSessionsWithMetrics({
+          projectId: input.projectId,
+          filter: finalFilter,
+        });
+      } catch (e) {
+        const fs = require("fs");
+        fs.appendFileSync("/tmp/doris-errors.log", `[sessions.metrics.query] ${e instanceof Error ? e.stack : String(e)}\n---\n`);
+        throw e;
+      }
 
+      try {
       const prismaSessionInfo = await ctx.prisma.traceSession.findMany({
         where: {
           id: {
@@ -424,16 +432,21 @@ export const sessionRouter = createTRPCRouter({
         trace_count: Number(s.trace_count),
         total_observations: Number(s.total_observations),
         sessionDuration: Number(s.duration),
-        inputCost: new Decimal(s.session_input_cost),
-        outputCost: new Decimal(s.session_output_cost),
-        totalCost: new Decimal(s.session_total_cost),
-        promptTokens: Number(s.session_input_usage),
-        completionTokens: Number(s.session_output_usage),
-        totalTokens: Number(s.session_total_usage),
+        inputCost: new Decimal(s.session_input_cost ?? 0),
+        outputCost: new Decimal(s.session_output_cost ?? 0),
+        totalCost: new Decimal(s.session_total_cost ?? 0),
+        promptTokens: Number(s.session_input_usage ?? 0),
+        completionTokens: Number(s.session_output_usage ?? 0),
+        totalTokens: Number(s.session_total_usage ?? 0),
         scores: aggregateScores(
           validatedScores.filter((score) => score.sessionId === s.session_id),
         ),
       }));
+      } catch (e) {
+        const fs = require("fs");
+        fs.appendFileSync("/tmp/doris-errors.log", `[sessions.metrics.post] ${e instanceof Error ? e.stack : String(e)}\n---\n`);
+        throw e;
+      }
     }),
   metricsFromEvents: protectedProjectProcedure
     .input(
@@ -493,12 +506,12 @@ export const sessionRouter = createTRPCRouter({
         trace_count: Number(s.trace_count),
         total_observations: Number(s.total_observations),
         sessionDuration: Number(s.duration),
-        inputCost: new Decimal(s.session_input_cost),
-        outputCost: new Decimal(s.session_output_cost),
-        totalCost: new Decimal(s.session_total_cost),
-        promptTokens: Number(s.session_input_usage),
-        completionTokens: Number(s.session_output_usage),
-        totalTokens: Number(s.session_total_usage),
+        inputCost: new Decimal(s.session_input_cost ?? 0),
+        outputCost: new Decimal(s.session_output_cost ?? 0),
+        totalCost: new Decimal(s.session_total_cost ?? 0),
+        promptTokens: Number(s.session_input_usage ?? 0),
+        completionTokens: Number(s.session_output_usage ?? 0),
+        totalTokens: Number(s.session_total_usage ?? 0),
         scores: aggregateScores(
           validatedScores.filter((score) => score.sessionId === s.session_id),
         ),

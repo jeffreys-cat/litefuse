@@ -1,6 +1,6 @@
 import { prisma } from "../../src/db";
 import { redis } from "../../src/server";
-import { createDatasets } from "../../prisma/seed";
+import { createDatasets } from "../../scripts/seeder/seed-postgres";
 import mysql from 'mysql2/promise';
 
 // Random number generator with skew
@@ -349,7 +349,7 @@ async function main() {
           promptVersion: o.prompt_version,
         }));
 
-      await createDatasets(project1, project2, sampleObservations);
+      await createDatasets(project1, project2);
       console.log("✓ Created datasets in PostgreSQL");
     }
 

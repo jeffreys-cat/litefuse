@@ -8,6 +8,7 @@ import {
 import {
   convertDateToAnalyticsDateTime,
   isDorisBackend,
+  dq,
 } from "./analytics";
 import {
   createFilterFromFilterState,
@@ -338,12 +339,12 @@ export const getTracesByIds = async (
         timestamp,
         name,
         user_id,
-        cast(metadata as json) as metadata,
+        metadata,
         environment,
-        \`release\`,
+        ${dq("release")},
         version,
         project_id,
-        public,
+        ${dq("public")},
         bookmarked,
         tags,
         input,
@@ -379,7 +380,7 @@ export const getTracesByIds = async (
       },
     });
 
-    return records.map(convertClickhouseToDomain);
+    return records.map((r) => convertClickhouseToDomain(r));
   }
 
   const records = await measureAndReturn({
@@ -439,12 +440,12 @@ export const getTracesBySessionId = async (
         timestamp,
         name,
         user_id,
-        cast(metadata as json) as metadata,
+        metadata,
         environment,
-        \`release\`,
+        ${dq("release")},
         version,
         project_id,
-        public,
+        ${dq("public")},
         bookmarked,
         tags,
         input,
@@ -480,7 +481,7 @@ export const getTracesBySessionId = async (
       },
     });
 
-    const traces = records.map(convertClickhouseToDomain);
+    const traces = records.map((r) => convertClickhouseToDomain(r));
 
     traces.forEach((trace) => {
       recordDistribution(
@@ -824,12 +825,12 @@ export const getTraceById = async ({
         timestamp,
         name,
         user_id,
-        cast(metadata as json) as metadata,
+        metadata,
         environment,
-        \`release\`,
+        ${dq("release")},
         version,
         project_id,
-        public,
+        ${dq("public")},
         bookmarked,
         tags,
         input,
@@ -873,7 +874,7 @@ export const getTraceById = async ({
       records: records.length > 0 ? records : "No records found",
     });
 
-    const res = records.map(convertClickhouseToDomain);
+    const res = records.map((r) => convertClickhouseToDomain(r));
 
     res.forEach((trace) => {
       recordDistribution(
@@ -1213,6 +1214,48 @@ export const getTracesGroupedByUsers = async (
   columns?: UiColumnMappings,
   columnDefinitions?: ColumnDefinition[],
 ) => {
+  if (isDorisBackend()) {
+    const dorisFilter = createDorisFilterFromFilterState(
+      filter,
+      columns ?? tracesTableUiColumnDefinitions,
+    );
+
+    const filterRes = new FilterList(dorisFilter).apply();
+
+    const query = `
+      select
+        user_id as user,
+        count(*) as count
+      from traces t
+      WHERE t.project_id = {projectId: String}
+      AND t.user_id IS NOT NULL
+      AND t.user_id != ''
+      ${filterRes?.query ? `AND ${filterRes.query}` : ""}
+      GROUP BY user
+      ORDER BY count desc
+      ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+    `;
+
+    return queryDoris<{
+      user: string;
+      count: string;
+    }>({
+      query: query,
+      params: {
+        projectId: projectId,
+        limit,
+        offset,
+        ...(filterRes ? filterRes.params : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "analytic",
+        projectId,
+      },
+    });
+  }
+
   const { tracesFilter } = getProjectIdDefaultFilter(projectId, {
     tracesPrefix: "t",
   });
@@ -2254,9 +2297,9 @@ export const getTracesForBlobStorageExport = function (
         metadata,
         user_id,
         session_id,
-        \`release\`,
+        ${dq("release")},
         version,
-        public,
+        ${dq("public")},
         bookmarked,
         tags,
         input,
@@ -2358,7 +2401,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
         t.name as name,
         t.session_id as session_id,
         t.user_id as user_id,
-        t.\`release\` as \`release\`,
+        t.${dq("release")} as ${dq("release")},
         t.version as version,
         t.tags as tags,
         t.metadata['$posthog_session_id'] as posthog_session_id,

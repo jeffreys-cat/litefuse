@@ -52,3 +52,44 @@ export const scoresColumnsTableUiColumnDefinitions: UiColumnMappings = [
     clickhouseSelect: 'dri."dataset_item_id"',
   },
 ];
+
+// Doris-specific column definitions for scores columns table.
+// Uses plain column names without double-quoted identifiers (which Doris doesn't support).
+// Excludes dataset_run_items_rmt joins since that table doesn't exist in Doris.
+export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
+  {
+    uiTableName: "Timestamp",
+    uiTableId: "timestamp",
+    clickhouseTableName: "scores",
+    clickhouseSelect: "timestamp",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Session ID",
+    uiTableId: "sessionId",
+    clickhouseTableName: "scores",
+    clickhouseSelect: "session_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Dataset Run IDs",
+    uiTableId: "datasetRunIds",
+    clickhouseTableName: "scores",
+    clickhouseSelect: "dataset_run_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Observation ID",
+    uiTableId: "observationId",
+    clickhouseTableName: "scores",
+    clickhouseSelect: "observation_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Trace ID",
+    uiTableId: "traceId",
+    clickhouseTableName: "scores",
+    clickhouseSelect: "trace_id",
+    queryPrefix: "s",
+  },
+];

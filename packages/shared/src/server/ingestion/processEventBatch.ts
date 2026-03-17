@@ -236,7 +236,7 @@ export const processEventBatch = async (
         const { data, key, type, eventBodyId } = sortedBatchByEventBodyId[id];
         const bucketPath = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${authCheck.scope.projectId}/${getClickhouseEntityType(type)}/${eventBodyId}/${key}.json`;
         return getS3StorageServiceClient(
-          env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET,
+          env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET!,
         ).uploadJson(bucketPath, data);
       }),
     );

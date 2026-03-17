@@ -1,5 +1,6 @@
 import { OBSERVATIONS_TO_TRACE_INTERVAL } from "../../repositories/constants";
-import { FilterList, StringFilter } from "./clickhouse-filter";
+import { StringFilter } from "./clickhouse-filter";
+import { FilterList } from "../filter";
 
 /**
  * Extract the output column alias from a field expression (unquoted).
@@ -786,7 +787,7 @@ export class EventsQueryBuilder extends BaseEventsQueryBuilder<
     const traceIdFilter = filterList.find(
       (f) =>
         // events_full / events_core proof
-        f.clickhouseTable.startsWith("events") &&
+        f.table.startsWith("events") &&
         f.field === 'e."trace_id"' &&
         f.operator === "=",
     );

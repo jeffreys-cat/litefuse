@@ -1,4 +1,4 @@
-import { queryClickhouse, measureAndReturn } from "@langfuse/shared/src/server";
+import { queryClickhouse, measureAndReturn, isDorisBackend, queryDoris } from "@langfuse/shared/src/server";
 import { QueryBuilder } from "@/src/features/query/server/queryBuilder";
 import { type QueryType, type ViewVersion } from "@/src/features/query/types";
 import { getViewDeclaration } from "@/src/features/query/dataModel";
@@ -33,11 +33,45 @@ export async function executeQuery(
   const queryBuilder = new QueryBuilder(chartConfig, version);
 
   // Build the query (with or without optimization based on flag)
-  const { query: compiledQuery, parameters } = await queryBuilder.build(
-    query,
+  let compiledQuery: string;
+  let parameters: Record<string, unknown>;
+  try {
+    const result = await queryBuilder.build(
+      query,
+      projectId,
+      enableSingleLevelOptimization,
+    );
+    compiledQuery = result.query;
+    parameters = result.parameters;
+  } catch (e) {
+    const fs = require("fs");
+    const msg = e instanceof Error ? e.stack || e.message : String(e);
+    fs.appendFileSync("/tmp/doris-errors.log", `[executeQuery.build] view=${query.view}\n${msg}\n---\n`);
+    throw e;
+  }
+
+  const tags = {
+    feature: "custom-queries",
+    type: query.view,
+    kind: "analytic",
     projectId,
-    enableSingleLevelOptimization,
-  );
+  };
+
+  // Route to Doris backend when configured
+  if (isDorisBackend()) {
+    try {
+      console.error("[dashboard.executeQuery] Doris SQL:", compiledQuery.substring(0, 500));
+      return await queryDoris<Record<string, unknown>>({
+        query: compiledQuery,
+        params: parameters,
+        tags,
+      });
+    } catch (error) {
+      console.error("[dashboard.executeQuery] FAILED SQL:", compiledQuery);
+      console.error("[dashboard.executeQuery] params:", JSON.stringify(parameters));
+      throw error;
+    }
+  }
 
   // Check if the query contains trace table references
   const usesTraceTable = compiledQuery.includes("traces");
@@ -48,13 +82,6 @@ export async function executeQuery(
   const preferredClickhouseService = view.baseCte.includes("events_")
     ? ("EventsReadOnly" as const)
     : undefined;
-
-  const tags = {
-    feature: "custom-queries",
-    type: query.view,
-    kind: "analytic",
-    projectId,
-  };
 
   if (!usesTraceTable) {
     // No trace table placeholders, execute normally

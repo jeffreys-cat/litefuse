@@ -11,6 +11,7 @@ import {
   queryDoris,
   isDorisBackend,
   convertToScore,
+  dq,
 } from "@langfuse/shared/src/server";
 import {
   removeObjectKeys,
@@ -94,6 +95,7 @@ export const _handleGenerateScoresForPublicApi = async ({
   );
 
   if (isDorisBackend()) {
+    // Doris uses UNIQUE KEY model, so no deduplication needed (no LIMIT 1 BY / ROW_NUMBER)
     const query = `
         SELECT
             t.user_id as user_id,
@@ -104,7 +106,7 @@ export const _handleGenerateScoresForPublicApi = async ({
             s.timestamp as timestamp,
             s.environment as environment,
             s.name as name,
-            s.value as value,
+            s.${dq("value")} as ${dq("value")},
             s.string_value as string_value,
             s.author_user_id as author_user_id,
             s.created_at as created_at,
@@ -119,38 +121,14 @@ export const _handleGenerateScoresForPublicApi = async ({
             s.observation_id as observation_id,
             s.session_id as session_id,
             s.dataset_run_id as dataset_run_id
-        FROM (
-            SELECT *,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY timestamp DESC) as rn
-            FROM scores s
-            LEFT JOIN traces t ON s.trace_id = t.id AND s.project_id = t.project_id
-            WHERE
-                s.project_id = {projectId: String}
-                AND (
-                  ${scoreScope === "traces_only" ? "" : "s.trace_id IS NULL OR "}
-                  (s.trace_id IS NOT NULL AND (t.id, t.project_id) IN (
-                    SELECT
-                      trace_id,
-                      project_id
-                    FROM (
-                      SELECT trace_id, project_id,
-                             ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY timestamp DESC) as inner_rn
-                      FROM scores s
-                      WHERE
-                        s.project_id = {projectId: String}
-                        ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-                        ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-                    ) inner_ranked
-                    WHERE inner_rn = 1
-                    ORDER BY timestamp DESC
-                    ))
-                )
-                ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-                ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-                ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
-        ) ranked
-        WHERE rn = 1
-        ORDER BY timestamp DESC
+        FROM scores s
+        LEFT JOIN traces t ON s.trace_id = t.id AND s.project_id = t.project_id
+        WHERE
+            s.project_id = {projectId: String}
+            ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
+            ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
+            ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
+        ORDER BY s.timestamp DESC
         ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
         `;
 
@@ -328,35 +306,16 @@ export const _handleGetScoresCountForPublicApi = async ({
   );
 
   if (isDorisBackend()) {
-    // for this query, we only need the traces join if we have a filter on traces
+    // Doris uses UNIQUE KEY model, no deduplication needed
     const query = `
         SELECT
           count(*) as count
         FROM
           scores s
-            LEFT JOIN traces t ON s.trace_id = t.id
-            AND s.project_id = t.project_id
+            ${tracesFilter.length() > 0 ? "LEFT JOIN traces t ON s.trace_id = t.id AND s.project_id = t.project_id" : ""}
         WHERE
           s.project_id = {projectId: String}
-        AND (
-          ${scoreScope === "traces_only" ? "" : "s.trace_id IS NULL OR "}
-          (s.trace_id IS NOT NULL AND (t.id, t.project_id) IN (
-            SELECT
-              trace_id,
-              project_id
-            FROM (
-              SELECT trace_id, project_id,
-                     ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY timestamp DESC) as rn
-              FROM scores s
-              WHERE
-                s.project_id = {projectId: String}
-                ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-                ${scoreScope === "traces_only" ? "AND s.session_id IS NULL" : ""}
-            ) ranked
-            WHERE rn = 1
-            ORDER BY timestamp DESC
-          ))
-        )
+        ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
         ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
         ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
         `;
@@ -583,6 +542,7 @@ const generateScoreFilter = (
       field: "project_id",
       operator: "=",
       value: filter.projectId,
+      tablePrefix: "s",
     }),
   );
 

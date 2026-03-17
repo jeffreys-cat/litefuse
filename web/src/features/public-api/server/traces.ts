@@ -14,6 +14,7 @@ import {
   queryDoris,
   isDorisBackend,
   convertDateToAnalyticsDateTime,
+  dq,
 } from "@langfuse/shared/src/server";
 import {
   AGGREGATABLE_SCORE_TYPES,
@@ -367,10 +368,10 @@ export const generateTracesForPublicApi = async ({
           trace_id,
           project_id,
           sum(total_cost) as total_cost,
-          TIMESTAMPDIFF(MICROSECOND,
-            LEAST(min(start_time), min(end_time)),
-            GREATEST(max(start_time), max(end_time))
-          ) / 1000 as latency_milliseconds,
+          milliseconds_diff(
+            CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
+            CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
+          ) as latency_milliseconds,
           collect_list(id) as observation_ids
         FROM (
           SELECT *,
@@ -408,10 +409,10 @@ export const generateTracesForPublicApi = async ({
         t.session_id as session_id,
         t.metadata as metadata,
         t.user_id as user_id,
-        t.release as release,
+        t.${dq("release")} as ${dq("release")},
         t.version as version,
         t.bookmarked as bookmarked,
-        t.public as public,
+        t.${dq("public")} as ${dq("public")},
         t.tags as tags,
         t.created_at as created_at,
         t.updated_at as updated_at,
@@ -419,24 +420,17 @@ export const generateTracesForPublicApi = async ({
         o.observation_ids as observations,
         COALESCE(o.latency_milliseconds / 1000, 0) as latency,
         COALESCE(o.total_cost, 0) as totalCost
-      FROM ${shouldUseSkipIndexes
-        ? `(
-            SELECT *,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-            FROM traces
-            WHERE project_id = {projectId: String}
-            ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
+      FROM (
+            SELECT *
+            FROM (
+              SELECT *,
+                     ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+              FROM traces
+              WHERE project_id = {projectId: String}
+              ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
+            ) ranked
+            WHERE rn = 1
           ) t
-          WHERE rn = 1`
-        : `(
-            SELECT *,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-            FROM traces
-            WHERE project_id = {projectId: String}
-            ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
-          ) t
-          WHERE rn = 1`
-      }
       LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id
       LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id
       ${dorisOrderBy}
@@ -637,6 +631,8 @@ export const getTracesCountForPublicApi = async ({
   });
 };
 
+// Reserved words in Doris (e.g. "release", "public") must be backtick-quoted.
+// Backtick-quoting is also safe in ClickHouse, so we apply it unconditionally.
 const orderByColumns = [
   "id",
   "timestamp",
@@ -647,13 +643,16 @@ const orderByColumns = [
   "public",
   "bookmarked",
   "sessionId",
-].map((name) => ({
-  uiTableName: name,
-  uiTableId: name,
-  clickhouseTableName: "traces",
-  clickhouseSelect: snakeCase(name),
-  queryPrefix: "t",
-}));
+].map((name) => {
+  const col = snakeCase(name);
+  return {
+    uiTableName: name,
+    uiTableId: name,
+    clickhouseTableName: "traces",
+    clickhouseSelect: dq(col),
+    queryPrefix: "t",
+  };
+});
 
 // Use factory functions to create column mappings (eliminates duplication with events table)
 const filterParams = createPublicApiTracesColumnMapping("traces", "t");

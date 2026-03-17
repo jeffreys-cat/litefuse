@@ -54,7 +54,7 @@ export const Chart = ({
   const renderedData = useMemo(() => {
     return data.map((item) => {
       if (!item.time_dimension) return { ...item, time_dimension: undefined };
-      const value = item.time_dimension;
+      const value = String(item.time_dimension);
       const looksLikeIso =
         value.includes("T") || /^\d{4}-\d{2}-\d{2}$/.test(value);
       if (!looksLikeIso) {

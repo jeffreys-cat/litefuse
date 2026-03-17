@@ -14,6 +14,7 @@ import {
 import {
   isDorisBackend,
   convertDateToAnalyticsDateTime,
+  dq,
 } from "./analytics";
 import {
   createDorisFilterFromFilterState,
@@ -275,7 +276,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
         level,
         status_message,
         version,
-        ${includeIO === true ? "input, output, cast(metadata as json) as metadata," : ""}
+        ${includeIO === true ? "input, output, metadata," : ""}
         provided_model_name,
         internal_model_id,
         model_parameters,
@@ -506,7 +507,7 @@ export const getObservationForTraceIdByName = async ({
 
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
     const records = rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
-    return records.map(convertObservation);
+    return records.map((r) => convertObservation(r));
   }
 
   const query = `
@@ -683,7 +684,7 @@ export const getObservationsById = async (
     
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
     const records = rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
-    return records.map(convertObservation);
+    return records.map((r) => convertObservation(r));
   }
 
   const query = `
@@ -764,7 +765,7 @@ const getObservationByIdInternal = async ({
         start_time,
         end_time,
         name,
-        cast(metadata as json) as metadata,
+        metadata,
         level,
         status_message,
         version,
@@ -1041,7 +1042,7 @@ const getObservationsTableInternal = async <T>(
     const dorisSelectString = selectIOAndMetadata
       ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, cast(o.metadata as json) as metadata` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, o.metadata` : ""}
     `
       : dorisSelect;
 
@@ -1690,6 +1691,11 @@ export const getObservationsGroupedByToolName = async (
   projectId: string,
   filter: FilterState,
 ) => {
+  if (isDorisBackend()) {
+    // Doris does not have tool_definitions column; return empty
+    return [] as { toolName: string }[];
+  }
+
   const observationsFilter = new FilterList([
     new StringFilter({
       clickhouseTable: "observations",
@@ -1739,6 +1745,11 @@ export const getObservationsGroupedByCalledToolName = async (
   projectId: string,
   filter: FilterState,
 ) => {
+  if (isDorisBackend()) {
+    // Doris does not have tool_call_names column; return empty
+    return [] as { calledToolName: string }[];
+  }
+
   const observationsFilter = new FilterList([
     new StringFilter({
       clickhouseTable: "observations",
@@ -2067,6 +2078,28 @@ export const deleteObservationsByTraceIds = async (
 };
 
 export const hasAnyObservation = async (projectId: string) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT 1
+      FROM observations
+      WHERE project_id = {projectId: String}
+      LIMIT 1
+    `;
+
+    const rows = await queryDoris<{ 1: number }>({
+      query,
+      params: { projectId },
+      tags: {
+        feature: "tracing",
+        type: "observation",
+        kind: "hasAny",
+        projectId,
+      },
+    });
+
+    return rows.length > 0;
+  }
+
   const query = `
     SELECT 1
     FROM observations
@@ -2143,6 +2176,32 @@ export const hasAnyObservationOlderThan = async (
   projectId: string,
   beforeDate: Date,
 ) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT 1
+      FROM observations
+      WHERE project_id = {projectId: String}
+      AND start_time < {cutoffDate: DateTime}
+      LIMIT 1
+    `;
+
+    const rows = await queryDoris<{ 1: number }>({
+      query,
+      params: {
+        projectId,
+        cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
+      },
+      tags: {
+        feature: "tracing",
+        type: "observation",
+        kind: "hasAnyOlderThan",
+        projectId,
+      },
+    });
+
+    return rows.length > 0;
+  }
+
   const query = `
     SELECT 1
     FROM observations
@@ -2631,6 +2690,65 @@ export const getObservationsGroupedByTraceId = async (
 ): Promise<Map<string, ObservationTuple[]>> => {
   if (traceIds.length === 0) return new Map();
 
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+          trace_id,
+          id,
+          parent_observation_id,
+          CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN cost_details['total'] ELSE 0 END AS total_cost,
+          CASE WHEN MAP_CONTAINS_KEY(cost_details,'input') THEN cost_details['input'] ELSE 0 END AS input_cost,
+          CASE WHEN MAP_CONTAINS_KEY(cost_details,'output') THEN cost_details['output'] ELSE 0 END AS output_cost,
+          milliseconds_diff(end_time, start_time) AS latency_ms
+      FROM observations
+      WHERE project_id = {projectId: String}
+      AND trace_id IN ({traceIds: Array(String)})
+      ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
+    `;
+
+    const rows = await queryDoris<{
+      trace_id: string;
+      id: string;
+      parent_observation_id: string | null;
+      total_cost: string;
+      input_cost: string;
+      output_cost: string;
+      latency_ms: number;
+    }>({
+      query,
+      params: {
+        projectId,
+        traceIds,
+        ...(timestamp
+          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "observation",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    // Group by trace_id and convert to tuple format
+    const result = new Map<string, ObservationTuple[]>();
+    for (const row of rows) {
+      const tuple: ObservationTuple = [
+        row.id,
+        row.parent_observation_id,
+        String(row.total_cost),
+        String(row.input_cost),
+        String(row.output_cost),
+        row.latency_ms ?? 0,
+      ];
+      const existing = result.get(row.trace_id) ?? [];
+      existing.push(tuple);
+      result.set(row.trace_id, existing);
+    }
+    return result;
+  }
+
   const query = `
     SELECT
         trace_id,
@@ -2997,7 +3115,7 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
         t.name as trace_name,
         t.session_id as trace_session_id,
         t.user_id as trace_user_id,
-        t.release as trace_release,
+        t.${dq("release")} as trace_release,
         t.tags as trace_tags,
         t.metadata['$posthog_session_id'] as posthog_session_id
       FROM observations o
@@ -3182,6 +3300,42 @@ export const getObservationCountsByProjectAndDay = async ({
   startDate: Date;
   endDate: Date;
 }) => {
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        count(*) as count,
+        project_id,
+        DATE(start_time) as date
+      FROM observations
+      WHERE start_time >= {startDate: DateTime}
+      AND start_time < {endDate: DateTime}
+      GROUP BY project_id, DATE(start_time)
+    `;
+
+    const rows = await queryDoris<{
+      count: string;
+      project_id: string;
+      date: string;
+    }>({
+      query,
+      params: {
+        startDate: convertDateToAnalyticsDateTime(startDate),
+        endDate: convertDateToAnalyticsDateTime(endDate),
+      },
+      tags: {
+        feature: "tracing",
+        type: "observation",
+        kind: "analytic",
+      },
+    });
+
+    return rows.map((row) => ({
+      count: Number(row.count),
+      projectId: row.project_id,
+      date: row.date,
+    }));
+  }
+
   const query = `
     SELECT
       count(*) as count,
@@ -3229,6 +3383,42 @@ export const getCostByEvaluatorIds = async (
   evaluatorIds: string[],
 ): Promise<Array<{ evaluatorId: string; totalCost: number }>> => {
   if (evaluatorIds.length === 0) return [];
+
+  if (isDorisBackend()) {
+    const query = `
+      SELECT
+        metadata['job_configuration_id'] as evaluator_id,
+        sum(total_cost) as total_cost
+      FROM observations
+      WHERE project_id = {projectId: String}
+        AND metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
+        AND type = 'GENERATION'
+        AND start_time > DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      GROUP BY metadata['job_configuration_id']
+    `;
+
+    const rows = await queryDoris<{
+      evaluator_id: string;
+      total_cost: string;
+    }>({
+      query,
+      params: {
+        projectId,
+        evaluatorIds,
+      },
+      tags: {
+        feature: "evals",
+        type: "observation",
+        kind: "analytic",
+        projectId,
+      },
+    });
+
+    return rows.map((row) => ({
+      evaluatorId: row.evaluator_id,
+      totalCost: Number(row.total_cost),
+    }));
+  }
 
   const query = `
     SELECT

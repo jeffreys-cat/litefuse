@@ -56,7 +56,7 @@ export const _handleGetScoreById = async ({
         projectId,
       },
     });
-    return rows.map(convertClickhouseScoreToDomain).shift();
+    return rows.map((r) => convertClickhouseScoreToDomain(r)).shift();
   }
 
   const query = `
@@ -140,7 +140,7 @@ export const _handleGetScoresByIds = async ({
         projectId,
       },
     });
-    return rows.map(convertClickhouseScoreToDomain);
+    return rows.map((r) => convertClickhouseScoreToDomain(r));
   }
 
   const query = `

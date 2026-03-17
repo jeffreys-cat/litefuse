@@ -217,8 +217,9 @@ export const modelRouter = createTRPCRouter({
         GROUP BY internal_model_id
       `;
 
+      const queryFn = isDorisBackend() ? queryDoris : queryClickhouse;
       const result = ModelLastUsedQueryResult.safeParse(
-        await queryClickhouse({
+        await queryFn({
           query: lastUsedQuery,
           params: { projectId, modelIds },
         }),
