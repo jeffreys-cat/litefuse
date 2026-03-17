@@ -99,10 +99,11 @@ export async function queryDoris<T>(opts: {
       
       return data as T[];
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const fs = require("fs");
-      fs.appendFileSync("/tmp/doris-errors.log", `[${new Date().toISOString()}] ERROR: ${errMsg}\nSQL: ${processedQuery.replace(/\n/g, ' ').substring(0, 800)}\n---\n`);
-      logger.error("Doris query failed", { error: errMsg });
+      logger.error("Doris query failed", {
+        query: opts.query,
+        error: error instanceof Error ? error.message : String(error),
+        tags: opts.tags,
+      });
       throw error;
     }
   });

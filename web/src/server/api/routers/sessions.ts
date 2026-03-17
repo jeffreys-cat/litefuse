@@ -369,27 +369,19 @@ export const sessionRouter = createTRPCRouter({
     )
     .query(async ({ input, ctx }) => {
       if (input.sessionIds.length === 0) return [];
-      let finalFilter, sessions;
-      try {
-        finalFilter = await getPublicSessionsFilter(input.projectId, [
-          {
-            column: "id",
-            type: "stringOptions",
-            operator: "any of",
-            value: input.sessionIds,
-          },
-        ]);
-        sessions = await getSessionsWithMetrics({
-          projectId: input.projectId,
-          filter: finalFilter,
-        });
-      } catch (e) {
-        const fs = require("fs");
-        fs.appendFileSync("/tmp/doris-errors.log", `[sessions.metrics.query] ${e instanceof Error ? e.stack : String(e)}\n---\n`);
-        throw e;
-      }
+      const finalFilter = await getPublicSessionsFilter(input.projectId, [
+        {
+          column: "id",
+          type: "stringOptions",
+          operator: "any of",
+          value: input.sessionIds,
+        },
+      ]);
+      const sessions = await getSessionsWithMetrics({
+        projectId: input.projectId,
+        filter: finalFilter,
+      });
 
-      try {
       const prismaSessionInfo = await ctx.prisma.traceSession.findMany({
         where: {
           id: {
@@ -442,11 +434,6 @@ export const sessionRouter = createTRPCRouter({
           validatedScores.filter((score) => score.sessionId === s.session_id),
         ),
       }));
-      } catch (e) {
-        const fs = require("fs");
-        fs.appendFileSync("/tmp/doris-errors.log", `[sessions.metrics.post] ${e instanceof Error ? e.stack : String(e)}\n---\n`);
-        throw e;
-      }
     }),
   metricsFromEvents: protectedProjectProcedure
     .input(

@@ -1481,16 +1481,8 @@ export class QueryBuilder {
     }
 
     // Check if we should use Doris backend
-    console.error(`[queryBuilder.build] isDorisBackend=${isDorisBackend()} view=${query.view}`);
     if (isDorisBackend()) {
-      try {
-        return this.buildDoris(query, projectId);
-      } catch (e) {
-        const fs = require("fs");
-        const msg = e instanceof Error ? e.stack || e.message : String(e);
-        fs.appendFileSync("/tmp/doris-errors.log", `[buildDoris] view=${query.view}\n${msg}\n---\n`);
-        throw e;
-      }
+      return this.buildDoris(query, projectId);
     }
 
     // Initialize parameters object
@@ -2052,8 +2044,6 @@ export class QueryBuilder {
 
     // Replace ClickHouse-specific functions with Doris equivalents
     sql = this.convertClickHouseFunctionsToDoris(sql);
-
-    console.error(`[buildDoris] view=${query.view} sql_length=${sql.length} sql_preview=${sql.substring(0, 200)}`);
 
     return {
       query: sql,

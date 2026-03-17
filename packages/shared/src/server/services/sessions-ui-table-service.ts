@@ -383,33 +383,25 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       ? convertDateToAnalyticsDateTime(traceTimestampFilter.value)
       : null;
 
-    let res: T[];
-    try {
-      res = await queryDoris<T>({
-        query: query,
-        params: {
-          projectId,
-          limit: limit,
-          offset: limit && page ? limit * page : 0,
-          ...tracesFilterRes.params,
-          ...singleTraceFilter?.params,
-          ...(obsStartTimeValue
-            ? { observationsStartTime: obsStartTimeValue }
-            : {}),
-        },
-        tags: {
-          ...(props.tags ?? {}),
-          feature: "tracing",
-          type: "sessions-table",
-          projectId,
-        },
-      });
-    } catch (e) {
-      const fs = require("fs");
-      const msg = e instanceof Error ? e.stack || e.message : String(e);
-      fs.appendFileSync("/tmp/doris-errors.log", `[sessions] ${msg}\n---\n`);
-      throw e;
-    }
+    const res = await queryDoris<T>({
+      query: query,
+      params: {
+        projectId,
+        limit: limit,
+        offset: limit && page ? limit * page : 0,
+        ...tracesFilterRes.params,
+        ...singleTraceFilter?.params,
+        ...(obsStartTimeValue
+          ? { observationsStartTime: obsStartTimeValue }
+          : {}),
+      },
+      tags: {
+        ...(props.tags ?? {}),
+        feature: "tracing",
+        type: "sessions-table",
+        projectId,
+      },
+    });
 
     // Post-process Doris results to match ClickHouse format
     if (select === "metrics") {

@@ -183,31 +183,16 @@ export class StringOptionsFilter implements Filter {
 
     // Escape single quotes in values
     const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
+    const valuesList = escapedValues.join(', ');
 
-    if (this.values.length === 1) {
-      const query = this.operator === "any of"
-        ? `${fieldWithPrefix} = ${escapedValues[0]}`
-        : `${fieldWithPrefix} != ${escapedValues[0]}`;
-      return { query, params: {} };
-    }
+    const query = this.operator === "any of"
+      ? `${fieldWithPrefix} IN (${valuesList})`
+      : `${fieldWithPrefix} NOT IN (${valuesList})`;
 
-    // Doris has a bug where IN/NOT IN with multiple values fails on
-    // UNIQUE KEY merge-on-write tables (OR also fails).
-    // Workaround: use a subquery with UNION ALL for "any of",
-    // and keep NOT IN with CAST for "none of" (which does work).
-    if (this.operator === "any of") {
-      const unionParts = escapedValues.map(v => `SELECT ${v} AS val`);
-      return {
-        query: `${fieldWithPrefix} IN (${unionParts.join(' UNION ALL ')})`,
-        params: {},
-      };
-    } else {
-      const valuesList = escapedValues.join(', ');
-      return {
-        query: `CAST(${fieldWithPrefix} AS VARCHAR(65533)) NOT IN (${valuesList})`,
-        params: {},
-      };
-    }
+    return {
+      query,
+      params: {},
+    };
   }
 }
 

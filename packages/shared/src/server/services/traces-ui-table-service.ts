@@ -1020,33 +1020,6 @@ export const getTracesTableMetrics = async (props: {
   page?: number;
   clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 }): Promise<Array<Omit<TracesMetricsUiReturnType, "scores">>> => {
-  // Doris has a bug where IN/OR with multiple values on non-leading UNIQUE KEY
-  // columns returns empty results. Workaround: query each traceId individually.
-  if (isDorisBackend()) {
-    const idFilter = props.filter.find(
-      (f) => f.type === "stringOptions" && f.column === "ID" && f.operator === "any of",
-    );
-    const traceIds = idFilter?.type === "stringOptions" ? idFilter.value : [];
-    const otherFilters = props.filter.filter((f) => f !== idFilter);
-
-    if (traceIds.length > 1) {
-      const results = await Promise.all(
-        traceIds.map((id) =>
-          getTracesTableGeneric({
-            select: "metrics",
-            tags: { kind: "analytic" },
-            ...props,
-            filter: [
-              ...otherFilters,
-              { type: "stringOptions", operator: "any of", column: "ID", value: [id] },
-            ],
-          }).then((rows) => rows.map(convertToUITableMetrics)),
-        ),
-      );
-      return results.flat();
-    }
-  }
-
   const countRows = await getTracesTableGeneric({
     select: "metrics",
     tags: { kind: "analytic" },

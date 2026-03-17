@@ -33,22 +33,11 @@ export async function executeQuery(
   const queryBuilder = new QueryBuilder(chartConfig, version);
 
   // Build the query (with or without optimization based on flag)
-  let compiledQuery: string;
-  let parameters: Record<string, unknown>;
-  try {
-    const result = await queryBuilder.build(
-      query,
-      projectId,
-      enableSingleLevelOptimization,
-    );
-    compiledQuery = result.query;
-    parameters = result.parameters;
-  } catch (e) {
-    const fs = require("fs");
-    const msg = e instanceof Error ? e.stack || e.message : String(e);
-    fs.appendFileSync("/tmp/doris-errors.log", `[executeQuery.build] view=${query.view}\n${msg}\n---\n`);
-    throw e;
-  }
+  const { query: compiledQuery, parameters } = await queryBuilder.build(
+    query,
+    projectId,
+    enableSingleLevelOptimization,
+  );
 
   const tags = {
     feature: "custom-queries",
@@ -59,18 +48,11 @@ export async function executeQuery(
 
   // Route to Doris backend when configured
   if (isDorisBackend()) {
-    try {
-      console.error("[dashboard.executeQuery] Doris SQL:", compiledQuery.substring(0, 500));
-      return await queryDoris<Record<string, unknown>>({
-        query: compiledQuery,
-        params: parameters,
-        tags,
-      });
-    } catch (error) {
-      console.error("[dashboard.executeQuery] FAILED SQL:", compiledQuery);
-      console.error("[dashboard.executeQuery] params:", JSON.stringify(parameters));
-      throw error;
-    }
+    return await queryDoris<Record<string, unknown>>({
+      query: compiledQuery,
+      params: parameters,
+      tags,
+    });
   }
 
   // Check if the query contains trace table references
