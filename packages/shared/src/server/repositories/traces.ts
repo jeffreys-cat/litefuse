@@ -825,7 +825,7 @@ export const getTraceById = async ({
         timestamp,
         name,
         user_id,
-        metadata,
+        to_json(metadata) as metadata,
         environment,
         ${dq("release")},
         version,
@@ -2692,6 +2692,10 @@ export async function getAgentGraphData(params: {
             SELECT
               id,
               parent_observation_id,
+              type,
+              name,
+              CAST(start_time AS STRING) AS start_time,
+              CAST(end_time AS STRING) AS end_time,
               metadata['langgraph_node'] AS node,
               metadata['langgraph_step'] AS step
             FROM

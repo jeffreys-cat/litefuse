@@ -276,7 +276,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
         level,
         status_message,
         version,
-        ${includeIO === true ? "input, output, metadata," : ""}
+        ${includeIO === true ? "input, output, to_json(metadata) as metadata," : ""}
         provided_model_name,
         internal_model_id,
         model_parameters,
@@ -301,7 +301,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
         ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
       ) ranked
       WHERE rn = 1
-      ORDER BY event_ts DESC
+      ORDER BY start_time ASC
     `;
     const rawRecords = await queryDoris<any>({
       query,
@@ -455,7 +455,7 @@ export const getObservationForTraceIdByName = async ({
         start_time,
         end_time,
         name,
-        metadata,
+        to_json(metadata) as metadata,
         level,
         status_message,
         version,
@@ -521,7 +521,7 @@ export const getObservationForTraceIdByName = async ({
     start_time,
     end_time,
     name,
-    metadata,
+    to_json(metadata) as metadata,
     level,
     status_message,
     version,
@@ -647,7 +647,7 @@ export const getObservationsById = async (
         start_time,
         end_time,
         name,
-        metadata,
+        to_json(metadata) as metadata,
         level,
         status_message,
         version,
@@ -765,7 +765,7 @@ const getObservationByIdInternal = async ({
         start_time,
         end_time,
         name,
-        metadata,
+        to_json(metadata) as metadata,
         level,
         status_message,
         version,
@@ -1042,7 +1042,7 @@ const getObservationsTableInternal = async <T>(
     const dorisSelectString = selectIOAndMetadata
       ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, o.metadata` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, to_json(o.metadata) as metadata` : ""}
     `
       : dorisSelect;
 
