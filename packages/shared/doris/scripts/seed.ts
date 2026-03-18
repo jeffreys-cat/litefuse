@@ -234,7 +234,8 @@ async function insertDataInBatches(connection: mysql.Connection, tableName: stri
   
   const columns = Object.keys(data[0]);
   const placeholders = columns.map(() => '?').join(', ');
-  const query = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`;
+  const quotedColumns = columns.map(c => `\`${c}\``).join(', ');
+  const query = `INSERT INTO \`${tableName}\` (${quotedColumns}) VALUES (${placeholders})`;
   
   for (let i = 0; i < data.length; i += batchSize) {
     const batch = data.slice(i, i + batchSize);

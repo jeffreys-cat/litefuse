@@ -7,6 +7,12 @@ import type {
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
 import { parseClickhouseUTCDateTimeFormat } from "./clickhouse";
 
+/** Safely parse a date value that may be a Date object (Doris/mysql2) or a string (ClickHouse) */
+function safeParseDatetime(value: string | Date): Date {
+  if (value instanceof Date) return value;
+  return parseClickhouseUTCDateTimeFormat(value);
+}
+
 export type ScoreAggregation = {
   id: string;
   name: string;
@@ -27,7 +33,7 @@ export const convertClickhouseScoreToDomain = <
 ): ScoreByDataType<DataType> => {
   const baseScore = {
     id: record.id,
-    timestamp: parseClickhouseUTCDateTimeFormat(record.timestamp),
+    timestamp: safeParseDatetime(record.timestamp),
     projectId: record.project_id,
     environment: record.environment,
     traceId: record.trace_id ?? null,
@@ -36,19 +42,19 @@ export const convertClickhouseScoreToDomain = <
     datasetRunId: record.dataset_run_id ?? null,
     name: record.name,
     value: record.value,
-    longStringValue: record.long_string_value ?? "",
+    longStringValue: (record as any).long_string_value ?? "",
     source: record.source as ScoreSourceType,
     comment: record.comment ?? null,
     authorUserId: record.author_user_id ?? null,
     configId: record.config_id ?? null,
     dataType: record.data_type as DataType,
     queueId: record.queue_id ?? null,
-    executionTraceId: record.execution_trace_id ?? null,
+    executionTraceId: (record as any).execution_trace_id ?? null,
     createdAt: record.created_at
-      ? parseClickhouseUTCDateTimeFormat(record.created_at)
+      ? safeParseDatetime(record.created_at)
       : new Date(),
     updatedAt: record.updated_at
-      ? parseClickhouseUTCDateTimeFormat(record.updated_at)
+      ? safeParseDatetime(record.updated_at)
       : new Date(),
     metadata: (includeMetadataPayload
       ? (parseMetadataCHRecordToDomain(record.metadata ?? {}) ?? {})

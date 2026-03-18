@@ -1970,6 +1970,52 @@ export const getScoreStringValues = async (
   projectId: string,
   timestampFilter: FilterState,
 ) => {
+  if (isDorisBackend()) {
+    const dorisFilter = new FilterList(
+      createDorisFilterFromFilterState(
+        timestampFilter,
+        scoresTableUiColumnDefinitions,
+      ),
+    );
+    const timestampFilterRes = dorisFilter.apply();
+
+    const query = `
+        select
+          string_value,
+          count(*) as count
+        from scores s
+        WHERE s.project_id = {projectId: String}
+        AND string_value IS NOT NULL
+        AND string_value != ''
+        ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
+        GROUP BY string_value
+        ORDER BY count(*) desc
+        LIMIT 1000;
+      `;
+
+    const rows = await queryDoris<{
+      string_value: string;
+      count: string;
+    }>({
+      query,
+      params: {
+        projectId: projectId,
+        ...(timestampFilterRes ? timestampFilterRes.params : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "score",
+        kind: "list",
+        projectId,
+      },
+    });
+
+    return rows.map((row) => ({
+      value: row.string_value,
+      count: Number(row.count),
+    }));
+  }
+
   const chFilter = new FilterList(
     createFilterFromFilterState(
       timestampFilter,
