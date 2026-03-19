@@ -352,7 +352,8 @@ export const getScoresForSessions = async <
                  ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
           FROM scores s
           WHERE s.project_id = {projectId: String}
-          AND s.session_id IN ({sessionIds: Array(String)}) 
+          AND s.session_id IN ({sessionIds: Array(String)})
+          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ) ranked
         WHERE rn = 1
         ORDER BY event_ts DESC
@@ -375,7 +376,8 @@ export const getScoresForSessions = async <
       },
     });
 
-    return rows.map((r) => convertClickhouseScoreToDomain(r));
+    const includeMetadataPayloadDoris = excludeMetadata ? false : true;
+    return rows.map((r) => convertClickhouseScoreToDomain(r, includeMetadataPayloadDoris));
   }
 
   const query = `
@@ -439,7 +441,8 @@ export const getScoresForDatasetRuns = async <
                  ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
           FROM scores s
           WHERE s.project_id = {projectId: String}
-          AND s.dataset_run_id IN ({runIds: Array(String)}) 
+          AND s.dataset_run_id IN ({runIds: Array(String)})
+          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ) ranked
         WHERE rn = 1
         ORDER BY event_ts DESC
@@ -462,7 +465,13 @@ export const getScoresForDatasetRuns = async <
       },
     });
 
-    return rows.map((r) => convertClickhouseScoreToDomain(r));
+    const includeMetadataPayloadDoris = excludeMetadata ? false : true;
+    return rows.map((r) =>
+      convertClickhouseScoreToDomain<ExcludeMetadata, AggregatableScoreDataType>(
+        r,
+        includeMetadataPayloadDoris,
+      ),
+    );
   }
 
   const query = `
@@ -616,7 +625,8 @@ const getScoresForTracesInternal = async <
                  ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
           FROM scores s
           WHERE s.project_id = {projectId: String}
-          AND s.trace_id IN ({traceIds: Array(String)}) 
+          AND s.trace_id IN ({traceIds: Array(String)})
+          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
           ${timestamp ? `AND s.timestamp >= DATE_SUB({traceTimestamp: DateTime}, ${SCORE_TO_TRACE_OBSERVATIONS_INTERVAL})` : ""}
         ) ranked
         WHERE rn = 1
@@ -806,6 +816,7 @@ export const getScoresForObservations = async <
           FROM scores s
           WHERE s.project_id = {projectId: String}
           AND s.observation_id IN ({observationIds: Array(String)})
+          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ) ranked
         WHERE rn = 1
         ORDER BY event_ts DESC
@@ -930,6 +941,7 @@ export const getScoresGroupedByNameSourceType = async ({
       ${dorisScoresFilterRes?.query ? `AND ${dorisScoresFilterRes.query}` : ""}
       ${fromTimestamp ? `AND s.timestamp >= {fromTimestamp: DateTime}` : ""}
       ${toTimestamp ? `AND s.timestamp <= {toTimestamp: DateTime}` : ""}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
       GROUP BY name, source, data_type
       ORDER BY count() desc
       LIMIT 1000;
@@ -962,7 +974,7 @@ export const getScoresGroupedByNameSourceType = async ({
     return rows.map((row) => ({
       name: row.name,
       source: row.source as ScoreSourceType,
-      dataType: row.data_type as ScoreDataTypeType,
+      dataType: row.data_type as AggregatableScoreDataType,
     }));
   }
 
@@ -1890,6 +1902,7 @@ export const getScoreNames = async (
         from scores s
         WHERE s.project_id = {projectId: String}
         ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         GROUP BY name
         ORDER BY count() desc
         LIMIT 1000;
@@ -2412,6 +2425,7 @@ export const getAggregatedScoresForPrompts = async (
       AND o.type = 'GENERATION'
       AND s.name IS NOT NULL
       ${fetchScoreRelation === "trace" ? "AND s.observation_id IS NULL" : ""}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
     `;
 
     const rows = await queryDoris<
@@ -2434,7 +2448,7 @@ export const getAggregatedScoresForPrompts = async (
     });
 
     return rows.map((row) => ({
-      ...convertScoreAggregation(row),
+      ...convertScoreAggregation<AggregatableScoreDataType>(row),
       promptId: row.prompt_id,
       hasMetadata: !!row.has_metadata,
     }));
@@ -2641,6 +2655,7 @@ export const getDistinctScoreNames = async (p: {
       WHERE s.project_id = {projectId: String}
       AND s.created_at <= {cutoffCreatedAt: DateTime}
       ${scoreTimestampFilter ? `AND s.timestamp >= {filterTimestamp: DateTime}` : ""}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
     `;
 
     const rows = await queryDoris<{ name: string }>({
@@ -2726,6 +2741,7 @@ export const getScoresForBlobStorageExport = function (
       WHERE project_id = {projectId: String}
       AND timestamp >= {minTimestamp: DateTime}
       AND timestamp <= {maxTimestamp: DateTime}
+      AND data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
     `;
 
     const records = queryDorisStream<Record<string, unknown>>({
@@ -2815,6 +2831,7 @@ export const getScoresForAnalyticsIntegrations = async function* (
       AND t.project_id = {projectId: String}
       AND s.timestamp >= {minTimestamp: DateTime}
       AND s.timestamp <= {maxTimestamp: DateTime}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
       AND t.timestamp >= DATE_SUB({minTimestamp: DateTime}, INTERVAL 7 DAY)
       AND t.timestamp <= {maxTimestamp: DateTime}
     `;

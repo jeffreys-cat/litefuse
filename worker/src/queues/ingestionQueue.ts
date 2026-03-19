@@ -24,7 +24,7 @@ import { prisma } from "@langfuse/shared/src/db";
 import { env } from "../env";
 import { IngestionService } from "../services/IngestionService";
 import { ClickhouseWriter, TableName } from "../services/ClickhouseWriter";
-import { DorisWriter } from "../services/DorisWriter";
+import { DorisWriter, TableName as DorisTableName } from "../services/DorisWriter";
 import { chunk } from "lodash";
 import { randomUUID } from "crypto";
 
@@ -94,7 +94,7 @@ export const ingestionQueueProcessorBuilder = (
         if (clickhouseWriter) {
           clickhouseWriter.addToQueue(TableName.BlobStorageFileLog, blobStorageRecord);
         } else if (dorisWriter) {
-          dorisWriter.addToQueue(TableName.BlobStorageFileLog, blobStorageRecord);
+          dorisWriter.addToQueue(DorisTableName.BlobStorageFileLog, blobStorageRecord);
         }
       }
 

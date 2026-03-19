@@ -178,7 +178,7 @@ const generateFilter = (query: QueryType) => {
 
   // Remove score filters since observations don't support scores in response
   const filteredChFilter = chFilter.filter(
-    (f) => f.clickhouseTable !== "scores",
+    (f) => f.table !== "scores",
   );
 
   // Add project filter
