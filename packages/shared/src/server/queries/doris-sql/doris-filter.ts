@@ -21,7 +21,7 @@ export class StringFilter implements Filter {
   public field: string;
   public value: string;
   public operator: (typeof filterOperators)["string"][number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     dorisTable: string;
@@ -82,7 +82,7 @@ export class NumberFilter implements Filter {
   public value: number;
   public operator: (typeof filterOperators)["number"][number] | "!=";
   public clickhouseTypeOverwrite?: string;
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -115,7 +115,7 @@ export class DateTimeFilter implements Filter {
   public field: string;
   public value: Date;
   public operator: (typeof filterOperators)["datetime"][number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     table: string;
@@ -134,21 +134,8 @@ export class DateTimeFilter implements Filter {
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
     
-    // 将Date对象转换为Doris DateTime(3)格式的字符串
-    // const dateTimeString = this.value.toISOString().replace('T', ' ').replace('Z', '');
-    const dateTimeString = this.value
-      .toLocaleString("sv-SE", {
-        timeZone: "Asia/Shanghai",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        fractionalSecondDigits: 3,
-      })
-      .replace("T", " ")
-      .replace(",", ".");
+    // 将Date对象转换为Doris DateTime(3)格式的字符串（UTC）
+    const dateTimeString = this.value.toISOString().replace('T', ' ').replace('Z', '');
     
     return {
       query: `${fieldWithPrefix} ${this.operator} '${dateTimeString}'`,
@@ -162,7 +149,7 @@ export class StringOptionsFilter implements Filter {
   public field: string;
   public values: string[];
   public operator: (typeof filterOperators.stringOptions)[number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -201,7 +188,7 @@ export class BooleanFilter implements Filter {
   public field: string;
   public operator: (typeof filterOperators)["boolean"][number];
   public value: boolean;
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -231,7 +218,7 @@ export class NullFilter implements Filter {
   public table: string;
   public field: string;
   public operator: (typeof filterOperators)["null"][number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -260,7 +247,7 @@ export class ArrayOptionsFilter implements Filter {
   public field: string;
   public values: string[];
   public operator: (typeof filterOperators.arrayOptions)[number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -316,7 +303,7 @@ export class CategoryOptionsFilter implements Filter {
   public key: string;
   public values: string[];
   public operator: (typeof filterOperators.categoryOptions)[number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -372,7 +359,7 @@ export class StringObjectFilter implements Filter {
   public key: string;
   public value: string;
   public operator: (typeof filterOperators)["stringObject"][number];
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
@@ -430,7 +417,7 @@ export class NumberObjectFilter implements Filter {
   public key: string;
   public value: number;
   public operator: (typeof filterOperators)["numberObject"][number] | "!=";
-  protected tablePrefix?: string;
+  public tablePrefix?: string;
 
   constructor(opts: {
     clickhouseTable: string;
