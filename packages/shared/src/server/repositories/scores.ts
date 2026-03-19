@@ -930,6 +930,7 @@ export const getScoresGroupedByNameSourceType = async ({
       ${dorisScoresFilterRes?.query ? `AND ${dorisScoresFilterRes.query}` : ""}
       ${fromTimestamp ? `AND s.timestamp >= {fromTimestamp: DateTime}` : ""}
       ${toTimestamp ? `AND s.timestamp <= {toTimestamp: DateTime}` : ""}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
       GROUP BY name, source, data_type
       ORDER BY count() desc
       LIMIT 1000;
@@ -962,7 +963,7 @@ export const getScoresGroupedByNameSourceType = async ({
     return rows.map((row) => ({
       name: row.name,
       source: row.source as ScoreSourceType,
-      dataType: row.data_type as ScoreDataTypeType,
+      dataType: row.data_type as AggregatableScoreDataType,
     }));
   }
 
