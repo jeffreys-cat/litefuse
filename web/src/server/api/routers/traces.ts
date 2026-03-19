@@ -43,6 +43,7 @@ import {
   getTracesTableMetrics,
   getCategoricalScoresGroupedByName,
   convertDateToClickhouseDateTime,
+  convertDateToAnalyticsDateTime,
   getAgentGraphData,
   tracesTableUiColumnDefinitions,
   getTracesGroupedByUsers,
@@ -642,10 +643,10 @@ export const traceRouter = createTRPCRouter({
     .query(async ({ input }): Promise<Required<AgentGraphDataResponse>[]> => {
       const { traceId, projectId, minStartTime, maxStartTime } = input;
 
-      const chMinStartTime = convertDateToClickhouseDateTime(
+      const chMinStartTime = convertDateToAnalyticsDateTime(
         new Date(minStartTime),
       );
-      const chMaxStartTime = convertDateToClickhouseDateTime(
+      const chMaxStartTime = convertDateToAnalyticsDateTime(
         new Date(maxStartTime),
       );
 

@@ -825,7 +825,7 @@ export const getTraceById = async ({
         timestamp,
         name,
         user_id,
-        metadata,
+        to_json(metadata) as metadata,
         environment,
         ${dq("release")},
         version,
@@ -1104,22 +1104,22 @@ export const getTracesGroupedBySessionId = async (
     });
 
     const query = `
-        select 
-          user_id as user,
+        select
+          session_id as session_id,
           count(*) as count
         from traces t
         WHERE t.project_id = {projectId: String}
-        AND t.user_id IS NOT NULL
-        AND t.user_id != ''
+        AND t.session_id IS NOT NULL
+        AND t.session_id != ''
         ${tracesFilterRes?.query ? `AND ${tracesFilterRes.query}` : ""}
         ${search.query}
-        GROUP BY user
+        GROUP BY session_id
         ORDER BY count desc
         ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
     `;
 
     const rows = await queryDoris<{
-      user: string;
+      session_id: string;
       count: string;
     }>({
       query: query,
@@ -2692,6 +2692,10 @@ export async function getAgentGraphData(params: {
             SELECT
               id,
               parent_observation_id,
+              type,
+              name,
+              CAST(start_time AS STRING) AS start_time,
+              CAST(end_time AS STRING) AS end_time,
               metadata['langgraph_node'] AS node,
               metadata['langgraph_step'] AS step
             FROM
