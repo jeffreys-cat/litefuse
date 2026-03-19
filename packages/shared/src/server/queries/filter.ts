@@ -7,6 +7,7 @@ export type DbOperator =
 export interface Filter {
   apply(): DbFilter;
   table: string;
+  tablePrefix?: string;
   operator: DbOperator;
   field: string;
 }
