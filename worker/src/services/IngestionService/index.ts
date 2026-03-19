@@ -57,7 +57,7 @@ import {
 import { tokenCountAsync } from "../../features/tokenisation/async-usage";
 import { tokenCount } from "../../features/tokenisation/usage";
 import { ClickhouseWriter, TableName } from "../ClickhouseWriter";
-import {DorisWriter} from "../DorisWriter";
+import {DorisWriter, TableName as DorisTableName} from "../DorisWriter";
 import {
   convertJsonSchemaToRecord,
   convertPostgresJsonToMetadataRecord,
@@ -477,7 +477,7 @@ export class IngestionService {
    * @param eventRecord - The event record to write
    */
   public writeEventRecord(eventRecord: EventRecordInsertType): void {
-    this.clickHouseWriter.addToQueue(TableName.Events, eventRecord);
+    this.clickHouseWriter?.addToQueue(TableName.Events, eventRecord);
   }
 
   private async processDatasetRunItemEventList(params: {
@@ -569,7 +569,7 @@ export class IngestionService {
 
     finalDatasetRunItemRecords.forEach((record) => {
       if (record) {
-        this.clickHouseWriter.addToQueue(TableName.DatasetRunItems, record);
+        this.clickHouseWriter?.addToQueue(TableName.DatasetRunItems, record);
       }
     });
   }
@@ -679,7 +679,7 @@ export class IngestionService {
     if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
       this.clickHouseWriter.addToQueue(TableName.Scores, finalScoreRecord);
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
+      this.dorisWriter.addToQueue(DorisTableName.Scores, finalScoreRecord);
     }
   }
 
@@ -766,7 +766,7 @@ export class IngestionService {
       this.clickHouseWriter.addToQueue(TableName.Traces, finalTraceRecord);
       logger.debug(`Added trace ${entityId} to ClickHouse queue for project ${projectId}`);
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      this.dorisWriter.addToQueue(DorisTableName.Traces, finalTraceRecord);
       logger.debug(`Added trace ${entityId} to Doris queue for project ${projectId}`);
     }
 
@@ -805,7 +805,7 @@ export class IngestionService {
         finalTraceRecord,
         this.getPartitionAwareTimestamp(createdAtTimestamp),
       );
-      this.clickHouseWriter.addToQueue(
+      this.clickHouseWriter?.addToQueue(
         TableName.ObservationsBatchStaging,
         traceAsStagingObservation,
       );
@@ -985,7 +985,7 @@ export class IngestionService {
       if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
         this.clickHouseWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
       } else if (analyticsBackend === "doris" && this.dorisWriter) {
-        this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+        this.dorisWriter.addToQueue(DorisTableName.Traces, wrapperTraceRecord);
       }
       finalObservationRecord.trace_id = finalObservationRecord.id;
     }
@@ -995,7 +995,7 @@ export class IngestionService {
     if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
       this.clickHouseWriter.addToQueue(TableName.Observations, finalObservationRecord);
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Observations, finalObservationRecord);
+      this.dorisWriter.addToQueue(DorisTableName.Observations, finalObservationRecord);
     }
 
     // Dual-write to staging table for batch propagation to events table

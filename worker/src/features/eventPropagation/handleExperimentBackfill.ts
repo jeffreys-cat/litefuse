@@ -493,6 +493,8 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
     prisma,
     ClickhouseWriter.getInstance(),
     clickhouseClient(),
+    null,
+    null,
   );
 
   for (const span of spans) {
