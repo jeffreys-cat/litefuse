@@ -10,7 +10,6 @@ import {
   scoresTableUiColumnDefinitions,
   queryDoris,
   isDorisBackend,
-  convertToScore,
   dq,
 } from "@langfuse/shared/src/server";
 import {
@@ -151,17 +150,21 @@ export const _handleGenerateScoresForPublicApi = async ({
       },
     });
 
-    return records.map((record) => ({
-      ...convertToScore(record),
-      trace:
-        record.trace_id !== null
-          ? {
-              userId: record.user_id,
-              tags: record.tags,
-              environment: record.trace_environment,
-            }
-          : null,
-    }));
+    return records.map((record) => {
+      const domainScore = convertClickhouseScoreToDomain(record);
+      const apiScore = convertScoreToPublicApi(domainScore);
+      return {
+        ...apiScore,
+        trace:
+          record.trace_id !== null
+            ? {
+                userId: record.user_id,
+                tags: record.tags,
+                environment: record.trace_environment,
+              }
+            : null,
+      };
+    });
   }
 
   const query = `
