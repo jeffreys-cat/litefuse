@@ -1,1 +1,1 @@
-DROP TABLE traces;
+DROP TABLE IF EXISTS `traces`;

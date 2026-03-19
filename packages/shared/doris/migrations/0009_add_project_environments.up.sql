@@ -6,7 +6,7 @@ CREATE TABLE project_environments (
     `environments` Array<String>
 ) ENGINE=OLAP
 DUPLICATE KEY(project_id)
-DISTRIBUTED BY HASH(project_id) BUCKETS 64
+DISTRIBUTED BY HASH(project_id) BUCKETS AUTO
 PROPERTIES (
 "replication_allocation" = "tag.location.default: 1"
 );

@@ -527,7 +527,7 @@ export const TracePreview = ({
                 environment={trace.environment}
               />
 
-              {trace.tags.length > 0 && (
+              {Array.isArray(trace.tags) && trace.tags.length > 0 && (
                 <>
                   <div className="px-2 text-sm font-medium">{"Tags"}</div>
                   <div className="flex flex-wrap gap-x-1 gap-y-1 px-2">

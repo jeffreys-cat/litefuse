@@ -1,1 +1,0 @@
-ALTER TABLE scores SET ("bloom_filter_columns" = "project_id,trace_id, observation_id");

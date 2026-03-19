@@ -111,15 +111,7 @@ export class DorisParameterProcessor {
     }
     
     if (typeof value === 'string') {
-      // Try to parse as date, fallback to original string
-      try {
-        const date = new Date(value);
-        if (!isNaN(date.getTime())) {
-          return `'${convertDateToAnalyticsDateTime(date)}'`;
-        }
-      } catch {
-        // Fallback to original string with quotes
-      }
+      // String already formatted (e.g., from convertDateToAnalyticsDateTime), use as-is
       return `'${value}'`;
     }
     
