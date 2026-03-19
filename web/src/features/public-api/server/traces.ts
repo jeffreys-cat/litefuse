@@ -97,7 +97,7 @@ async function buildTracesBaseQuery(
   ) as DateTimeFilter | undefined;
   const toTimeFilter = filter.find(
     (f) =>
-      f.clickhouseTable === "traces" &&
+      f.table === "traces" &&
       f.field.includes("timestamp") &&
       (f.operator === "<=" || f.operator === "<"),
   ) as DateTimeFilter | undefined;
@@ -123,9 +123,9 @@ async function buildTracesBaseQuery(
 
   // Check if any filters reference the observations or scores tables
   const filtersNeedObservations = filter.some(
-    (f) => f.clickhouseTable === "observations",
+    (f) => f.table === "observations",
   );
-  const filtersNeedScores = filter.some((f) => f.clickhouseTable === "scores");
+  const filtersNeedScores = filter.some((f) => f.table === "scores");
 
   // Check if filters specifically reference score aggregation columns
   const hasScoreAggregationFilters = filter.some(
@@ -340,7 +340,7 @@ export const generateTracesForPublicApi = async ({
 
     const timeFilter = filter.find(
       (f: any) =>
-        f.clickhouseTable === "traces" &&
+        f.table === "traces" &&
         f.field.includes("timestamp") &&
         (f.operator === ">=" || f.operator === ">"),
     ) as DateTimeFilter | undefined;
@@ -351,7 +351,7 @@ export const generateTracesForPublicApi = async ({
     // Skip indexes logic still applies to Doris
     const shouldUseSkipIndexes = filter.some(
       (f: any) =>
-        f.clickhouseTable === "traces" &&
+        f.table === "traces" &&
         ["user_id", "session_id", "metadata"].some((skipIndexCol) =>
           f.field.includes(skipIndexCol),
         ),
