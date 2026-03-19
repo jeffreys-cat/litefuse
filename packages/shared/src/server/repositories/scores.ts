@@ -376,7 +376,8 @@ export const getScoresForSessions = async <
       },
     });
 
-    return rows.map((r) => convertClickhouseScoreToDomain(r));
+    const includeMetadataPayloadDoris = excludeMetadata ? false : true;
+    return rows.map((r) => convertClickhouseScoreToDomain(r, includeMetadataPayloadDoris));
   }
 
   const query = `
@@ -2424,6 +2425,7 @@ export const getAggregatedScoresForPrompts = async (
       AND o.type = 'GENERATION'
       AND s.name IS NOT NULL
       ${fetchScoreRelation === "trace" ? "AND s.observation_id IS NULL" : ""}
+      AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
     `;
 
     const rows = await queryDoris<
@@ -2446,7 +2448,7 @@ export const getAggregatedScoresForPrompts = async (
     });
 
     return rows.map((row) => ({
-      ...convertScoreAggregation(row),
+      ...convertScoreAggregation<AggregatableScoreDataType>(row),
       promptId: row.prompt_id,
       hasMetadata: !!row.has_metadata,
     }));
