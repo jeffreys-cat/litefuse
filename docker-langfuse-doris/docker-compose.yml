@@ -165,7 +165,7 @@ services:
       - langfuse_postgres_data:/var/lib/postgresql
 
   doris_fe:
-    image: apache/doris:fe-2.1.11
+    image: apache/doris:fe-4.0.0
     hostname: doris_fe
     container_name: doris_fe
     environment:
@@ -191,7 +191,7 @@ services:
       start_period: 120s
 
   doris_be:
-    image: apache/doris:be-2.1.11
+    image: apache/doris:be-4.0.0
     hostname: doris_be
     container_name: doris_be
     environment:

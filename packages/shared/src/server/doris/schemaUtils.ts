@@ -26,6 +26,13 @@ export const getDorisEntityType = (
     case eventTypes.SPAN_UPDATE:
     case eventTypes.GENERATION_CREATE:
     case eventTypes.GENERATION_UPDATE:
+    case eventTypes.AGENT_CREATE:
+    case eventTypes.TOOL_CREATE:
+    case eventTypes.CHAIN_CREATE:
+    case eventTypes.RETRIEVER_CREATE:
+    case eventTypes.EVALUATOR_CREATE:
+    case eventTypes.EMBEDDING_CREATE:
+    case eventTypes.GUARDRAIL_CREATE:
       return "observation";
     case eventTypes.SCORE_CREATE:
       return "score";
