@@ -320,7 +320,7 @@ export function TraceDetailView({
             }`}
           >
             {/* Tags Section - scrolls with content except in JSON Beta (virtualized) */}
-            {trace.tags.length > 0 && (
+            {Array.isArray(trace.tags) && trace.tags.length > 0 && (
               <>
                 <div
                   className={`px-2 pt-2 text-sm font-medium ${currentView !== "pretty" ? "shrink-0" : ""}`}

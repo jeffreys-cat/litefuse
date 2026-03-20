@@ -10,10 +10,13 @@ CREATE TABLE event_log
     `bucket_path` String,
 
     `created_at`  DateTime DEFAULT CURRENT_TIMESTAMP,
-    `updated_at`  DateTime DEFAULT CURRENT_TIMESTAMP
+    `updated_at`  DateTime DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_entity_id (`entity_id`) USING INVERTED COMMENT 'inverted index for entity_id',
+    INDEX idx_entity_type (`entity_type`) USING INVERTED COMMENT 'inverted index for entity_type'
 ) ENGINE=OLAP
 DUPLICATE KEY(`id`, `project_id`)
-DISTRIBUTED BY HASH(`project_id`) BUCKETS 64
+DISTRIBUTED BY HASH(`project_id`) BUCKETS AUTO
+AUTO PARTITION BY RANGE (date_trunc(`created_at`, 'month')) ()
 PROPERTIES (
 "replication_allocation" = "tag.location.default: 1"
 );

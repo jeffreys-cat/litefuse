@@ -115,15 +115,15 @@ export const convertToUiTableRows = (
     id: row.id,
     projectId: row.project_id,
     timestamp: timestamp,
-    tags: row.tags ?? [], // Ensure tags is always an array, never null
-    bookmarked: row.bookmarked,
+    tags: row.tags ?? [],
+    bookmarked: Boolean(row.bookmarked),
     name: row.name ?? null,
     release: row.release ?? null,
     version: row.version ?? null,
     userId: row.user_id ?? null,
     environment: row.environment ?? null,
     sessionId: row.session_id ?? null,
-    public: row.public,
+    public: Boolean(row.public),
   };
 };
 

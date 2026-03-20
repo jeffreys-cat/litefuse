@@ -1,1 +1,0 @@
-ALTER TABLE scores MODIFY COLUMN trace_id String;

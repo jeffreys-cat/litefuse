@@ -1,1 +1,0 @@
--- ALTER TABLE traces SET ("bloom_filter_columns" = "user_id");

@@ -1,1 +1,0 @@
--- ALTER TABLE scores SET ("bloom_filter_columns" = "project_id, session_id");

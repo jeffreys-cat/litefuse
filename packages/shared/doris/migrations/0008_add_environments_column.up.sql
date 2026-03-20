@@ -1,3 +1,0 @@
--- ALTER TABLE traces ADD COLUMN environment varchar(65533) DEFAULT 'default';
--- ALTER TABLE observations ADD COLUMN environment varchar(65533) DEFAULT 'default';
--- ALTER TABLE scores ADD COLUMN environment varchar(65533) DEFAULT 'default';

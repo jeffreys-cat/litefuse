@@ -1,1 +1,1 @@
-DROP TABLE observations;
+DROP TABLE IF EXISTS `observations`;

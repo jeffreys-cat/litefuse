@@ -1,1 +1,1 @@
-DROP TABLE scores;
+DROP TABLE IF EXISTS `scores`;

@@ -129,6 +129,7 @@ export class DorisClient {
         acquireTimeout: this.config.timeout,
         timeout: this.config.timeout,
         connectTimeout: this.config.timeout,
+        timezone: '+00:00', // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
       };
 
       // Only add database to config if it's not empty
