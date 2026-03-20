@@ -22,7 +22,7 @@ CREATE TABLE if not exists traces (
     INDEX idx_id (`id`) USING INVERTED COMMENT 'inverted index for id',
     INDEX idx_project (`project_id`) USING INVERTED COMMENT 'inverted index for project_id',
     INDEX idx_user_id (`user_id`) USING INVERTED COMMENT 'inverted index for user_id',
-    INDEX idx_session_id (`session_id`) USING INVERTED COMMENT 'inverted index for session_id'
+    INDEX idx_session_id (`session_id`) USING INVERTED COMMENT 'inverted index for session_id',
     INDEX idx_tags (`tags`) USING INVERTED COMMENT 'inverted index for tags'
  ) ENGINE=OLAP
 UNIQUE KEY(project_id, timestamp_date,id)

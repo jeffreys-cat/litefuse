@@ -16,7 +16,6 @@ CREATE TABLE event_log
 ) ENGINE=OLAP
 DUPLICATE KEY(`id`, `project_id`)
 DISTRIBUTED BY HASH(`project_id`) BUCKETS AUTO
-AUTO PARTITION BY RANGE (date_trunc(`created_at`, 'month')) ()
 PROPERTIES (
 "replication_allocation" = "tag.location.default: 1"
 );
