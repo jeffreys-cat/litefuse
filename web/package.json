@@ -26,7 +26,6 @@
   },
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",
-    "dc-polyfill": "^0.1.10",
     "@appsignal/opentelemetry-instrumentation-bullmq": "^0.7.3",
     "@baselime/trpc-opentelemetry-middleware": "^0.1.2",
     "@codemirror/lang-json": "^6.0.2",
