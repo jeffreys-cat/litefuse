@@ -14,7 +14,7 @@ CREATE TABLE blob_storage_file_log
     `updated_at`  DateTime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=OLAP
 UNIQUE KEY(project_id,entity_type,entity_id,event_id)
-DISTRIBUTED BY HASH(project_id,entity_type,entity_id,event_id) BUCKETS auto
+DISTRIBUTED BY HASH(project_id,entity_type,entity_id,event_id) BUCKETS 8
 PROPERTIES (
 "replication_allocation" = "tag.location.default: 1"
 );
