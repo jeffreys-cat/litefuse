@@ -15,8 +15,7 @@ CREATE TABLE event_log
     INDEX idx_entity_type (`entity_type`) USING INVERTED COMMENT 'inverted index for entity_type'
 ) ENGINE=OLAP
 DUPLICATE KEY(`id`, `project_id`)
-DISTRIBUTED BY HASH(`project_id`) BUCKETS 8
-AUTO PARTITION BY RANGE (date_trunc(`created_at`, 'month')) ()
+DISTRIBUTED BY HASH(`project_id`) BUCKETS AUTO
 PROPERTIES (
 "replication_allocation" = "tag.location.default: 1"
 );
