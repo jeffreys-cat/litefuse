@@ -841,32 +841,6 @@ export class QueryBuilder {
     }
   }
 
-  private getTimeDimensionSqlDoris(
-    sql: string,
-    granularity: z.infer<typeof granularities>,
-  ): string {
-    switch (granularity) {
-      case "minute":
-        return `date_trunc(${sql}, 'minute')`;
-      case "hour":
-        return `date_trunc(${sql}, 'hour')`;
-      case "day":
-        return `date_trunc(${sql}, 'day')`;
-      case "week":
-        return `date_trunc(${sql}, 'week')`;
-      case "month":
-        return `date_trunc(${sql}, 'month')`;
-      case "auto":
-        throw new Error(
-          `Granularity 'auto' is not supported for getTimeDimensionSql`,
-        );
-      default:
-        throw new InvalidRequestError(
-          `Invalid time granularity: ${granularity}. Must be one of minute, hour, day, week, month`,
-        );
-    }
-  }
-
   private buildTimeDimensionSql(
     view: ViewDeclarationType,
     query: QueryType,
