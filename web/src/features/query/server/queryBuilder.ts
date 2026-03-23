@@ -908,44 +908,48 @@ export class QueryBuilder {
     query: QueryType,
     view: ViewDeclarationType,
   ) {
-    let dimensions = "";
+    const parts: string[] = [];
 
     // Add regular dimensions
     if (appliedDimensions.length > 0) {
-      dimensions += `${appliedDimensions
-        .map((dimension) => {
-          // Use custom aggregation function if specified (e.g., argMaxIf for events table traces)
-          if (dimension.aggregationFunction) {
-            return `${dimension.aggregationFunction} as ${dimension.alias ?? dimension.sql}`;
-          }
-          // pairExpand key columns (e.g. costType) are added to the inner GROUP BY in
-          // buildInnerSelect, so they are already deterministic grouping keys here.
-          // Unlike regular dimensions (which are not in GROUP BY and need any() to satisfy
-          // ClickHouse's aggregation rules), wrapping in any() would be wrong: it implies
-          // the value is non-deterministic within the group when it's actually the axis
-          // being grouped on. Use a bare reference instead.
-          // Note: the paired value column (e.g. cost_value) is NOT in GROUP BY and IS
-          // wrapped in any() in buildInnerMetricsPart, so the outer query can re-aggregate it.
-          if (dimension.pairExpand) {
-            return `${dimension.alias} as ${dimension.alias ?? dimension.sql}`;
-          }
-          // Explode array dimensions using arrayJoin
-          if (dimension.explodeArray) {
-            return `arrayJoin(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`;
-          }
-          // Default: wrap in any()
-          return `any(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`;
-        })
-        .join(",\n")},`;
+      for (const dimension of appliedDimensions) {
+        // Use custom aggregation function if specified (e.g., argMaxIf for events table traces)
+        if (dimension.aggregationFunction) {
+          parts.push(
+            `${dimension.aggregationFunction} as ${dimension.alias ?? dimension.sql}`,
+          );
+        }
+        // pairExpand key columns (e.g. costType) are added to the inner GROUP BY in
+        // buildInnerSelect, so they are already deterministic grouping keys here.
+        // Unlike regular dimensions (which are not in GROUP BY and need any() to satisfy
+        // ClickHouse's aggregation rules), wrapping in any() would be wrong: it implies
+        // the value is non-deterministic within the group when it's actually the axis
+        // being grouped on. Use a bare reference instead.
+        // Note: the paired value column (e.g. cost_value) is NOT in GROUP BY and IS
+        // wrapped in any() in buildInnerMetricsPart, so the outer query can re-aggregate it.
+        else if (dimension.pairExpand) {
+          parts.push(`${dimension.alias} as ${dimension.alias ?? dimension.sql}`);
+        }
+        // Explode array dimensions using arrayJoin
+        else if (dimension.explodeArray) {
+          parts.push(
+            `arrayJoin(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
+          );
+        }
+        // Default: wrap in any()
+        else {
+          parts.push(`any(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`);
+        }
+      }
     }
 
     // Add time dimension if specified - reuse unified builder with any() wrapper
     const timeDimensionSql = this.buildTimeDimensionSql(view, query, "any");
     if (timeDimensionSql) {
-      dimensions += `${timeDimensionSql},`;
+      parts.push(timeDimensionSql);
     }
 
-    return dimensions;
+    return parts.length > 0 ? `${parts.join(",\n")},` : "";
   }
 
   private buildInnerDimensionsPartDoris(
@@ -953,16 +957,22 @@ export class QueryBuilder {
     query: QueryType,
     view: ViewDeclarationType,
   ) {
-    let dimensions = "";
+    const parts: string[] = [];
+
+    // Skip dimensions that are already in the inner GROUP BY (id and project_id are always included)
+    // These are added by buildInnerSelect and would cause duplicate column errors if added again
+    const skipIds = ["id", "project_id"];
 
     // Add regular dimensions
     if (appliedDimensions.length > 0) {
-      dimensions += `${appliedDimensions
-        .map(
-          (dimension) =>
-            `any_value(${dimension.table}.${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
-        )
-        .join(",\n")},`;
+      const filteredDims = appliedDimensions.filter(
+        (d) => skipIds.indexOf(d.sql) === -1,
+      );
+      for (const dimension of filteredDims) {
+        parts.push(
+          `any_value(${dimension.table}.${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
+        );
+      }
     }
 
     // Add time dimension if specified
@@ -979,10 +989,10 @@ export class QueryBuilder {
         `${view.name}.${view.timeDimension}`,
         granularity,
       );
-      dimensions += `any_value(${timeDimensionSql}) as time_dimension,`;
+      parts.push(`any_value(${timeDimensionSql}) as time_dimension`);
     }
 
-    return dimensions;
+    return parts.length > 0 ? `${parts.join(",\n")},` : "";
   }
 
   private buildInnerMetricsPart(appliedMetrics: AppliedMetricType[]) {
@@ -1059,12 +1069,20 @@ export class QueryBuilder {
       }
     }
 
+    // Build SELECT parts - handle comma correctly between id, dimensions, and metrics
+    const selectParts = [projectIdSql, idSql];
+    // innerDimensionsPart ends with comma if non-empty, so we trim the trailing comma
+    const trimmedDimensions = innerDimensionsPart.replace(/,\s*$/, "");
+    if (trimmedDimensions) {
+      selectParts.push(trimmedDimensions);
+    }
+    // innerMetricsPart also needs comma handling
+    const trimmedMetrics = innerMetricsPart.replace(/^,\s*/, "");
+
     return `
       SELECT
-        ${projectIdSql},
-        ${idSql},
-        ${innerDimensionsPart}
-        ${innerMetricsPart}
+        ${selectParts.join(",\n        ")}
+        ${trimmedMetrics ? `,${trimmedMetrics}` : ""}
         ${fromClause}
       GROUP BY ${groupByParts.join(", ")}`;
   }
