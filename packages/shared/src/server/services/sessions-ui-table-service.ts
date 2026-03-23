@@ -261,22 +261,15 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
 
           // Doris version with database-specific adaptations
       const query = `
-        WITH deduplicated_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        WITH filtered_traces AS (
+          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
           FROM traces t
-          WHERE t.session_id IS NOT NULL 
+          WHERE t.session_id IS NOT NULL
             AND t.project_id = {projectId: String}
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
-        filtered_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
-          FROM deduplicated_traces
-          WHERE rn = 1
-        ),
-        ${selectMetrics ? `deduplicated_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        ${selectMetrics ? `filtered_observations AS (
+            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
             FROM observations o
             WHERE o.project_id = {projectId: String}
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
@@ -284,11 +277,6 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
               SELECT id
               FROM filtered_traces
             )
-          ),
-          filtered_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
-            FROM deduplicated_observations
-            WHERE rn = 1
           ),
           observations_agg AS (
             SELECT o.trace_id,

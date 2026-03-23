@@ -83,23 +83,18 @@ export const searchExistingAnnotationScore = async (
   }
 
   if (isDorisBackend()) {
-    // Doris implementation using window function to achieve LIMIT 1 BY semantics
     const query = `
-      SELECT * FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM scores s
-        WHERE s.project_id = {projectId: String}
-        AND s.source = 'ANNOTATION'
-        AND s.trace_id = {traceId: String}
-        ${observationId ? `AND s.observation_id = {observationId: String}` : "AND s.observation_id IS NULL"}
-        AND (
-          FALSE
-          ${name ? `OR s.name = {name: String}` : ""}
-          ${configId ? `OR s.config_id = {configId: String}` : ""}
-        )
-      ) ranked
-      WHERE rn = 1
+      SELECT *
+      FROM scores s
+      WHERE s.project_id = {projectId: String}
+      AND s.source = 'ANNOTATION'
+      AND s.trace_id = {traceId: String}
+      ${observationId ? `AND s.observation_id = {observationId: String}` : "AND s.observation_id IS NULL"}
+      AND (
+        FALSE
+        ${name ? `OR s.name = {name: String}` : ""}
+        ${configId ? `OR s.config_id = {configId: String}` : ""}
+      )
       ORDER BY event_ts DESC
       LIMIT 1
     `;
@@ -347,15 +342,11 @@ export const getScoresForSessions = async <
 
   if (isDorisBackend()) {
     const query = `
-        SELECT ${select} FROM (
-          SELECT *, 
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM scores s
-          WHERE s.project_id = {projectId: String}
-          AND s.session_id IN ({sessionIds: Array(String)})
-          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-        ) ranked
-        WHERE rn = 1
+        SELECT ${select}
+        FROM scores s
+        WHERE s.project_id = {projectId: String}
+        AND s.session_id IN ({sessionIds: Array(String)})
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ORDER BY event_ts DESC
         ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
       `;
@@ -436,15 +427,11 @@ export const getScoresForDatasetRuns = async <
 
   if (isDorisBackend()) {
     const query = `
-        SELECT ${select} FROM (
-          SELECT *, 
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM scores s
-          WHERE s.project_id = {projectId: String}
-          AND s.dataset_run_id IN ({runIds: Array(String)})
-          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-        ) ranked
-        WHERE rn = 1
+        SELECT ${select}
+        FROM scores s
+        WHERE s.project_id = {projectId: String}
+        AND s.dataset_run_id IN ({runIds: Array(String)})
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ORDER BY event_ts DESC
         ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
       `;
@@ -620,16 +607,12 @@ const getScoresForTracesInternal = async <
 
   if (isDorisBackend()) {
     const query = `
-        SELECT ${select} FROM (
-          SELECT *, 
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM scores s
-          WHERE s.project_id = {projectId: String}
-          AND s.trace_id IN ({traceIds: Array(String)})
-          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-          ${timestamp ? `AND s.timestamp >= DATE_SUB({traceTimestamp: DateTime}, ${SCORE_TO_TRACE_OBSERVATIONS_INTERVAL})` : ""}
-        ) ranked
-        WHERE rn = 1
+        SELECT ${select}
+        FROM scores s
+        WHERE s.project_id = {projectId: String}
+        AND s.trace_id IN ({traceIds: Array(String)})
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
+        ${timestamp ? `AND s.timestamp >= DATE_SUB({traceTimestamp: DateTime}, ${SCORE_TO_TRACE_OBSERVATIONS_INTERVAL})` : ""}
         ORDER BY event_ts DESC
         ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
       `;
@@ -810,15 +793,11 @@ export const getScoresForObservations = async <
 
   if (isDorisBackend()) {
     const query = `
-        SELECT ${select} FROM (
-          SELECT *, 
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM scores s
-          WHERE s.project_id = {projectId: String}
-          AND s.observation_id IN ({observationIds: Array(String)})
-          AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-        ) ranked
-        WHERE rn = 1
+        SELECT ${select}
+        FROM scores s
+        WHERE s.project_id = {projectId: String}
+        AND s.observation_id IN ({observationIds: Array(String)})
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ORDER BY event_ts DESC
         ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
       `;
@@ -2319,20 +2298,14 @@ export const getNumericScoreHistogram = async (
 
     const traceFilter = dorisFilter.find((f) => f.table === "traces");
 
-    // Doris UNIQUE KEY 保证数据唯一性，使用 ROW_NUMBER() 窗口函数模拟 LIMIT 1 BY
     const query = `
-      SELECT value FROM (
-        SELECT s.value,
-               s.event_ts,
-               ROW_NUMBER() OVER (PARTITION BY s.id, s.project_id ORDER BY s.event_ts DESC) as rn
-        FROM scores s
-        ${traceFilter ? `LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id` : ""}
-        WHERE s.project_id = {projectId: String}
-        ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
-        ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
-      ) ranked
-      WHERE rn = 1
-      ORDER BY event_ts DESC
+      SELECT s.value
+      FROM scores s
+      ${traceFilter ? `LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id` : ""}
+      WHERE s.project_id = {projectId: String}
+      ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
+      ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
+      ORDER BY s.event_ts DESC
       ${limit !== undefined ? `LIMIT {limit: Int32}` : ""}
     `;
 
@@ -3044,16 +3017,11 @@ export const getScoreMetadataById = async (
 ) => {
   if (isDorisBackend()) {
     const query = `
-      SELECT metadata FROM (
-        SELECT metadata,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM scores s
-        WHERE s.project_id = {projectId: String}
-        AND s.id = {id: String}
-        ${source ? `AND s.source = {source: String}` : ""}
-      ) ranked
-      WHERE rn = 1
-      ORDER BY event_ts DESC
+      SELECT metadata
+      FROM scores s
+      WHERE s.project_id = {projectId: String}
+      AND s.id = {id: String}
+      ${source ? `AND s.source = {source: String}` : ""}
       LIMIT 1
     `;
 

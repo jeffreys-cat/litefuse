@@ -1,8 +1,8 @@
 CREATE TABLE if not exists observations (
     `project_id` varchar(64) not null,
-    `type` varchar(64) not null,
     `start_time_date` Date not null,
     `id` varchar(64),
+    `type` varchar(64) not null,
     `trace_id` varchar(64),
     `parent_observation_id` String,
     `start_time` DateTime(3),
@@ -31,11 +31,12 @@ CREATE TABLE if not exists observations (
     event_ts DateTime(3),
     is_deleted int,
     environment string DEFAULT 'default',
+    INDEX idx_type (`type`) USING INVERTED COMMENT 'inverted index for type',
     INDEX idx_id (`id`) USING INVERTED COMMENT 'inverted index for id',
     INDEX idx_trace_id (`trace_id`) USING INVERTED COMMENT 'inverted index for trace_id',
     INDEX idx_project_id (`project_id`) USING INVERTED COMMENT 'inverted index for project_id'
 ) ENGINE=OLAP
-UNIQUE KEY(`project_id`, `type`, `start_time_date`,`id`)
+UNIQUE KEY(`project_id`, `start_time_date`, `id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'month')) ()
 DISTRIBUTED BY HASH(project_id) BUCKETS 8
 PROPERTIES (
