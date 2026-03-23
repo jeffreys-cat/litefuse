@@ -2002,26 +2002,45 @@ export const getUserMetrics = async (
               sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'),o.usage_details['output'],0)) as output_usage,
               sum(if(MAP_CONTAINS_KEY(o.usage_details,'total'),o.usage_details['total'],0)) as total_usage
           FROM
-              observations o
-              JOIN traces t on t.id = o.trace_id
-              and t.project_id = o.project_id
-          WHERE
-              o.project_id = {projectId: String}
-              ${timestampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
-              AND o.trace_id in (
+              (
                   SELECT
-                      distinct id
-                  from
+                      o.project_id,
+                      o.trace_id,
+                      o.usage_details,
+                      o.total_cost,
+                      o.id
+                  FROM
+                      observations o
+                  WHERE
+                      o.project_id = {projectId: String}
+                      ${timestampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
+                      AND o.trace_id in (
+                          SELECT
+                              distinct id
+                          from
+                              traces t
+                          where
+                              user_id IN ({userIds: Array(String) })
+                              AND project_id = {projectId: String}
+                              ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
+                      )
+                      AND o.type = 'GENERATION'
+              ) as o
+              JOIN (
+                  SELECT
+                      t.id,
+                      t.user_id,
+                      t.project_id,
+                      t.timestamp,
+                      t.environment
+                  FROM
                       traces t
-                  where
-                      user_id IN ({userIds: Array(String) })
-                      AND project_id = {projectId: String}
+                  WHERE
+                      t.user_id IN ({userIds: Array(String) })
+                      AND t.project_id = {projectId: String}
                       ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
-              )
-              AND o.type = 'GENERATION'
-              AND t.user_id IN ({userIds: Array(String) })
-              AND t.project_id = {projectId: String}
-              ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
+              ) as t on t.id = o.trace_id
+              and t.project_id = o.project_id
           group by
               t.user_id
       )
