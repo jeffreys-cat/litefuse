@@ -888,9 +888,9 @@ export class QueryBuilder {
       case "hour":
         return `date_trunc(${sql}, 'hour')`;
       case "day":
-        return `date(${sql})`;
+        return `date_trunc(${sql}, 'day')`;
       case "week":
-        return `date_sub(date(${sql}), dayofweek(${sql}) - 2)`;
+        return `date_trunc(${sql}, 'week')`;
       case "month":
         return `date_trunc(${sql}, 'month')`;
       case "auto":
