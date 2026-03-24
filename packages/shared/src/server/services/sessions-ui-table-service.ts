@@ -25,9 +25,7 @@ import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
-import {
-  DateTimeFilter as DorisDateTimeFilter,
-} from "../queries/doris-sql/doris-filter";
+import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 
 export type SessionDataReturnType = {
@@ -190,17 +188,20 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       tracesPrefix: "s",
     });
 
-    tracesFilter.push(...createDorisFilterFromFilterState(filter, sessionColsForDoris));
+    tracesFilter.push(
+      ...createDorisFilterFromFilterState(filter, sessionColsForDoris),
+    );
 
     const tracesFilterRes = tracesFilter
       .filter((f) => f.field !== "environment")
       .apply();
 
-    const traceTimestampFilter: DorisDateTimeFilter | undefined = tracesFilter.find(
-      (f) =>
-        f.field === "min_timestamp" &&
-        (f.operator === ">=" || f.operator === ">"),
-    ) as DorisDateTimeFilter | undefined;
+    const traceTimestampFilter: DorisDateTimeFilter | undefined =
+      tracesFilter.find(
+        (f) =>
+          f.field === "min_timestamp" &&
+          (f.operator === ">=" || f.operator === ">"),
+      ) as DorisDateTimeFilter | undefined;
 
     const filters = [];
     if (traceTimestampFilter) {
@@ -259,8 +260,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       sessionColsForDoris,
     );
 
-          // Doris version with database-specific adaptations
-      const query = `
+    // Doris version with database-specific adaptations
+    const query = `
         WITH filtered_traces AS (
           SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
           FROM traces t
@@ -268,7 +269,9 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             AND t.project_id = {projectId: String}
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
-        ${selectMetrics ? `filtered_observations AS (
+        ${
+          selectMetrics
+            ? `filtered_observations AS (
             SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
             FROM observations o
             WHERE o.project_id = {projectId: String}
@@ -295,7 +298,9 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             WHERE o.project_id = {projectId: String}
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
             GROUP BY o.trace_id
-          ),` : ""}
+          ),`
+            : ""
+        }
         traces_with_tags AS (
           SELECT 
             t.session_id,
@@ -392,12 +397,17 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     });
 
     // Doris MySQL protocol returns ARRAY columns as JSON strings, need to parse them
-    const parseArrayField = (field: string[] | string | null | undefined): string[] => {
-      if (Array.isArray(field)) return field.filter(v => v !== null && v !== '');
-      if (typeof field === 'string') {
+    const parseArrayField = (
+      field: string[] | string | null | undefined,
+    ): string[] => {
+      if (Array.isArray(field))
+        return field.filter((v) => v !== null && v !== "");
+      if (typeof field === "string") {
         try {
           const parsed = JSON.parse(field);
-          return Array.isArray(parsed) ? parsed.filter((v: unknown) => v !== null && v !== '') : [];
+          return Array.isArray(parsed)
+            ? parsed.filter((v: unknown) => v !== null && v !== "")
+            : [];
         } catch {
           return field ? [field] : [];
         }
@@ -405,49 +415,64 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       return [];
     };
 
-    const parseDetailsField = (details: string | Record<string, number>): Record<string, number> => {
+    const parseDetailsField = (
+      details: string | Record<string, number>,
+    ): Record<string, number> => {
       if (!details) return {};
-      if (typeof details === 'object' && !Array.isArray(details)) return details;
-      if (typeof details === 'string') {
+      if (typeof details === "object" && !Array.isArray(details))
+        return details;
+      if (typeof details === "string") {
         try {
           const parsed = JSON.parse(details.trim());
-          if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+          if (typeof parsed === "object" && !Array.isArray(parsed)) {
             const result: Record<string, number> = {};
             for (const [key, value] of Object.entries(parsed)) {
               result[key] = Number(value) || 0;
             }
             return result;
           }
-        } catch { /* ignore parse errors */ }
+        } catch {
+          /* ignore parse errors */
+        }
       }
       return {};
     };
 
     // Post-process Doris results to match ClickHouse format
     if (select === "metrics") {
-      const processedRes = (res as Array<SessionWithMetricsReturnType & {
-        session_usage_details: string | Record<string, number>;
-        session_cost_details: string | Record<string, number>;
-      }>).map(row => ({
-        ...row,
-        user_ids: parseArrayField(row.user_ids as unknown as string),
-        trace_ids: parseArrayField(row.trace_ids as unknown as string),
-        trace_tags: parseArrayField(row.trace_tags as unknown as string),
-        session_usage_details: parseDetailsField(row.session_usage_details),
-        session_cost_details: parseDetailsField(row.session_cost_details),
-      } as SessionWithMetricsReturnType));
+      const processedRes = (
+        res as Array<
+          SessionWithMetricsReturnType & {
+            session_usage_details: string | Record<string, number>;
+            session_cost_details: string | Record<string, number>;
+          }
+        >
+      ).map(
+        (row) =>
+          ({
+            ...row,
+            user_ids: parseArrayField(row.user_ids as unknown as string),
+            trace_ids: parseArrayField(row.trace_ids as unknown as string),
+            trace_tags: parseArrayField(row.trace_tags as unknown as string),
+            session_usage_details: parseDetailsField(row.session_usage_details),
+            session_cost_details: parseDetailsField(row.session_cost_details),
+          }) as SessionWithMetricsReturnType,
+      );
 
       return processedRes as T[];
     }
 
     // Post-process Doris results for rows
     if (select === "rows") {
-      const processedRes = (res as Array<SessionDataReturnType>).map(row => ({
-        ...row,
-        user_ids: parseArrayField(row.user_ids as unknown as string),
-        trace_ids: parseArrayField(row.trace_ids as unknown as string),
-        trace_tags: parseArrayField(row.trace_tags as unknown as string),
-      } as SessionDataReturnType));
+      const processedRes = (res as Array<SessionDataReturnType>).map(
+        (row) =>
+          ({
+            ...row,
+            user_ids: parseArrayField(row.user_ids as unknown as string),
+            trace_ids: parseArrayField(row.trace_ids as unknown as string),
+            trace_tags: parseArrayField(row.trace_tags as unknown as string),
+          }) as SessionDataReturnType,
+      );
 
       return processedRes as T[];
     }

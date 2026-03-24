@@ -35,32 +35,33 @@ export const observationsTableTraceUiColumnDefinitions: UiColumnMappings = [
     clickhouseSelect: 't."environment"',
   },
 ];
-export const observationsTableTraceUiColumnDefinitionsForDoris: UiColumnMappings = [
-  {
-    uiTableName: "Trace Tags",
-    uiTableId: "traceTags",
-    clickhouseTableName: "traces",
-    clickhouseSelect: "t.tags",
-  },
-  {
-    uiTableName: "User ID",
-    uiTableId: "userId",
-    clickhouseTableName: "traces",
-    clickhouseSelect: 't.user_id',
-  },
-  {
-    uiTableName: "Trace Name",
-    uiTableId: "traceName",
-    clickhouseTableName: "traces",
-    clickhouseSelect: 't.name',
-  },
-  {
-    uiTableName: "Trace Environment",
-    uiTableId: "traceEnvironment",
-    clickhouseTableName: "traces",
-    clickhouseSelect: 't.environment',
-  },
-];
+export const observationsTableTraceUiColumnDefinitionsForDoris: UiColumnMappings =
+  [
+    {
+      uiTableName: "Trace Tags",
+      uiTableId: "traceTags",
+      clickhouseTableName: "traces",
+      clickhouseSelect: "t.tags",
+    },
+    {
+      uiTableName: "User ID",
+      uiTableId: "userId",
+      clickhouseTableName: "traces",
+      clickhouseSelect: "t.user_id",
+    },
+    {
+      uiTableName: "Trace Name",
+      uiTableId: "traceName",
+      clickhouseTableName: "traces",
+      clickhouseSelect: "t.name",
+    },
+    {
+      uiTableName: "Trace Environment",
+      uiTableId: "traceEnvironment",
+      clickhouseTableName: "traces",
+      clickhouseSelect: "t.environment",
+    },
+  ];
 
 export const observationsTableUiColumnDefinitions: UiColumnMappings = [
   ...observationsTableTraceUiColumnDefinitions,
@@ -392,25 +393,25 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Level",
     uiTableId: "level",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.level',
+    clickhouseSelect: "o.level",
   },
   {
     uiTableName: "Status Message",
     uiTableId: "statusMessage",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.status_message',
+    clickhouseSelect: "o.status_message",
   },
   {
     uiTableName: "Model",
     uiTableId: "model",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.provided_model_name',
+    clickhouseSelect: "o.provided_model_name",
   },
   {
     uiTableName: "Model ID",
     uiTableId: "modelId",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.internal_model_id',
+    clickhouseSelect: "o.internal_model_id",
   },
   {
     uiTableName: "Input Tokens",
@@ -448,7 +449,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Metadata",
     uiTableId: "metadata",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.metadata',
+    clickhouseSelect: "o.metadata",
   },
   // Scores column duplicated to allow renaming column name. Will be removed once session storage cache is outdated
   // Column names are cached in user sessions - changing them breaks existing filters
@@ -474,7 +475,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Version",
     uiTableId: "version",
     clickhouseTableName: "observations",
-    clickhouseSelect: 'o.version',
+    clickhouseSelect: "o.version",
   },
   {
     uiTableName: "Prompt Name",

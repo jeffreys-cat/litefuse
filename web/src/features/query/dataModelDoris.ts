@@ -585,10 +585,9 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
   baseCte: `scores scores_categorical`,
 };
 
-
 export const viewDeclarationsDoris = {
   traces: tracesViewDoris,
   observations: observationsViewDoris,
   "scores-numeric": scoresNumericViewDoris,
   "scores-categorical": scoresCategoricalViewDoris,
-} as const; 
+} as const;

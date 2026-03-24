@@ -14,7 +14,7 @@ describe("DorisWriter Integration Tests", () => {
       database: "information_schema", // 先连接系统数据库
       username: "root",
       password: "123456",
-      timeout: 30000
+      timeout: 30000,
     });
 
     // 1. 创建 langfuse 数据库（如果不存在）
@@ -34,7 +34,7 @@ describe("DorisWriter Integration Tests", () => {
       database: "langfuse",
       username: "root",
       password: "123456",
-      timeout: 30000
+      timeout: 30000,
     });
 
     // 3. 创建测试需要的表
@@ -54,11 +54,11 @@ describe("DorisWriter Integration Tests", () => {
     } catch (error) {
       console.warn("清理测试数据失败:", error);
     }
-    
+
     // 关闭连接
     await writer.shutdown();
     await dorisClient.close();
-    
+
     // 重置单例实例
     (DorisWriter as any).instance = null;
   });
@@ -88,7 +88,7 @@ describe("DorisWriter Integration Tests", () => {
           PROPERTIES (
             "replication_allocation" = "tag.location.default: 1"
           )
-        `
+        `,
       },
       {
         name: "scores",
@@ -114,7 +114,7 @@ describe("DorisWriter Integration Tests", () => {
           PROPERTIES (
             "replication_allocation" = "tag.location.default: 1"
           )
-        `
+        `,
       },
       {
         name: "observations",
@@ -142,8 +142,8 @@ describe("DorisWriter Integration Tests", () => {
           PROPERTIES (
             "replication_allocation" = "tag.location.default: 1"
           )
-        `
-      }
+        `,
+      },
     ];
 
     for (const table of tables) {
@@ -171,7 +171,9 @@ describe("DorisWriter Integration Tests", () => {
 
     // 3. 验证表存在
     const tables = await dorisClient.query("SHOW TABLES");
-    const tableNames = tables.map((row: any) => row.Tables_in_langfuse || row.table_name);
+    const tableNames = tables.map(
+      (row: any) => row.Tables_in_langfuse || row.table_name,
+    );
     expect(tableNames).toContain("traces");
     expect(tableNames).toContain("scores");
     expect(tableNames).toContain("observations");
@@ -201,12 +203,12 @@ describe("DorisWriter Integration Tests", () => {
     console.log("✓ Trace 数据已写入");
 
     // 等待数据同步
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // 验证数据是否写入成功
     const result = await dorisClient.query(
       "SELECT * FROM traces WHERE id = ?",
-      [traceData.id]
+      [traceData.id],
     );
 
     expect(result).toHaveLength(1);
@@ -239,12 +241,12 @@ describe("DorisWriter Integration Tests", () => {
     console.log("✓ Score 数据已写入");
 
     // 等待数据同步
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // 验证数据是否写入成功
     const result = await dorisClient.query(
       "SELECT * FROM scores WHERE id = ?",
-      [scoreData.id]
+      [scoreData.id],
     );
 
     expect(result).toHaveLength(1);
@@ -280,12 +282,12 @@ describe("DorisWriter Integration Tests", () => {
     console.log("✓ Observation 数据已写入");
 
     // 等待数据同步
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // 验证数据是否写入成功
     const result = await dorisClient.query(
       "SELECT * FROM observations WHERE id = ?",
-      [observationData.id]
+      [observationData.id],
     );
 
     expect(result).toHaveLength(1);
@@ -320,11 +322,11 @@ describe("DorisWriter Integration Tests", () => {
     console.log(`✓ 批量写入 ${batchSize} 条 Trace 数据`);
 
     // 等待数据同步
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // 验证所有数据是否写入成功
     const result = await dorisClient.query(
-      "SELECT COUNT(*) as count FROM traces WHERE id LIKE 'test-trace-batch-%'"
+      "SELECT COUNT(*) as count FROM traces WHERE id LIKE 'test-trace-batch-%'",
     );
 
     expect(result[0].count).toBe(batchSize);
@@ -358,14 +360,14 @@ describe("DorisWriter Integration Tests", () => {
     console.log(`✓ 并发写入 ${concurrentWrites} 条数据`);
 
     // 等待数据同步
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // 验证所有数据是否写入成功
     const result = await dorisClient.query(
-      "SELECT COUNT(*) as count FROM traces WHERE id LIKE 'concurrent-trace-%'"
+      "SELECT COUNT(*) as count FROM traces WHERE id LIKE 'concurrent-trace-%'",
     );
 
     expect(result[0].count).toBe(concurrentWrites);
     console.log("✓ 并发数据查询验证成功");
   });
-}); 
+});

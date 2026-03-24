@@ -25,7 +25,10 @@ import {
   DateTimeFilter as DorisDateTimeFilter,
 } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
-import { dorisSearchCondition, DorisSearchContext } from "../queries/doris-sql/search";
+import {
+  dorisSearchCondition,
+  DorisSearchContext,
+} from "../queries/doris-sql/search";
 import { logger } from "../logger";
 import { InternalServerError, LangfuseNotFoundError } from "../../errors";
 import { prisma } from "../../db";
@@ -40,8 +43,10 @@ import {
 } from "../queries";
 import { createFilterFromFilterState } from "../queries/clickhouse-sql/factory";
 import {
-  observationsTableTraceUiColumnDefinitions, observationsTableTraceUiColumnDefinitionsForDoris,
-  observationsTableUiColumnDefinitions, observationsTableUiColumnDefinitionsForDoris,
+  observationsTableTraceUiColumnDefinitions,
+  observationsTableTraceUiColumnDefinitionsForDoris,
+  observationsTableUiColumnDefinitions,
+  observationsTableUiColumnDefinitionsForDoris,
 } from "../tableMappings";
 import { OrderByState } from "../../interfaces/orderBy";
 import { getTracesByIds } from "./traces";
@@ -194,19 +199,19 @@ export const upsertObservation = async (
 // Helper function to preprocess Doris usage/cost details
 const preprocessDorisUsageCostDetails = (record: any): any => {
   const processed = { ...record };
-  
+
   const usageCostFields = [
-    'provided_usage_details', 
-    'usage_details', 
-    'provided_cost_details', 
-    'cost_details'
+    "provided_usage_details",
+    "usage_details",
+    "provided_cost_details",
+    "cost_details",
   ];
 
   for (const field of usageCostFields) {
-    if (processed[field] && typeof processed[field] === 'string') {
+    if (processed[field] && typeof processed[field] === "string") {
       try {
         const parsed = JSON.parse(processed[field]);
-        if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (typeof parsed === "object" && !Array.isArray(parsed)) {
           // Convert to format expected by UsageCostSchema
           const result: Record<string, string | null> = {};
           for (const [key, value] of Object.entries(parsed)) {
@@ -317,7 +322,9 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
     });
 
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
-    records = rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
+    records = rawRecords.map(
+      preprocessDorisUsageCostDetails,
+    ) as ObservationRecordReadType[];
   } else {
     const query = `
     SELECT
@@ -502,7 +509,9 @@ export const getObservationForTraceIdByName = async ({
     });
 
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
-    const records = rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
+    const records = rawRecords.map(
+      preprocessDorisUsageCostDetails,
+    ) as ObservationRecordReadType[];
     return records.map((r) => convertObservation(r));
   }
 
@@ -672,9 +681,11 @@ export const getObservationsById = async (
       query,
       params: { ids, projectId },
     });
-    
+
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
-    const records = rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
+    const records = rawRecords.map(
+      preprocessDorisUsageCostDetails,
+    ) as ObservationRecordReadType[];
     return records.map((r) => convertObservation(r));
   }
 
@@ -809,7 +820,9 @@ const getObservationByIdInternal = async ({
     });
 
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
-    return rawRecords.map(preprocessDorisUsageCostDetails) as ObservationRecordReadType[];
+    return rawRecords.map(
+      preprocessDorisUsageCostDetails,
+    ) as ObservationRecordReadType[];
   }
 
   const query = `
@@ -1021,14 +1034,8 @@ const getObservationsTableInternal = async <T>(
         if(isNull(end_time), NULL, milliseconds_diff(end_time,start_time)) as latency,
         if(isNull(completion_start_time), NULL,  milliseconds_diff(completion_start_time,start_time)) as time_to_first_token`;
 
-    const {
-      projectId,
-      filter,
-      selectIOAndMetadata,
-      limit,
-      offset,
-      orderBy,
-    } = opts;
+    const { projectId, filter, selectIOAndMetadata, limit, offset, orderBy } =
+      opts;
 
     const dorisSelectString = selectIOAndMetadata
       ? `
@@ -1053,7 +1060,8 @@ const getObservationsTableInternal = async <T>(
 
     const timeFilter = opts.filter.find(
       (f) =>
-        f.column === "Start Time" && (f.operator === ">=" || f.operator === ">"),
+        f.column === "Start Time" &&
+        (f.operator === ">=" || f.operator === ">"),
     );
 
     const traceTableFilter = opts.filter.filter(
@@ -1073,24 +1081,27 @@ const getObservationsTableInternal = async <T>(
     );
 
     const orderByTraces = opts.orderBy
-      ?
-      // observationsTableTraceUiColumnDefinitions
-      observationsTableTraceUiColumnDefinitionsForDoris
+      ? // observationsTableTraceUiColumnDefinitions
+        observationsTableTraceUiColumnDefinitionsForDoris
           .map((c) => c.uiTableId)
           .includes(opts.orderBy.column) ||
         // observationsTableTraceUiColumnDefinitions
-      observationsTableTraceUiColumnDefinitionsForDoris
+        observationsTableTraceUiColumnDefinitionsForDoris
           .map((c) => c.uiTableName)
           .includes(opts.orderBy.column)
       : undefined;
 
     const search = dorisSearchCondition(opts.searchQuery, opts.searchType, {
       type: "observations",
-      hasTracesJoin: traceTableFilter.length > 0 || orderByTraces || Boolean(opts.searchQuery),
+      hasTracesJoin:
+        traceTableFilter.length > 0 ||
+        orderByTraces ||
+        Boolean(opts.searchQuery),
     });
 
     // Simplified scores CTE for Doris
-    const scoresCte = hasScoresFilter ? `WITH scores_agg AS (
+    const scoresCte = hasScoresFilter
+      ? `WITH scores_agg AS (
       SELECT
         trace_id,
         observation_id,
@@ -1123,11 +1134,12 @@ const getObservationsTableInternal = async <T>(
       GROUP BY
         trace_id, 
         observation_id
-    )` : "";
+    )`
+      : "";
 
     const dorisOrderBy = orderByToDorisSQL(
       orderBy ? [orderBy] : null,
-      observationsTableUiColumnDefinitionsForDoris
+      observationsTableUiColumnDefinitionsForDoris,
     );
 
     const query = `
@@ -1149,8 +1161,12 @@ const getObservationsTableInternal = async <T>(
         ...appliedObservationsFilter.params,
         ...(timeFilter
           ? {
-              timeFilterValue: convertDateToAnalyticsDateTime(timeFilter.value as Date),
-              tracesTimestampFilter: convertDateToAnalyticsDateTime(timeFilter.value as Date),
+              timeFilterValue: convertDateToAnalyticsDateTime(
+                timeFilter.value as Date,
+              ),
+              tracesTimestampFilter: convertDateToAnalyticsDateTime(
+                timeFilter.value as Date,
+              ),
             }
           : {}),
         ...search.params,
@@ -1414,7 +1430,7 @@ export const getObservationsGroupedByModel = async (
     observationsFilter.push(
       ...createDorisFilterFromFilterState(
         filter,
-        observationsTableUiColumnDefinitionsForDoris
+        observationsTableUiColumnDefinitionsForDoris,
       ),
     );
 
@@ -1794,7 +1810,7 @@ export const getObservationsGroupedByPromptName = async (
     observationsFilter.push(
       ...createDorisFilterFromFilterState(
         filter,
-        observationsTableUiColumnDefinitionsForDoris
+        observationsTableUiColumnDefinitionsForDoris,
       ),
     );
 

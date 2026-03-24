@@ -26,8 +26,54 @@ const HistogramChart = ({
   const transformHistogramData = (data: DataPoint[]): HistogramDataPoint[] => {
     if (!data.length) return [];
 
-    // Check if this is ClickHouse histogram format (array of tuples)
     const firstDataPoint = data[0];
+
+    // Find the histogram value - it could be in any field (e.g., histogram_latency, histogram_inputCost, etc.)
+    let histogramValue: unknown = undefined;
+
+    // Check all properties of the first data point for histogram data
+    for (const key of Object.keys(firstDataPoint)) {
+      const value = (firstDataPoint as unknown as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.includes("num_buckets")) {
+        histogramValue = value;
+        break;
+      }
+    }
+
+    // Handle Doris histogram format: JSON string "{\"num_buckets\": N, \"buckets\": [...]}"
+    if (
+      typeof histogramValue === "string" &&
+      histogramValue.includes("num_buckets")
+    ) {
+      try {
+        histogramValue = JSON.parse(histogramValue);
+      } catch {
+        return [];
+      }
+    }
+
+    // Check if this is Doris histogram format: {"num_buckets": N, "buckets": [{lower, upper, count, ...}]}
+    if (
+      histogramValue &&
+      typeof histogramValue === "object" &&
+      !Array.isArray(histogramValue) &&
+      "buckets" in histogramValue
+    ) {
+      const metricObj = histogramValue as unknown as {
+        num_buckets?: number;
+        buckets?: Array<{ lower?: string; upper?: string; count?: number }>;
+      };
+      const buckets = metricObj.buckets;
+      if (!buckets?.length) return [];
+      return buckets.map((bucket) => ({
+        binLabel: `[${compactSmallNumberFormatter(Number(bucket.lower))}, ${compactSmallNumberFormatter(Number(bucket.upper))}]`,
+        count: bucket.count ?? 0,
+        lower: Number(bucket.lower),
+        upper: Number(bucket.upper),
+      }));
+    }
+
+    // Fallback: try original metric field for ClickHouse format
     if (firstDataPoint?.metric && Array.isArray(firstDataPoint.metric)) {
       // ClickHouse histogram format: [(lower, upper, height), ...]
       return (firstDataPoint.metric as [number, number, number][]).map(

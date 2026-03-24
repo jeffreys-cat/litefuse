@@ -30,7 +30,7 @@ const parseTimestamp = (timestamp: string | Date): Date => {
   }
 
   // Default ClickHouse behavior - always expect string
-  if (typeof timestamp === 'string') {
+  if (typeof timestamp === "string") {
     return parseClickhouseUTCDateTimeFormat(timestamp);
   }
 
@@ -87,9 +87,7 @@ function ensureObservationCoreFields(
     id: record.id!,
     traceId: record.trace_id ?? null,
     startTime: parseTimestamp(record.start_time!),
-    endTime: record.end_time
-      ? parseTimestamp(record.end_time)
-      : null,
+    endTime: record.end_time ? parseTimestamp(record.end_time) : null,
     projectId: record.project_id!,
     parentObservationId: record.parent_observation_id ?? null,
     type: record.type! as ObservationType,
@@ -172,9 +170,7 @@ export function convertObservationPartial(
     ...coreFields,
     ...(record.type !== undefined && { type: record.type as ObservationType }),
     ...(record.end_time !== undefined && {
-      endTime: record.end_time
-        ? parseTimestamp(record.end_time)
-        : null,
+      endTime: record.end_time ? parseTimestamp(record.end_time) : null,
     }),
 
     // Basic fields
@@ -293,9 +289,7 @@ export function convertObservationPartial(
       record.start_time !== undefined) && {
       timeToFirstToken:
         record.completion_start_time && record.start_time
-          ? (parseTimestamp(
-              record.completion_start_time,
-            ).getTime() -
+          ? (parseTimestamp(record.completion_start_time).getTime() -
               parseTimestamp(record.start_time).getTime()) /
             1000
           : null,

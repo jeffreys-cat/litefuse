@@ -11,7 +11,11 @@ export function parseMetadataCHRecordToDomain(
   if (typeof metadata === "string") {
     try {
       parsed = JSON.parse(metadata);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         return {};
       }
     } catch {

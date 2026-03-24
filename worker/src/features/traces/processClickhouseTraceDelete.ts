@@ -124,7 +124,7 @@ export const processClickhouseTraceDelete = async (
   projectId: string,
   traceIds: string[],
 ) => {
-  const backendName =isDorisBackend() ? "Doris" : "Clickhouse";
+  const backendName = isDorisBackend() ? "Doris" : "Clickhouse";
   logger.info(
     `Deleting traces ${JSON.stringify(traceIds)} in project ${projectId} from ${backendName}`,
   );

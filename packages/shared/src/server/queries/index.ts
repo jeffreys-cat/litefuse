@@ -16,11 +16,7 @@ export {
   StringObjectFilter,
   NullFilter,
 } from "./clickhouse-sql/clickhouse-filter";
-export {
-  FilterList,
-  type Filter,
-  type DbOperator,
-} from "./filter";
+export { FilterList, type Filter, type DbOperator } from "./filter";
 export {
   orderByToClickhouseSql,
   orderByToEntries,

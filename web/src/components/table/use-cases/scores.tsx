@@ -734,7 +734,7 @@ export default function ScoresTable({
     const processedTraceTags = (() => {
       if (Array.isArray(score.traceTags)) {
         return score.traceTags;
-      } else if (typeof score.traceTags === 'string') {
+      } else if (typeof score.traceTags === "string") {
         try {
           // Try to parse as JSON array
           const parsed = JSON.parse(score.traceTags);

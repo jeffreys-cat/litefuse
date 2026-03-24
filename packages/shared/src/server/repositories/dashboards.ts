@@ -3,16 +3,16 @@ import {
   queryClickhouse,
 } from "./clickhouse";
 import { queryDoris } from "./doris";
-import { isDorisBackend, convertDateToAnalyticsDateTime, parseAnalyticsDateTimeFormat } from "./analytics";
-import { createFilterFromFilterState } from "../queries/clickhouse-sql/factory";
 import {
-  createDorisFilterFromFilterState,
-} from "../queries/doris-sql/factory";
+  isDorisBackend,
+  convertDateToAnalyticsDateTime,
+  parseAnalyticsDateTimeFormat,
+} from "./analytics";
+import { createFilterFromFilterState } from "../queries/clickhouse-sql/factory";
+import { createDorisFilterFromFilterState } from "../queries/doris-sql/factory";
 import { FilterState } from "../../types";
 import { DateTimeFilter, FilterList } from "../queries";
-import {
-  DateTimeFilter as DorisDateTimeFilter,
-} from "../queries/doris-sql/doris-filter";
+import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 import { dashboardColumnDefinitions } from "../tableMappings";
 import { convertDateToClickhouseDateTime } from "../clickhouse/client";
 import {
@@ -64,7 +64,10 @@ export const getScoreAggregate = async (
       convertEnvFilterToDorisFilter(envFilter),
     ).apply();
     const dorisFilter = new FilterList(
-      createDorisFilterFromFilterState(remainingFilters, dashboardColumnDefinitions),
+      createDorisFilterFromFilterState(
+        remainingFilters,
+        dashboardColumnDefinitions,
+      ),
     );
 
     const timeFilter = dorisFilter.find(
@@ -107,7 +110,9 @@ export const getScoreAggregate = async (
         ...dorisFilterApplied.params,
         ...environmentFilter.params,
         ...(timeFilter
-          ? { tracesTimestamp: convertDateToAnalyticsDateTime(timeFilter.value) }
+          ? {
+              tracesTimestamp: convertDateToAnalyticsDateTime(timeFilter.value),
+            }
           : {}),
       },
       tags: {
@@ -195,7 +200,10 @@ export const getObservationCostByTypeByTime = async (
       convertEnvFilterToDorisFilter(envFilter),
     ).apply();
     const dorisFilter = new FilterList(
-      createDorisFilterFromFilterState(remainingFilters, dashboardColumnDefinitions),
+      createDorisFilterFromFilterState(
+        remainingFilters,
+        dashboardColumnDefinitions,
+      ),
     );
 
     const appliedFilter = dorisFilter.apply();
@@ -210,10 +218,8 @@ export const getObservationCostByTypeByTime = async (
         ) as DorisDateTimeFilter | undefined)
       : undefined;
 
-    const [orderByQuery, orderByParams, bucketSizeInSeconds] = orderByTimeSeriesDoris(
-      filter,
-      "start_time",
-    );
+    const [orderByQuery, orderByParams, bucketSizeInSeconds] =
+      orderByTimeSeriesDoris(filter, "start_time");
 
     // Doris UNIQUE KEY 保证数据唯一性，无需去重
     // 使用 collect_list 模拟 ClickHouse 的 groupArray 结构
@@ -247,7 +253,7 @@ export const getObservationCostByTypeByTime = async (
 
     const result = await queryDoris<{
       start_time: string | Date;
-      costs: string[] | string;  // 格式: ["key1:value1", "key2:value2", ...] 或字符串化的数组
+      costs: string[] | string; // 格式: ["key1:value1", "key2:value2", ...] 或字符串化的数组
     }>({
       query,
       params: {
@@ -270,23 +276,23 @@ export const getObservationCostByTypeByTime = async (
     // 解析字符串格式的 costs，转换为与 ClickHouse 相同的元组格式
     const processedResult = result.map((row) => {
       let costArray: string[] = [];
-      
+
       // 处理 Doris 返回的字符串化数组
-      if (typeof row.costs === 'string') {
+      if (typeof row.costs === "string") {
         try {
           costArray = JSON.parse(row.costs);
         } catch (e) {
-          console.error('Failed to parse costs JSON:', e);
+          console.error("Failed to parse costs JSON:", e);
           costArray = [];
         }
       } else if (Array.isArray(row.costs)) {
         costArray = row.costs;
       }
-      
+
       return {
         start_time: row.start_time,
         costs: costArray.map((cost): [string, number | null] => {
-          const [key, value] = cost.split(':');
+          const [key, value] = cost.split(":");
           return [key, value ? Number(value) : null];
         }),
       };
@@ -300,9 +306,10 @@ export const getObservationCostByTypeByTime = async (
     const uniqueTypes = [...new Set(types)];
 
     return processedResult.flatMap((row) => {
-      const timeString = typeof row.start_time === 'string' 
-        ? row.start_time 
-        : (row.start_time as Date).toISOString();
+      const timeString =
+        typeof row.start_time === "string"
+          ? row.start_time
+          : (row.start_time as Date).toISOString();
       const intervalStart = parseAnalyticsDateTimeFormat(timeString);
       return uniqueTypes.map((type) => ({
         intervalStart: intervalStart,
@@ -419,7 +426,10 @@ export const getObservationUsageByTypeByTime = async (
       convertEnvFilterToDorisFilter(envFilter),
     ).apply();
     const dorisFilter = new FilterList(
-      createDorisFilterFromFilterState(remainingFilters, dashboardColumnDefinitions),
+      createDorisFilterFromFilterState(
+        remainingFilters,
+        dashboardColumnDefinitions,
+      ),
     );
 
     const appliedFilter = dorisFilter.apply();
@@ -434,10 +444,8 @@ export const getObservationUsageByTypeByTime = async (
         ) as DorisDateTimeFilter | undefined)
       : undefined;
 
-    const [orderByQuery, orderByParams, bucketSizeInSeconds] = orderByTimeSeriesDoris(
-      filter,
-      "start_time",
-    );
+    const [orderByQuery, orderByParams, bucketSizeInSeconds] =
+      orderByTimeSeriesDoris(filter, "start_time");
 
     // Doris UNIQUE KEY 保证数据唯一性，无需去重
     // 使用 collect_list 模拟 ClickHouse 的 groupArray 结构
@@ -471,7 +479,7 @@ export const getObservationUsageByTypeByTime = async (
 
     const result = await queryDoris<{
       start_time: string | Date;
-      usages: string[] | string;  // 格式: ["key1:value1", "key2:value2", ...] 或字符串化的数组
+      usages: string[] | string; // 格式: ["key1:value1", "key2:value2", ...] 或字符串化的数组
     }>({
       query,
       params: {
@@ -494,23 +502,23 @@ export const getObservationUsageByTypeByTime = async (
     // 解析字符串格式的 usages，转换为与 ClickHouse 相同的元组格式
     const processedResult = result.map((row) => {
       let usageArray: string[] = [];
-      
+
       // 处理 Doris 返回的字符串化数组
-      if (typeof row.usages === 'string') {
+      if (typeof row.usages === "string") {
         try {
           usageArray = JSON.parse(row.usages);
         } catch (e) {
-          console.error('Failed to parse usages JSON:', e);
+          console.error("Failed to parse usages JSON:", e);
           usageArray = [];
         }
       } else if (Array.isArray(row.usages)) {
         usageArray = row.usages;
       }
-      
+
       return {
         start_time: row.start_time,
         usages: usageArray.map((usage): [string, number | null] => {
-          const [key, value] = usage.split(':');
+          const [key, value] = usage.split(":");
           return [key, value ? Number(value) : null];
         }),
       };
@@ -524,9 +532,10 @@ export const getObservationUsageByTypeByTime = async (
     const uniqueTypes = [...new Set(types)];
 
     return processedResult.flatMap((row) => {
-      const timeString = typeof row.start_time === 'string' 
-        ? row.start_time 
-        : (row.start_time as Date).toISOString();
+      const timeString =
+        typeof row.start_time === "string"
+          ? row.start_time
+          : (row.start_time as Date).toISOString();
       const intervalStart = parseAnalyticsDateTimeFormat(timeString);
       return uniqueTypes.map((type) => ({
         intervalStart: intervalStart,

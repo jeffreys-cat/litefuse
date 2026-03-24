@@ -164,9 +164,7 @@ export const getDailyMetricsCount = async (props: QueryType) => {
     props,
     filterParams,
   );
-  const appliedFilter = filter
-    .filter((f) => f.table === "traces")
-    .apply();
+  const appliedFilter = filter.filter((f) => f.table === "traces").apply();
 
   const query = `
     SELECT count(distinct toDate(timestamp)) as count

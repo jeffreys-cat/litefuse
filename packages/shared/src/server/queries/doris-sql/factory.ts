@@ -33,104 +33,107 @@ export const createDorisFilterFromFilterState = (
   columnMapping: UiColumnMappings,
 ) => {
   return filter
-    .filter(
-      (frontEndFilter) => frontEndFilter.type !== "positionInTrace",
-    )
+    .filter((frontEndFilter) => frontEndFilter.type !== "positionInTrace")
     .map((frontEndFilter) => {
-    // checks if the column exists in the doris schema
-    const column = matchAndVerifyTracesUiColumn(frontEndFilter, columnMapping);
+      // checks if the column exists in the doris schema
+      const column = matchAndVerifyTracesUiColumn(
+        frontEndFilter,
+        columnMapping,
+      );
 
-    switch (frontEndFilter.type) {
-      case "string":
-        return new StringFilter({
-          dorisTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          value: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "datetime":
-        return new DateTimeFilter({
-          table: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          value: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "stringOptions":
-        return new StringOptionsFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          values: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "categoryOptions":
-        return new CategoryOptionsFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          key: frontEndFilter.key,
-          values: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "number":
-        return new NumberFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          value: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-          clickhouseTypeOverwrite: column.clickhouseTypeOverwrite,
-        });
-      case "arrayOptions":
-        return new ArrayOptionsFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          values: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "boolean":
-        return new BooleanFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          value: frontEndFilter.value,
-          operator: frontEndFilter.operator,
-          tablePrefix: column.queryPrefix,
-        });
-      case "numberObject":
-        return new NumberObjectFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          key: frontEndFilter.key,
-          operator: frontEndFilter.operator,
-          value: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "stringObject":
-        return new StringObjectFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          key: frontEndFilter.key,
-          value: frontEndFilter.value,
-          tablePrefix: column.queryPrefix,
-        });
-      case "null":
-        return new NullFilter({
-          clickhouseTable: column.clickhouseTableName,
-          field: column.clickhouseSelect,
-          operator: frontEndFilter.operator,
-          tablePrefix: column.queryPrefix,
-        });
-      default:
-        // eslint-disable-next-line no-case-declarations
-        const exhaustiveCheck: never = frontEndFilter;
-        logger.error(`Invalid filter type: ${JSON.stringify(exhaustiveCheck)}`);
-        throw new QueryBuilderError(`Invalid filter type`);
-    }
-  });
+      switch (frontEndFilter.type) {
+        case "string":
+          return new StringFilter({
+            dorisTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            value: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "datetime":
+          return new DateTimeFilter({
+            table: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            value: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "stringOptions":
+          return new StringOptionsFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            values: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "categoryOptions":
+          return new CategoryOptionsFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            key: frontEndFilter.key,
+            values: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "number":
+          return new NumberFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            value: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+            clickhouseTypeOverwrite: column.clickhouseTypeOverwrite,
+          });
+        case "arrayOptions":
+          return new ArrayOptionsFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            values: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "boolean":
+          return new BooleanFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            value: frontEndFilter.value,
+            operator: frontEndFilter.operator,
+            tablePrefix: column.queryPrefix,
+          });
+        case "numberObject":
+          return new NumberObjectFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            key: frontEndFilter.key,
+            operator: frontEndFilter.operator,
+            value: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "stringObject":
+          return new StringObjectFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            key: frontEndFilter.key,
+            value: frontEndFilter.value,
+            tablePrefix: column.queryPrefix,
+          });
+        case "null":
+          return new NullFilter({
+            clickhouseTable: column.clickhouseTableName,
+            field: column.clickhouseSelect,
+            operator: frontEndFilter.operator,
+            tablePrefix: column.queryPrefix,
+          });
+        default:
+          // eslint-disable-next-line no-case-declarations
+          const exhaustiveCheck: never = frontEndFilter;
+          logger.error(
+            `Invalid filter type: ${JSON.stringify(exhaustiveCheck)}`,
+          );
+          throw new QueryBuilderError(`Invalid filter type`);
+      }
+    });
 };
 
 const matchAndVerifyTracesUiColumn = (

@@ -28,8 +28,6 @@ import { InvalidRequestError } from "@langfuse/shared";
 import { env } from "@/src/env.mjs";
 import { NULL_IF_EMPTY_RE } from "./nullIfEmptyFilter";
 
-
-
 type AppliedDimensionType = {
   table: string;
   sql: string;
@@ -107,32 +105,36 @@ export class QueryBuilder {
   }
 
   private translateAggregationDoris(metric: AppliedMetricType): string {
+    // For histogram, we need to use the raw metric value (not aggregated)
+    // because histogram function requires a data series, not a single aggregated value
+    const metricValue = metric.alias || metric.sql;
+
     switch (metric.aggregation) {
       case "sum":
-        return `sum(${metric.alias || metric.sql})`;
+        return `sum(${metricValue})`;
       case "avg":
-        return `avg(${metric.alias || metric.sql})`;
+        return `avg(${metricValue})`;
       case "count":
-        return `count(${metric.alias || metric.sql})`;
+        return `count(${metricValue})`;
       case "max":
-        return `max(${metric.alias || metric.sql})`;
+        return `max(${metricValue})`;
       case "min":
-        return `min(${metric.alias || metric.sql})`;
+        return `min(${metricValue})`;
       case "p50":
-        return `percentile_approx(${metric.alias || metric.sql}, 0.5)`;
+        return `percentile_approx(${metricValue}, 0.5)`;
       case "p75":
-        return `percentile_approx(${metric.alias || metric.sql}, 0.75)`;
+        return `percentile_approx(${metricValue}, 0.75)`;
       case "p90":
-        return `percentile_approx(${metric.alias || metric.sql}, 0.9)`;
+        return `percentile_approx(${metricValue}, 0.9)`;
       case "p95":
-        return `percentile_approx(${metric.alias || metric.sql}, 0.95)`;
+        return `percentile_approx(${metricValue}, 0.95)`;
       case "p99":
-        return `percentile_approx(${metric.alias || metric.sql}, 0.99)`;
+        return `percentile_approx(${metricValue}, 0.99)`;
       case "histogram":
         const bins = this.chartConfig?.bins ?? 10;
-        return `histogram(cast(${metric.alias || metric.sql} as double), ${bins})`;
+        return `histogram(cast(${metricValue} as double), ${bins})`;
       case "uniq":
-        return `count(distinct ${metric.alias || metric.sql})`;
+        return `count(distinct ${metricValue})`;
       default:
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const exhaustiveCheck: never = metric.aggregation;
@@ -578,10 +580,7 @@ export class QueryBuilder {
     });
     filters.forEach((filter) => {
       // Only add as relation table if it's not the base table
-      if (
-        filter.table !== view.name &&
-        filter.table !== actualTableName
-      ) {
+      if (filter.table !== view.name && filter.table !== actualTableName) {
         relationTables.add(filter.table);
       }
     });
@@ -931,7 +930,9 @@ export class QueryBuilder {
         // Note: the paired value column (e.g. cost_value) is NOT in GROUP BY and IS
         // wrapped in any() in buildInnerMetricsPart, so the outer query can re-aggregate it.
         else if (dimension.pairExpand) {
-          parts.push(`${dimension.alias} as ${dimension.alias ?? dimension.sql}`);
+          parts.push(
+            `${dimension.alias} as ${dimension.alias ?? dimension.sql}`,
+          );
         }
         // Explode array dimensions using arrayJoin
         else if (dimension.explodeArray) {
@@ -941,7 +942,9 @@ export class QueryBuilder {
         }
         // Default: wrap in any()
         else {
-          parts.push(`any(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`);
+          parts.push(
+            `any(${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
+          );
         }
       }
     }
@@ -1034,7 +1037,7 @@ export class QueryBuilder {
 
     // Doris 不能处理重复的列名，需要去重相同的 SQL 表达式
     const uniqueMetrics = new Map<string, string>();
-    
+
     appliedMetrics.forEach((metric) => {
       const columnAlias = metric.alias || metric.sql;
       // 如果已经有相同的 SQL 表达式，就不重复添加
@@ -1975,7 +1978,10 @@ export class QueryBuilder {
     const appliedMetrics = this.mapMetrics(query.metrics, view);
 
     // Create filters using Doris filter factory (not ClickHouse)
-    const { whereFilters, whereRawParts } = this.mapFiltersDoris(query.filters, view);
+    const { whereFilters, whereRawParts } = this.mapFiltersDoris(
+      query.filters,
+      view,
+    );
     let filterList = new FilterList(whereFilters);
 
     // Add standard filters using Doris filter factory

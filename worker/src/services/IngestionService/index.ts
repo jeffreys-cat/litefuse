@@ -57,7 +57,7 @@ import {
 import { tokenCountAsync } from "../../features/tokenisation/async-usage";
 import { tokenCount } from "../../features/tokenisation/usage";
 import { ClickhouseWriter, TableName } from "../ClickhouseWriter";
-import {DorisWriter, TableName as DorisTableName} from "../DorisWriter";
+import { DorisWriter, TableName as DorisTableName } from "../DorisWriter";
 import {
   convertJsonSchemaToRecord,
   convertPostgresJsonToMetadataRecord,
@@ -764,10 +764,14 @@ export class IngestionService {
     const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
     if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
       this.clickHouseWriter.addToQueue(TableName.Traces, finalTraceRecord);
-      logger.debug(`Added trace ${entityId} to ClickHouse queue for project ${projectId}`);
+      logger.debug(
+        `Added trace ${entityId} to ClickHouse queue for project ${projectId}`,
+      );
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
       this.dorisWriter.addToQueue(DorisTableName.Traces, finalTraceRecord);
-      logger.debug(`Added trace ${entityId} to Doris queue for project ${projectId}`);
+      logger.debug(
+        `Added trace ${entityId} to Doris queue for project ${projectId}`,
+      );
     }
 
     // 记录写入指标
@@ -993,9 +997,15 @@ export class IngestionService {
     // 根据配置写入observation到相应的后端
     const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
     if (analyticsBackend === "clickhouse" && this.clickHouseWriter) {
-      this.clickHouseWriter.addToQueue(TableName.Observations, finalObservationRecord);
+      this.clickHouseWriter.addToQueue(
+        TableName.Observations,
+        finalObservationRecord,
+      );
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
-      this.dorisWriter.addToQueue(DorisTableName.Observations, finalObservationRecord);
+      this.dorisWriter.addToQueue(
+        DorisTableName.Observations,
+        finalObservationRecord,
+      );
     }
 
     // Dual-write to staging table for batch propagation to events table
@@ -1679,7 +1689,7 @@ export class IngestionService {
       { name: `get-doris-${table}` },
       async (span) => {
         span.setAttribute("projectId", projectId);
-        
+
         // Convert ClickHouse-style query to MySQL-compatible query for Doris
         // Note: Doris doesn't support "LIMIT 1 BY" syntax, so we use regular LIMIT
         let dorisQuery = `
@@ -1735,21 +1745,21 @@ export class IngestionService {
    * Successfully tested with user's 289-character complex nested JSON example
    */
   private safeJsonParse(
-    jsonString: string, 
-    fieldName: string, 
-    table: TableName, 
-    fallbackValue: any = {}
+    jsonString: string,
+    fieldName: string,
+    table: TableName,
+    fallbackValue: any = {},
   ): any {
     const trimmed = jsonString.trim();
-    
+
     // Handle common null/empty cases
-    if (!trimmed || trimmed === 'null' || trimmed === 'NULL') {
+    if (!trimmed || trimmed === "null" || trimmed === "NULL") {
       return fallbackValue;
     }
 
     // Handle empty object/array cases
-    if (trimmed === '{}' || trimmed === '[]') {
-      return trimmed === '[]' ? [] : {};
+    if (trimmed === "{}" || trimmed === "[]") {
+      return trimmed === "[]" ? [] : {};
     }
 
     // First, try direct JSON parsing
@@ -1760,20 +1770,24 @@ export class IngestionService {
       try {
         const fixed = this.fixMalformedNestedJson(trimmed);
         if (fixed !== trimmed) {
-          logger.debug(`Fixed malformed JSON in field ${fieldName} for table ${table}`);
+          logger.debug(
+            `Fixed malformed JSON in field ${fieldName} for table ${table}`,
+          );
           return JSON.parse(fixed);
         }
       } catch (fixError) {
         logger.warn(`Failed to parse JSON field`, {
           error: e instanceof Error ? e.message : String(e),
-          fixError: fixError instanceof Error ? fixError.message : String(fixError),
+          fixError:
+            fixError instanceof Error ? fixError.message : String(fixError),
           field: fieldName,
           table,
-          rawValue: trimmed.substring(0, 100) + (trimmed.length > 100 ? '...' : ''),
+          rawValue:
+            trimmed.substring(0, 100) + (trimmed.length > 100 ? "..." : ""),
           valueLength: trimmed.length,
         });
       }
-      
+
       return fallbackValue;
     }
   }
@@ -1786,17 +1800,18 @@ export class IngestionService {
   private fixMalformedNestedJson(str: string): string {
     // Use regex to identify and fix nested JSON patterns
     // Pattern: "key":"{"nested":"value",...}"
-    const nestedJsonPattern = /"([^"]+)":"(\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\})"/g;
-    
+    const nestedJsonPattern =
+      /"([^"]+)":"(\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\})"/g;
+
     let fixed = str.replace(nestedJsonPattern, (match, key, jsonContent) => {
       // Escape all quotes in the JSON content
       const escapedContent = jsonContent.replace(/"/g, '\\"');
       return `"${key}":"${escapedContent}"`;
     });
-    
+
     // Clean up other common issues
-    fixed = fixed.replace(/,(\s*[}\]])/g, '$1'); // Remove trailing commas
-    
+    fixed = fixed.replace(/,(\s*[}\]])/g, "$1"); // Remove trailing commas
+
     return fixed;
   }
 
@@ -1808,13 +1823,18 @@ export class IngestionService {
     fieldValue: any,
     fieldName: string,
     table: TableName,
-    fallbackValue: Record<string, string> = {}
+    fallbackValue: Record<string, string> = {},
   ): Record<string, string> {
     if (!fieldValue) return fallbackValue;
 
-    if (typeof fieldValue === 'string') {
-      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
-      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (typeof fieldValue === "string") {
+      const parsed = this.safeJsonParse(
+        fieldValue,
+        fieldName,
+        table,
+        fallbackValue,
+      );
+      if (typeof parsed === "object" && !Array.isArray(parsed)) {
         // Ensure all values are strings
         const result: Record<string, string> = {};
         for (const [key, value] of Object.entries(parsed)) {
@@ -1826,7 +1846,7 @@ export class IngestionService {
       return { [fieldName]: fieldValue };
     }
 
-    if (typeof fieldValue === 'object') {
+    if (typeof fieldValue === "object") {
       // Ensure all values are strings
       const result: Record<string, string> = {};
       for (const [key, value] of Object.entries(fieldValue)) {
@@ -1847,13 +1867,18 @@ export class IngestionService {
     fieldValue: any,
     fieldName: string,
     table: TableName,
-    fallbackValue: Record<string, string | null> = {}
+    fallbackValue: Record<string, string | null> = {},
   ): Record<string, string | null> {
     if (!fieldValue) return fallbackValue;
 
-    if (typeof fieldValue === 'string') {
-      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
-      if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+    if (typeof fieldValue === "string") {
+      const parsed = this.safeJsonParse(
+        fieldValue,
+        fieldName,
+        table,
+        fallbackValue,
+      );
+      if (typeof parsed === "object" && !Array.isArray(parsed)) {
         // Convert values to strings that can be parsed as numbers, or null
         const result: Record<string, string | null> = {};
         for (const [key, value] of Object.entries(parsed)) {
@@ -1870,7 +1895,7 @@ export class IngestionService {
       return fallbackValue;
     }
 
-    if (typeof fieldValue === 'object') {
+    if (typeof fieldValue === "object") {
       // Convert values to strings that can be parsed as numbers, or null
       const result: Record<string, string | null> = {};
       for (const [key, value] of Object.entries(fieldValue)) {
@@ -1896,12 +1921,17 @@ export class IngestionService {
     fieldValue: any,
     fieldName: string,
     table: TableName,
-    fallbackValue: string[] = []
+    fallbackValue: string[] = [],
   ): string[] {
     if (!fieldValue) return fallbackValue;
 
-    if (typeof fieldValue === 'string') {
-      const parsed = this.safeJsonParse(fieldValue, fieldName, table, fallbackValue);
+    if (typeof fieldValue === "string") {
+      const parsed = this.safeJsonParse(
+        fieldValue,
+        fieldName,
+        table,
+        fallbackValue,
+      );
       if (Array.isArray(parsed)) {
         return parsed.map((item: any) => String(item));
       }
@@ -1927,62 +1957,81 @@ export class IngestionService {
     // 1. Date fields: Convert Date objects to ClickHouse format for clickhouseStringDateSchema
     // clickhouseStringDateSchema expects: '2024-05-23 18:33:41.602000'
     const dateFields = [
-      'created_at', 'updated_at', 'event_ts', 'timestamp', 
-      'start_time', 'end_time', 'completion_start_time'
+      "created_at",
+      "updated_at",
+      "event_ts",
+      "timestamp",
+      "start_time",
+      "end_time",
+      "completion_start_time",
     ];
-    
+
     for (const field of dateFields) {
       if (processed[field] instanceof Date) {
         // Convert Date to ClickHouse format: '2024-05-23 18:33:41.602000'
         const isoString = processed[field].toISOString();
-        processed[field] = isoString.replace('T', ' ').replace('Z', '');
-        
+        processed[field] = isoString.replace("T", " ").replace("Z", "");
+
         // Ensure microsecond precision (6 digits) as expected by ClickHouse
-        if (!processed[field].includes('.')) {
-          processed[field] += '.000000';
+        if (!processed[field].includes(".")) {
+          processed[field] += ".000000";
         } else {
-          const parts = processed[field].split('.');
-          const microseconds = parts[1].padEnd(6, '0').substring(0, 6);
-          processed[field] = parts[0] + '.' + microseconds;
+          const parts = processed[field].split(".");
+          const microseconds = parts[1].padEnd(6, "0").substring(0, 6);
+          processed[field] = parts[0] + "." + microseconds;
         }
       }
     }
 
     // 2. Metadata field: Convert JSON string to Record<string, string>
-    processed.metadata = this.parseRecordField(processed.metadata, 'metadata', table, {});
+    processed.metadata = this.parseRecordField(
+      processed.metadata,
+      "metadata",
+      table,
+      {},
+    );
 
     // 3. Usage/Cost fields: Convert to format expected by UsageCostSchema
     if (table === TableName.Observations) {
       const usageCostFields = [
-        'provided_usage_details', 
-        'usage_details', 
-        'provided_cost_details', 
-        'cost_details'
+        "provided_usage_details",
+        "usage_details",
+        "provided_cost_details",
+        "cost_details",
       ];
 
       for (const field of usageCostFields) {
-        processed[field] = this.parseUsageCostField(processed[field], field, table, {});
+        processed[field] = this.parseUsageCostField(
+          processed[field],
+          field,
+          table,
+          {},
+        );
       }
     }
 
     // 4. Array fields: Ensure they are arrays or convert null to undefined
     if (table === TableName.Traces) {
-      processed.tags = this.parseArrayField(processed.tags, 'tags', table, []);
+      processed.tags = this.parseArrayField(processed.tags, "tags", table, []);
     }
     if (table === TableName.Observations) {
       // Doris SELECT * returns null for these optional fields, but schema expects undefined (not null)
-      if (processed.tool_definitions === null) processed.tool_definitions = undefined;
+      if (processed.tool_definitions === null)
+        processed.tool_definitions = undefined;
       if (processed.tool_calls === null) processed.tool_calls = undefined;
-      if (processed.tool_call_names === null) processed.tool_call_names = undefined;
+      if (processed.tool_call_names === null)
+        processed.tool_call_names = undefined;
     }
 
     // 5. Boolean fields: Ensure they are booleans
-    const booleanFields = ['public', 'bookmarked'];
+    const booleanFields = ["public", "bookmarked"];
     for (const field of booleanFields) {
       if (processed[field] !== undefined) {
-        if (typeof processed[field] === 'string') {
-          processed[field] = processed[field].toLowerCase() === 'true' || processed[field] === '1';
-        } else if (typeof processed[field] === 'number') {
+        if (typeof processed[field] === "string") {
+          processed[field] =
+            processed[field].toLowerCase() === "true" ||
+            processed[field] === "1";
+        } else if (typeof processed[field] === "number") {
           processed[field] = processed[field] !== 0;
         } else {
           processed[field] = Boolean(processed[field]);
@@ -1991,10 +2040,10 @@ export class IngestionService {
     }
 
     // 6. Number fields: Ensure they are numbers
-    const numberFields = ['is_deleted', 'total_cost', 'prompt_version'];
+    const numberFields = ["is_deleted", "total_cost", "prompt_version"];
     for (const field of numberFields) {
       if (processed[field] !== undefined && processed[field] !== null) {
-        if (typeof processed[field] === 'string') {
+        if (typeof processed[field] === "string") {
           const parsed = Number(processed[field]);
           processed[field] = isNaN(parsed) ? null : parsed;
         }
@@ -2042,9 +2091,14 @@ export class IngestionService {
       whereCondition: string;
       params: Record<string, unknown>;
     };
-  }): Promise<TraceRecordInsertType | ScoreRecordInsertType | ObservationRecordInsertType | null> {
+  }): Promise<
+    | TraceRecordInsertType
+    | ScoreRecordInsertType
+    | ObservationRecordInsertType
+    | null
+  > {
     const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
-    
+
     if (analyticsBackend === "clickhouse" && this.clickhouseClient) {
       return await this.getClickhouseRecord(params as any);
     } else if (analyticsBackend === "doris" && this.dorisClient) {

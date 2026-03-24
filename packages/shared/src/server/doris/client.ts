@@ -33,7 +33,7 @@ export interface DorisClientConfig {
   maxRetries?: number;
   retryDelay?: number;
   headers?: Record<string, string>;
-  maxOpenConnections?:number;
+  maxOpenConnections?: number;
 }
 
 export type DorisClientType = DorisClient;
@@ -58,7 +58,8 @@ export class DorisClient {
       maxRetries: config.maxRetries || 3,
       retryDelay: config.retryDelay || 1000,
       headers: config.headers || {},
-      maxOpenConnections : config.maxOpenConnections || env.DORIS_MAX_OPEN_CONNECTIONS
+      maxOpenConnections:
+        config.maxOpenConnections || env.DORIS_MAX_OPEN_CONNECTIONS,
     };
 
     this.httpClient = axios.create({
@@ -69,15 +70,20 @@ export class DorisClient {
         password: this.config.password,
       },
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         ...this.config.headers,
       },
       // Enable automatic redirect following for Stream Load
       maxRedirects: 5,
       // Preserve auth headers on redirect
-      beforeRedirect: (options: any, { headers }: { headers: Record<string, string> }) => {
+      beforeRedirect: (
+        options: any,
+        { headers }: { headers: Record<string, string> },
+      ) => {
         if (options.auth) {
-          const authString = Buffer.from(`${options.auth.username}:${options.auth.password}`).toString('base64');
+          const authString = Buffer.from(
+            `${options.auth.username}:${options.auth.password}`,
+          ).toString("base64");
           headers.authorization = `Basic ${authString}`;
         }
       },
@@ -103,7 +109,7 @@ export class DorisClient {
           message: error.message,
         });
         return Promise.reject(error);
-      }
+      },
     );
 
     // Initialize MySQL connection pool for queries
@@ -129,11 +135,11 @@ export class DorisClient {
         acquireTimeout: this.config.timeout,
         timeout: this.config.timeout,
         connectTimeout: this.config.timeout,
-        timezone: '+00:00', // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
+        timezone: "+00:00", // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
       };
 
       // Only add database to config if it's not empty
-      if (this.config.database && this.config.database.trim() !== '') {
+      if (this.config.database && this.config.database.trim() !== "") {
         poolConfig.database = this.config.database;
       }
 
@@ -142,7 +148,7 @@ export class DorisClient {
       logger.debug("Doris MySQL connection pool initialized", {
         host,
         port: this.config.feQueryPort,
-        database: this.config.database || 'none',
+        database: this.config.database || "none",
       });
     } catch (error) {
       logger.error("Failed to initialize Doris MySQL connection pool", {
@@ -158,7 +164,11 @@ export class DorisClient {
    * @param options Query options
    * @returns Promise<any[]>
    */
-  async query(queryString: string, params: any[] = [], options: DorisQueryOptions = {}): Promise<any[]> {
+  async query(
+    queryString: string,
+    params: any[] = [],
+    options: DorisQueryOptions = {},
+  ): Promise<any[]> {
     if (!this.connectionPool) {
       throw new Error("MySQL connection pool not initialized");
     }
@@ -170,7 +180,9 @@ export class DorisClient {
 
     try {
       logger.debug("Executing Doris query", {
-        query: queryString.substring(0, 200) + (queryString.length > 200 ? "..." : ""),
+        query:
+          queryString.substring(0, 200) +
+          (queryString.length > 200 ? "..." : ""),
         paramsCount: params.length,
       });
 
@@ -180,19 +192,20 @@ export class DorisClient {
       if (params.length > 0) {
         // Manually replace ? placeholders with escaped values for basic compatibility
         params.forEach((param, index) => {
-          const placeholder = '?';
+          const placeholder = "?";
           const escapedValue = this.escapeValue(param);
           const placeholderIndex = finalQuery.indexOf(placeholder);
           if (placeholderIndex !== -1) {
-            finalQuery = finalQuery.substring(0, placeholderIndex) + 
-                        escapedValue + 
-                        finalQuery.substring(placeholderIndex + 1);
+            finalQuery =
+              finalQuery.substring(0, placeholderIndex) +
+              escapedValue +
+              finalQuery.substring(placeholderIndex + 1);
           }
         });
       }
 
       const [rows] = await this.connectionPool.query(finalQuery);
-      
+
       logger.debug("Doris query completed", {
         rowCount: Array.isArray(rows) ? rows.length : 0,
       });
@@ -212,41 +225,42 @@ export class DorisClient {
    */
   private escapeValue(value: any): string {
     if (value === null || value === undefined) {
-      return 'NULL';
+      return "NULL";
     }
-    
+
     // Handle arrays (for IN clauses)
     if (Array.isArray(value)) {
       if (value.length === 0) {
-        return 'NULL'; // Empty array becomes NULL
+        return "NULL"; // Empty array becomes NULL
       }
       // Recursively escape each array element and join with commas
-      return value.map(item => this.escapeValue(item)).join(', ');
+      return value.map((item) => this.escapeValue(item)).join(", ");
     }
-    
-    if (typeof value === 'string') {
+
+    if (typeof value === "string") {
       return `'${value.replace(/'/g, "''")}'`;
     }
-    
-    if (typeof value === 'boolean') {
+
+    if (typeof value === "boolean") {
       return String(value);
     }
-    
-    if (typeof value === 'number') {
+
+    if (typeof value === "number") {
       // Check if this looks like a millisecond timestamp (> year 2001)
-      if (value > 978307200000) { // 2001-01-01 in milliseconds
+      if (value > 978307200000) {
+        // 2001-01-01 in milliseconds
         // Convert timestamp to Doris DateTime format
         const date = new Date(value);
-        return `'${date.toISOString().replace('T', ' ').replace('Z', '')}'`;
+        return `'${date.toISOString().replace("T", " ").replace("Z", "")}'`;
       }
       // Regular number
       return String(value);
     }
-    
+
     if (value instanceof Date) {
-      return `'${value.toISOString().replace('T', ' ').replace('Z', '')}'`;
+      return `'${value.toISOString().replace("T", " ").replace("Z", "")}'`;
     }
-    
+
     // For other types, convert to string and escape
     return `'${String(value).replace(/'/g, "''")}'`;
   }
@@ -262,15 +276,18 @@ export class DorisClient {
     format?: string;
   }): Promise<{ json(): Promise<any[]> }> {
     const { query, query_params = {} } = options;
-    
+
     // Use unified parameter processor for consistency
-    const processedQuery = DorisParameterProcessor.processQuery(query, query_params);
+    const processedQuery = DorisParameterProcessor.processQuery(
+      query,
+      query_params,
+    );
 
     logger.info(`doris:query ${processedQuery}`);
 
     // Execute the processed query
     const result = await this.query(processedQuery, []);
-    
+
     // Return object with json() method for compatibility with ClickHouse client
     return {
       json: async () => result,
@@ -287,7 +304,7 @@ export class DorisClient {
   async streamLoad<T = any>(
     table: string,
     data: T[],
-    options: DorisStreamLoadOptions = {}
+    options: DorisStreamLoadOptions = {},
   ): Promise<void> {
     if (!data || data.length === 0) {
       logger.warn("No data provided for stream load", { table });
@@ -304,29 +321,31 @@ export class DorisClient {
 
     // Generate unique load label for idempotency
     const loadLabel = `langfuse_${table}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
+
     // Prepare request headers
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Expect': '100-continue',
-      'label': loadLabel,
-      'format': loadOptions.format,
-      'strip_outer_array': loadOptions.strip_outer_array.toString(),
-      'read_json_by_line': loadOptions.read_json_by_line.toString(),
-      'timeout': loadOptions.timeout.toString(),
+      "Content-Type": "application/json",
+      Expect: "100-continue",
+      label: loadLabel,
+      format: loadOptions.format,
+      strip_outer_array: loadOptions.strip_outer_array.toString(),
+      read_json_by_line: loadOptions.read_json_by_line.toString(),
+      timeout: loadOptions.timeout.toString(),
     };
 
     // Convert data to JSON string
     const jsonData = JSON.stringify(data);
-    
+
     const url = `/api/${this.config.database}/${table}/_stream_load`;
-    
+
     try {
       // Manual redirect handling to preserve authentication
-      const authString = Buffer.from(`${this.config.username}:${this.config.password}`).toString('base64');
+      const authString = Buffer.from(
+        `${this.config.username}:${this.config.password}`,
+      ).toString("base64");
       const authHeaders = {
         ...headers,
-        'Authorization': `Basic ${authString}`,
+        Authorization: `Basic ${authString}`,
       };
 
       // First attempt: try the FE endpoint
@@ -334,7 +353,7 @@ export class DorisClient {
         url,
         headers: authHeaders,
       });
-      
+
       let response = await this.httpClient.put(url, jsonData, {
         headers: authHeaders,
         maxBodyLength: Infinity,
@@ -351,13 +370,16 @@ export class DorisClient {
         });
 
         // Clean the redirect URL (remove embedded credentials)
-        const redirectUrl = response.headers.location.replace(/^http:\/\/[^@]+@/, 'http://');
-        
+        const redirectUrl = response.headers.location.replace(
+          /^http:\/\/[^@]+@/,
+          "http://",
+        );
+
         logger.debug("DorisClient: Sending PUT request to BE (redirect)", {
           redirectUrl,
           headers: authHeaders,
         });
-        
+
         // Make the request to the redirect URL with proper auth
         response = await axios.put(redirectUrl, jsonData, {
           headers: authHeaders,
@@ -371,8 +393,8 @@ export class DorisClient {
       const result = response.data;
       if (result.Status !== "Success") {
         // Extract error message from different response formats
-        let errorMessage = 'Unknown error';
-        
+        let errorMessage = "Unknown error";
+
         if (result.Message) {
           // Standard Stream Load error format
           errorMessage = result.Message;
@@ -385,16 +407,16 @@ export class DorisClient {
         } else if (result.data) {
           // Data field contains error details
           errorMessage = result.data;
-        } else if (typeof result === 'string') {
+        } else if (typeof result === "string") {
           // Plain text response
           errorMessage = result;
         }
-        
+
         logger.debug("DorisClient: Stream load failed", {
           responseData: result,
           errorMessage,
         });
-        
+
         throw new Error(`Stream load failed: ${errorMessage}`);
       }
 
@@ -405,50 +427,49 @@ export class DorisClient {
         loadedRows: result.NumberLoadedRows,
         filteredRows: result.NumberFilteredRows,
       });
-
     } catch (error) {
       // Enhanced error handling for different error types
-      let errorMessage = 'Unknown error';
-      
-      if (error && typeof error === 'object' && 'response' in error) {
+      let errorMessage = "Unknown error";
+
+      if (error && typeof error === "object" && "response" in error) {
         // Axios HTTP error with response
         const axiosError = error as any;
         if (axiosError.response?.data) {
           const responseData = axiosError.response.data;
-          
+
           logger.debug("DorisClient: HTTP error response data", {
             status: axiosError.response.status,
             statusText: axiosError.response.statusText,
             responseData: responseData,
           });
-          
+
           if (responseData.msg && responseData.data) {
             errorMessage = `${responseData.msg}: ${responseData.data}`;
           } else if (responseData.msg) {
             errorMessage = responseData.msg;
           } else if (responseData.Message) {
             errorMessage = responseData.Message;
-          } else if (typeof responseData === 'string') {
+          } else if (typeof responseData === "string") {
             errorMessage = responseData;
           } else {
             errorMessage = `HTTP ${axiosError.response.status}: ${axiosError.response.statusText}`;
           }
         } else {
-          errorMessage = axiosError.message || 'Network error';
+          errorMessage = axiosError.message || "Network error";
         }
       } else if (error instanceof Error) {
         errorMessage = error.message;
       } else {
         errorMessage = String(error);
       }
-      
+
       logger.error("Stream load failed", {
         table,
         recordCount: data.length,
         loadLabel,
         error: errorMessage,
       });
-      
+
       throw new Error(errorMessage);
     }
   }
@@ -463,30 +484,35 @@ export class DorisClient {
   async insert<T = any>(
     table: string,
     data: T[],
-    options: DorisStreamLoadOptions = {}
+    options: DorisStreamLoadOptions = {},
   ): Promise<void> {
     let lastError: Error | null = null;
-    
+
     for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
       try {
         await this.streamLoad(table, data, options);
         return; // Success, exit retry loop
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        
+
         if (attempt < this.config.maxRetries) {
           const delay = this.config.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          logger.warn(`Stream load attempt ${attempt} failed, retrying in ${delay}ms`, {
-            table,
-            error: lastError.message,
-          });
-          await new Promise(resolve => setTimeout(resolve, delay));
+          logger.warn(
+            `Stream load attempt ${attempt} failed, retrying in ${delay}ms`,
+            {
+              table,
+              error: lastError.message,
+            },
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
     }
 
     // All retries failed
-    throw new Error(`Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message}`);
+    throw new Error(
+      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message}`,
+    );
   }
 
   /**
@@ -495,7 +521,7 @@ export class DorisClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await this.httpClient.get('/api/health');
+      const response = await this.httpClient.get("/api/health");
       return response.status === 200;
     } catch (error) {
       logger.error("Doris health check failed", { error });
@@ -509,7 +535,9 @@ export class DorisClient {
    */
   async getDatabaseInfo(): Promise<any> {
     try {
-      const response = await this.httpClient.get(`/api/${this.config.database}`);
+      const response = await this.httpClient.get(
+        `/api/${this.config.database}`,
+      );
       return response.data;
     } catch (error) {
       logger.error("Failed to get database info", { error });
@@ -578,7 +606,7 @@ export class DorisClientManager {
    */
   public getClient(config: DorisClientConfig = {}): DorisClientType {
     const key = this.generateClientKey(config);
-    
+
     if (!this.clientMap.has(key)) {
       const client = new DorisClient(config);
       this.clientMap.set(key, client);
@@ -592,7 +620,7 @@ export class DorisClientManager {
    */
   public async closeAllConnections(): Promise<void> {
     const closePromises = Array.from(this.clientMap.values()).map((client) =>
-      client.close()
+      client.close(),
     );
     this.clientMap.clear();
     await Promise.all(closePromises);
@@ -610,8 +638,13 @@ export const dorisClient = (config?: DorisClientConfig): DorisClientType => {
 
 // Configuration for datetime field handling
 const TIMESTAMP_FIELDS = [
-  "timestamp", "created_at", "updated_at", "event_ts", 
-  "start_time", "end_time", "completion_start_time"
+  "timestamp",
+  "created_at",
+  "updated_at",
+  "event_ts",
+  "start_time",
+  "end_time",
+  "completion_start_time",
 ] as const;
 
 const DATE_FIELD_MAPPINGS = {
@@ -625,7 +658,7 @@ const DATE_FIELD_MAPPINGS = {
  */
 const parseTimestamp = (value: unknown): Date | null => {
   if (!value) return null;
-  
+
   if (value instanceof Date) return value;
   if (typeof value === "number") return new Date(value);
   if (typeof value === "string") {
@@ -638,7 +671,7 @@ const parseTimestamp = (value: unknown): Date | null => {
     const parsed = parseInt(value);
     return parsed > 0 ? new Date(parsed) : null;
   }
-  
+
   return null;
 };
 
@@ -648,19 +681,19 @@ const parseTimestamp = (value: unknown): Date | null => {
 const normalizeValue = (key: string, value: unknown): unknown => {
   // Convert undefined to null
   if (value === undefined) return null;
-  
+
   // Handle arrays - empty arrays become null
   if (Array.isArray(value)) return value.length > 0 ? value : null;
-  
+
   // Handle Date objects - convert to ISO string
   if (value instanceof Date) return value.toISOString();
-  
+
   // Handle timestamp fields - convert to ISO string
   if (TIMESTAMP_FIELDS.includes(key as any) && value != null) {
     const date = parseTimestamp(value);
     return date ? date.toISOString() : value;
   }
-  
+
   return value;
 };
 
@@ -668,9 +701,9 @@ const normalizeValue = (key: string, value: unknown): unknown => {
  * Generate date field from timestamp field
  */
 const generateDateField = (
-  record: Record<string, any>, 
-  sourceField: string, 
-  dateField: string
+  record: Record<string, any>,
+  sourceField: string,
+  dateField: string,
 ): void => {
   if (record[sourceField] && !record[dateField]) {
     try {
@@ -683,7 +716,7 @@ const generateDateField = (
       logger.warn(`Failed to generate ${dateField} from ${sourceField}`, {
         sourceField,
         value: record[sourceField],
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -695,9 +728,9 @@ const generateDateField = (
  */
 export const formatDataForDoris = <T extends Record<string, any>>(
   data: T[],
-  tableName?: string
+  tableName?: string,
 ): T[] => {
-  return data.map(record => {
+  return data.map((record) => {
     // Step 1: Normalize all field values
     const formatted = Object.entries(record).reduce((acc, [key, value]) => {
       (acc as any)[key] = normalizeValue(key, value);
@@ -705,8 +738,10 @@ export const formatDataForDoris = <T extends Record<string, any>>(
     }, {} as T);
 
     // Step 2: Generate date fields based on table type
-    const mapping = tableName ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS] : null;
-    
+    const mapping = tableName
+      ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS]
+      : null;
+
     if (mapping) {
       // Table-specific date field generation
       generateDateField(formatted, mapping.sourceField, mapping.dateField);

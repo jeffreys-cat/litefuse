@@ -43,11 +43,23 @@ import { ClickHouseClientConfigOptions } from "@clickhouse/client";
 import { recordDistribution } from "../instrumentation";
 import { prisma } from "../../db";
 import { measureAndReturn } from "../clickhouse/measureAndReturn";
-import { scoresColumnsTableUiColumnDefinitions, scoresColumnsTableUiColumnDefinitionsForDoris } from "../tableMappings/mapScoresColumnsTable";
+import {
+  scoresColumnsTableUiColumnDefinitions,
+  scoresColumnsTableUiColumnDefinitionsForDoris,
+} from "../tableMappings/mapScoresColumnsTable";
 import { scoresTableCols } from "../../tableDefinitions/scoresTable";
 import { eventsTraceMetadata } from "../queries/clickhouse-sql/query-fragments";
-import { isDorisBackend, convertDateToAnalyticsDateTime, dq } from "./analytics";
-import { queryDoris, upsertDoris, commandDoris, queryDorisStream } from "./doris";
+import {
+  isDorisBackend,
+  convertDateToAnalyticsDateTime,
+  dq,
+} from "./analytics";
+import {
+  queryDoris,
+  upsertDoris,
+  commandDoris,
+  queryDorisStream,
+} from "./doris";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -62,7 +74,7 @@ const parseTimestamp = (timestamp: string | Date): Date => {
   }
 
   // Default ClickHouse behavior - always expect string
-  if (typeof timestamp === 'string') {
+  if (typeof timestamp === "string") {
     return parseClickhouseUTCDateTimeFormat(timestamp);
   }
 
@@ -294,11 +306,11 @@ const formatMetadataSelect = (
       "updated_at",
       "event_ts",
       "is_deleted",
-      "environment"
+      "environment",
     ];
 
-    const selectColumns = excludeMetadata 
-      ? baseColumns 
+    const selectColumns = excludeMetadata
+      ? baseColumns
       : [...baseColumns, "metadata"];
 
     return [
@@ -368,7 +380,9 @@ export const getScoresForSessions = async <
     });
 
     const includeMetadataPayloadDoris = excludeMetadata ? false : true;
-    return rows.map((r) => convertClickhouseScoreToDomain(r, includeMetadataPayloadDoris));
+    return rows.map((r) =>
+      convertClickhouseScoreToDomain(r, includeMetadataPayloadDoris),
+    );
   }
 
   const query = `
@@ -454,10 +468,10 @@ export const getScoresForDatasetRuns = async <
 
     const includeMetadataPayloadDoris = excludeMetadata ? false : true;
     return rows.map((r) =>
-      convertClickhouseScoreToDomain<ExcludeMetadata, AggregatableScoreDataType>(
-        r,
-        includeMetadataPayloadDoris,
-      ),
+      convertClickhouseScoreToDomain<
+        ExcludeMetadata,
+        AggregatableScoreDataType
+      >(r, includeMetadataPayloadDoris),
     );
   }
 
@@ -1441,14 +1455,16 @@ const getScoresUiGeneric = async <T>(props: {
       tracesPrefix: "t",
     });
     scoresFilter.push(
-      ...createDorisFilterFromFilterState(filter, scoresTableUiColumnDefinitions),
+      ...createDorisFilterFromFilterState(
+        filter,
+        scoresTableUiColumnDefinitions,
+      ),
     );
     const scoresFilterRes = scoresFilter.apply();
 
     // Only join traces for rows or if there is a trace filter on counts
     const performTracesJoin =
-      props.select === "rows" ||
-      scoresFilter.some((f) => f.table === "traces");
+      props.select === "rows" || scoresFilter.some((f) => f.table === "traces");
 
     const query = `
         SELECT 
@@ -1530,8 +1546,7 @@ const getScoresUiGeneric = async <T>(props: {
 
   // Only join traces for rows or if there is a trace filter on counts
   const performTracesJoin =
-    props.select === "rows" ||
-    scoresFilter.some((f) => f.table === "traces");
+    props.select === "rows" || scoresFilter.some((f) => f.table === "traces");
 
   const query = `
       SELECT
@@ -1647,9 +1662,7 @@ const getScoresUiGenericFromEvents = async <T>(props: {
     ),
   );
 
-  const scoreOnlyFilters = scoresFilter.filter(
-    (f) => f.table !== "traces",
-  );
+  const scoreOnlyFilters = scoresFilter.filter((f) => f.table !== "traces");
   const scoreOnlyFilterRes = scoreOnlyFilters.apply();
 
   // Trace-level filter entries from the frontend filter state

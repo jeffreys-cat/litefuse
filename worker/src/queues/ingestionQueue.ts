@@ -24,7 +24,10 @@ import { prisma } from "@langfuse/shared/src/db";
 import { env } from "../env";
 import { IngestionService } from "../services/IngestionService";
 import { ClickhouseWriter, TableName } from "../services/ClickhouseWriter";
-import { DorisWriter, TableName as DorisTableName } from "../services/DorisWriter";
+import {
+  DorisWriter,
+  TableName as DorisTableName,
+} from "../services/DorisWriter";
 import { chunk } from "lodash";
 import { randomUUID } from "crypto";
 
@@ -92,9 +95,15 @@ export const ingestionQueueProcessorBuilder = (
 
         // 写入到配置的后端
         if (clickhouseWriter) {
-          clickhouseWriter.addToQueue(TableName.BlobStorageFileLog, blobStorageRecord);
+          clickhouseWriter.addToQueue(
+            TableName.BlobStorageFileLog,
+            blobStorageRecord,
+          );
         } else if (dorisWriter) {
-          dorisWriter.addToQueue(DorisTableName.BlobStorageFileLog, blobStorageRecord);
+          dorisWriter.addToQueue(
+            DorisTableName.BlobStorageFileLog,
+            blobStorageRecord,
+          );
         }
       }
 
@@ -287,8 +296,10 @@ export const ingestionQueueProcessorBuilder = (
         env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
       // 根据配置传递相应的client和writer
-      const clickhouseClientInstance = (analyticsBackend === "clickhouse") ? clickhouseClient() : null;
-      const dorisClientInstance = (analyticsBackend === "doris") ? dorisClient() : null;
+      const clickhouseClientInstance =
+        analyticsBackend === "clickhouse" ? clickhouseClient() : null;
+      const dorisClientInstance =
+        analyticsBackend === "doris" ? dorisClient() : null;
 
       await new IngestionService(
         redis,

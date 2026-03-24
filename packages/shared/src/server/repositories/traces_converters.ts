@@ -57,14 +57,14 @@ export const convertClickhouseToDomain = (
 ): TraceDomain => {
   // Parse tags array - handle Doris string format
   let tags: string[] = [];
-  if (typeof record.tags === 'string') {
+  if (typeof record.tags === "string") {
     try {
       tags = JSON.parse(record.tags);
       if (!Array.isArray(tags)) {
         tags = [];
       }
     } catch (e) {
-      console.error('Failed to parse tags JSON:', e);
+      console.error("Failed to parse tags JSON:", e);
       tags = [];
     }
   } else if (Array.isArray(record.tags)) {

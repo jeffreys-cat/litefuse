@@ -1,7 +1,6 @@
 import { filterOperators } from "../../../interfaces/filters";
 import { clickhouseCompliantRandomCharacters } from "../../repositories";
-import { Filter,DbFilter } from "../filter";
-
+import { Filter, DbFilter } from "../filter";
 
 // export type DorisOperator =
 //   | (typeof filterOperators)[keyof typeof filterOperators][number]
@@ -39,10 +38,10 @@ export class StringFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
+
     // 转义单引号以防止SQL注入
     const escapedValue = this.value.replace(/'/g, "''");
-    
+
     let query: string;
     switch (this.operator) {
       case "=":
@@ -62,7 +61,7 @@ export class StringFilter implements Filter {
         query = `STARTS_WITH(${fieldWithPrefix}, '${escapedValue}')`;
         break;
       case "ends with":
-        // 结束于操作，使用ENDS_WITH函数  
+        // 结束于操作，使用ENDS_WITH函数
         query = `ENDS_WITH(${fieldWithPrefix}, '${escapedValue}')`;
         break;
       default:
@@ -102,7 +101,7 @@ export class NumberFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
+
     return {
       query: `${fieldWithPrefix} ${this.operator} ${this.value}`,
       params: {}, // Doris 不使用参数化查询
@@ -133,10 +132,13 @@ export class DateTimeFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
+
     // 将Date对象转换为Doris DateTime(3)格式的字符串（UTC）
-    const dateTimeString = this.value.toISOString().replace('T', ' ').replace('Z', '');
-    
+    const dateTimeString = this.value
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "");
+
     return {
       query: `${fieldWithPrefix} ${this.operator} '${dateTimeString}'`,
       params: {}, // Doris 不使用参数化查询
@@ -169,12 +171,15 @@ export class StringOptionsFilter implements Filter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // Escape single quotes in values
-    const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
-    const valuesList = escapedValues.join(', ');
+    const escapedValues = this.values.map(
+      (value) => `'${value.replace(/'/g, "''")}'`,
+    );
+    const valuesList = escapedValues.join(", ");
 
-    const query = this.operator === "any of"
-      ? `${fieldWithPrefix} IN (${valuesList})`
-      : `${fieldWithPrefix} NOT IN (${valuesList})`;
+    const query =
+      this.operator === "any of"
+        ? `${fieldWithPrefix} IN (${valuesList})`
+        : `${fieldWithPrefix} NOT IN (${valuesList})`;
 
     return {
       query,
@@ -206,9 +211,9 @@ export class BooleanFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
+
     return {
-      query: `${fieldWithPrefix} ${this.operator} ${this.value ? 'TRUE' : 'FALSE'}`,
+      query: `${fieldWithPrefix} ${this.operator} ${this.value ? "TRUE" : "FALSE"}`,
       params: {}, // Doris 不使用参数化查询
     };
   }
@@ -234,7 +239,7 @@ export class NullFilter implements Filter {
 
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
-    
+
     return {
       query: `${fieldWithPrefix} ${this.operator}`,
       params: {},
@@ -267,23 +272,25 @@ export class ArrayOptionsFilter implements Filter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // Escape single quotes in values
-    const escapedValues = this.values.map(value => `'${value.replace(/'/g, "''")}'`);
+    const escapedValues = this.values.map(
+      (value) => `'${value.replace(/'/g, "''")}'`,
+    );
 
     let query: string;
     switch (this.operator) {
       case "any of":
         // Use arrays_overlap with array() function syntax for Doris
-        query = `arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(', ')}))`;
+        query = `arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(", ")}))`;
         break;
       case "none of":
         // Check array does not contain any of the specified values
-        query = `NOT arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(', ')}))`;
+        query = `NOT arrays_overlap(${fieldWithPrefix}, array(${escapedValues.join(", ")}))`;
         break;
       case "all of":
         // Check array contains all specified values
-        const allChecks = escapedValues.map(value =>
-          `array_contains(${fieldWithPrefix}, ${value})`
-        ).join(' AND ');
+        const allChecks = escapedValues
+          .map((value) => `array_contains(${fieldWithPrefix}, ${value})`)
+          .join(" AND ");
         query = `(${allChecks})`;
         break;
       default:
@@ -331,8 +338,10 @@ export class CategoryOptionsFilter implements Filter {
     const fieldRef = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // Escape values
-    const escapedValues = flattenedValues.map(value => `'${value.replace(/'/g, "''")}'`);
-    const valuesList = escapedValues.join(', ');
+    const escapedValues = flattenedValues.map(
+      (value) => `'${value.replace(/'/g, "''")}'`,
+    );
+    const valuesList = escapedValues.join(", ");
 
     switch (this.operator) {
       case "any of":
@@ -438,7 +447,7 @@ export class NumberObjectFilter implements Filter {
   apply(): DbFilter {
     const column = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
     const escapedKey = this.key.replace(/'/g, "''");
-    
+
     // 使用 Doris 的 MAP 访问语法进行数字比较
     return {
       query: `CAST(${column}['${escapedKey}'] AS DECIMAL(20,6)) ${this.operator} ${this.value}`,

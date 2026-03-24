@@ -101,7 +101,9 @@ describe("formatDataForDoris", () => {
         "traces",
       );
       expect((result[0] as any).timestamp_date).toBeDefined();
-      expect((result[0] as any).timestamp_date).toBe("2024-06-15T12:00:00.000Z");
+      expect((result[0] as any).timestamp_date).toBe(
+        "2024-06-15T12:00:00.000Z",
+      );
     });
 
     it("should not overwrite existing timestamp_date", () => {
@@ -114,7 +116,9 @@ describe("formatDataForDoris", () => {
         ],
         "traces",
       );
-      expect((result[0] as any).timestamp_date).toBe("2024-06-14T00:00:00.000Z");
+      expect((result[0] as any).timestamp_date).toBe(
+        "2024-06-14T00:00:00.000Z",
+      );
     });
 
     it("should not generate date field when timestamp is null", () => {

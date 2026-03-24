@@ -345,7 +345,9 @@ export const generateTracesForPublicApi = async ({
         (f.operator === ">=" || f.operator === ">"),
     ) as DateTimeFilter | undefined;
 
-    const environmentFilter = filter.filter((f: any) => f.field === "environment");
+    const environmentFilter = filter.filter(
+      (f: any) => f.field === "environment",
+    );
     const appliedEnvironmentFilter = environmentFilter.apply();
 
     // Skip indexes logic still applies to Doris

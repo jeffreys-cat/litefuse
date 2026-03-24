@@ -1,22 +1,16 @@
 import { env } from "../../env";
-import {
-  dorisClient,
-} from "../doris/client";
+import { dorisClient } from "../doris/client";
 import { DorisParameterProcessor } from "../doris/parameterProcessor";
 import { logger } from "../logger";
 import { instrumentAsync } from "../instrumentation";
 import { randomUUID } from "crypto";
 import { convertDateToAnalyticsDateTime } from "./analytics";
 
-
-
 /**
  * Upsert records into Doris using Stream Load
  * Leverages Doris Unique model for native upsert capability
  */
-export async function upsertDoris<
-  T extends Record<string, unknown>,
->(opts: {
+export async function upsertDoris<T extends Record<string, unknown>>(opts: {
   table: "scores" | "traces" | "observations";
   records: T[];
   eventBodyMapper?: (body: T) => Record<string, unknown>;
@@ -27,7 +21,9 @@ export async function upsertDoris<
     span.setAttribute("doris.records.count", opts.records.length);
 
     if (opts.records.length === 0) {
-      logger.warn("No records provided for Doris upsert", { table: opts.table });
+      logger.warn("No records provided for Doris upsert", {
+        table: opts.table,
+      });
       return;
     }
 
@@ -54,7 +50,6 @@ export async function upsertDoris<
         recordCount: opts.records.length,
         table: opts.table,
       });
-
     } catch (error) {
       logger.error(`Doris upsert failed for ${opts.table}`, {
         error: error instanceof Error ? error.message : String(error),
@@ -77,8 +72,11 @@ export async function queryDoris<T>(opts: {
 }): Promise<T[]> {
   return await instrumentAsync({ name: "doris-query" }, async (span) => {
     // Use unified parameter processor
-    const processedQuery = DorisParameterProcessor.processQuery(opts.query, opts.params);
-    
+    const processedQuery = DorisParameterProcessor.processQuery(
+      opts.query,
+      opts.params,
+    );
+
     span.setAttribute("doris.query.text", processedQuery);
 
     try {
@@ -96,7 +94,7 @@ export async function queryDoris<T>(opts: {
       const data = await result.json();
 
       span.setAttribute("doris.records.count", data.length);
-      
+
       return data as T[];
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
@@ -117,10 +115,13 @@ export async function commandDoris(opts: {
 }): Promise<void> {
   return await instrumentAsync({ name: "doris-command" }, async (span) => {
     // Use unified parameter processor
-    const processedQuery = DorisParameterProcessor.processQuery(opts.query, opts.params);
-    
+    const processedQuery = DorisParameterProcessor.processQuery(
+      opts.query,
+      opts.params,
+    );
+
     span.setAttribute("doris.query.text", processedQuery);
-    
+
     try {
       const client = dorisClient(opts.dorisConfigs);
       await client.query(processedQuery, []);
@@ -130,7 +131,9 @@ export async function commandDoris(opts: {
       }
     } catch (error) {
       logger.error("Doris command failed", {
-        query: processedQuery.substring(0, 200) + (processedQuery.length > 200 ? "..." : ""),
+        query:
+          processedQuery.substring(0, 200) +
+          (processedQuery.length > 200 ? "..." : ""),
         error: error instanceof Error ? error.message : String(error),
         tags: opts.tags,
       });
@@ -154,10 +157,13 @@ export async function* queryDorisStream<T>(opts: {
     span.setAttribute("doris.query.text", opts.query);
 
     const client = dorisClient();
-    
+
     // Use unified parameter processor for consistency
-    const processedQuery = DorisParameterProcessor.processQuery(opts.query, opts.params);
-    
+    const processedQuery = DorisParameterProcessor.processQuery(
+      opts.query,
+      opts.params,
+    );
+
     // For streaming, we'll execute the query and yield results
     // Note: Doris doesn't have native streaming like ClickHouse, so we simulate it
     const result = await client.queryWithParams({
@@ -166,7 +172,7 @@ export async function* queryDorisStream<T>(opts: {
     });
 
     const data = await result.json();
-    
+
     span.setAttribute("doris.records.count", data.length);
 
     // Yield results in batches to simulate streaming
@@ -188,7 +194,7 @@ export async function* queryDorisStream<T>(opts: {
 export function parseDorisUTCDateTimeFormat(dateString: string): Date {
   // Doris typically returns dates in MySQL format: YYYY-MM-DD HH:MM:SS
   // Convert to standard ISO format for parsing
-  const isoFormat = dateString.replace(' ', 'T') + 'Z';
+  const isoFormat = dateString.replace(" ", "T") + "Z";
   return new Date(isoFormat);
 }
 
@@ -199,16 +205,20 @@ export function parseDorisUTCDateTimeFormat(dateString: string): Date {
 export const upsertDorisScore = async (score: Partial<any>) => {
   // Validate all UNIQUE KEY fields are present
   if (!["id", "project_id", "name", "timestamp"].every((key) => key in score)) {
-    throw new Error("UNIQUE KEY fields (id, project_id, name, timestamp) must be provided to upsert Score in Doris.");
+    throw new Error(
+      "UNIQUE KEY fields (id, project_id, name, timestamp) must be provided to upsert Score in Doris.",
+    );
   }
-  
+
   // Ensure timestamp_date is derived from timestamp
   const enrichedScore = {
     ...score,
     // Let Doris handle timezone conversion automatically for Date fields
-    timestamp_date: score.timestamp ? new Date(score.timestamp).toISOString() : undefined,
+    timestamp_date: score.timestamp
+      ? new Date(score.timestamp).toISOString()
+      : undefined,
   };
-  
+
   await upsertDoris({
     table: "scores",
     records: [enrichedScore],
@@ -228,16 +238,20 @@ export const upsertDorisScore = async (score: Partial<any>) => {
 export const upsertDorisTrace = async (trace: Partial<any>) => {
   // Validate all UNIQUE KEY fields are present
   if (!["id", "project_id", "timestamp"].every((key) => key in trace)) {
-    throw new Error("UNIQUE KEY fields (id, project_id, timestamp) must be provided to upsert Trace in Doris.");
+    throw new Error(
+      "UNIQUE KEY fields (id, project_id, timestamp) must be provided to upsert Trace in Doris.",
+    );
   }
-  
+
   // Ensure timestamp_date is derived from timestamp
   const enrichedTrace = {
     ...trace,
     // Let Doris handle timezone conversion automatically for Date fields
-    timestamp_date: trace.timestamp ? new Date(trace.timestamp).toISOString() : undefined,
+    timestamp_date: trace.timestamp
+      ? new Date(trace.timestamp).toISOString()
+      : undefined,
   };
-  
+
   await upsertDoris({
     table: "traces",
     records: [enrichedTrace],
@@ -256,17 +270,25 @@ export const upsertDorisTrace = async (trace: Partial<any>) => {
  */
 export const upsertDorisObservation = async (observation: Partial<any>) => {
   // Validate all UNIQUE KEY fields are present
-  if (!["id", "project_id", "start_time", "type"].every((key) => key in observation)) {
-    throw new Error("UNIQUE KEY fields (id, project_id, start_time, type) must be provided to upsert Observation in Doris.");
+  if (
+    !["id", "project_id", "start_time", "type"].every(
+      (key) => key in observation,
+    )
+  ) {
+    throw new Error(
+      "UNIQUE KEY fields (id, project_id, start_time, type) must be provided to upsert Observation in Doris.",
+    );
   }
-  
+
   // Ensure start_time_date is derived from start_time
   const enrichedObservation = {
     ...observation,
     // Let Doris handle timezone conversion automatically for Date fields
-    start_time_date: observation.start_time ? new Date(observation.start_time).toISOString() : undefined,
+    start_time_date: observation.start_time
+      ? new Date(observation.start_time).toISOString()
+      : undefined,
   };
-  
+
   await upsertDoris({
     table: "observations",
     records: [enrichedObservation],
@@ -282,13 +304,15 @@ export const upsertDorisObservation = async (observation: Partial<any>) => {
 /**
  * Batch upsert multiple records of the same type
  */
-export const batchUpsertDoris = async <T extends Record<string, unknown>>(opts: {
+export const batchUpsertDoris = async <
+  T extends Record<string, unknown>,
+>(opts: {
   table: "scores" | "traces" | "observations";
   records: T[];
   batchSize?: number;
 }) => {
   const { table, records, batchSize = 1000 } = opts;
-  
+
   if (records.length === 0) return;
 
   // Process in batches to avoid memory issues
@@ -313,4 +337,4 @@ export const batchUpsertDoris = async <T extends Record<string, unknown>>(opts: 
 function convertDateToDorisDateTime(date: Date): string {
   // Use the same timezone conversion as queries to ensure consistency
   return convertDateToAnalyticsDateTime(date);
-} 
+}
