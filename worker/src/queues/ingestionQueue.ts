@@ -101,7 +101,7 @@ export const ingestionQueueProcessorBuilder = (
           );
         } else if (dorisWriter) {
           dorisWriter.addToQueue(
-            DorisTableName.BlobStorageFileLog,
+            TableName.BlobStorageFileLog,
             blobStorageRecord,
           );
         }

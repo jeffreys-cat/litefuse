@@ -133,11 +133,21 @@ export class DateTimeFilter implements Filter {
   apply(): DbFilter {
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
-    // 将Date对象转换为Doris DateTime(3)格式的字符串（UTC）
+    // 将Date对象转换为Doris DateTime(3)格式的字符串
+    // const dateTimeString = this.value.toISOString().replace('T', ' ').replace('Z', '');
     const dateTimeString = this.value
-      .toISOString()
+      .toLocaleString("sv-SE", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        fractionalSecondDigits: 3,
+      })
       .replace("T", " ")
-      .replace("Z", "");
+      .replace(",", ".");
 
     return {
       query: `${fieldWithPrefix} ${this.operator} '${dateTimeString}'`,

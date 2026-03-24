@@ -119,7 +119,15 @@ export class DorisParameterProcessor {
     }
 
     if (typeof value === "string") {
-      // String already formatted (e.g., from convertDateToAnalyticsDateTime), use as-is
+      // Try to parse as date, fallback to original string
+      try {
+        const date = new Date(value);
+        if (!isNaN(date.getTime())) {
+          return `'${convertDateToAnalyticsDateTime(date)}'`;
+        }
+      } catch {
+        // Fallback to original string with quotes
+      }
       return `'${value}'`;
     }
 
@@ -151,7 +159,7 @@ export class DorisParameterProcessor {
    * Format boolean values
    */
   private static formatBooleanValue(value: unknown): string {
-    return Boolean(value) ? "TRUE" : "FALSE";
+    return value ? "TRUE" : "FALSE";
   }
 
   /**

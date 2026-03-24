@@ -1,10 +1,18 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
+import axios, { AxiosInstance } from "axios";
 import mysql from "mysql2/promise";
 import { env } from "../../env";
 import { getCurrentSpan } from "../instrumentation";
 import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
+
+// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
+// mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
+// Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
+// mysql2 is in serverExternalPackages (next.config.mjs) so this internal require works at runtime.
+
+const CharsetToEncoding = require("mysql2/lib/constants/charset_encodings");
+CharsetToEncoding[33] = "utf8";
 
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
@@ -49,17 +57,17 @@ export class DorisClient {
 
   constructor(config: DorisClientConfig = {}) {
     this.config = {
-      feHttpUrl: config.feHttpUrl || env.DORIS_FE_HTTP_URL,
-      feQueryPort: config.feQueryPort || env.DORIS_FE_QUERY_PORT,
-      database: config.database || env.DORIS_DB,
-      username: config.username || env.DORIS_USER || "root",
-      password: config.password || env.DORIS_PASSWORD,
-      timeout: config.timeout || env.DORIS_REQUEST_TIMEOUT_MS,
-      maxRetries: config.maxRetries || 3,
-      retryDelay: config.retryDelay || 1000,
+      feHttpUrl: config.feHttpUrl ?? env.DORIS_FE_HTTP_URL,
+      feQueryPort: config.feQueryPort ?? env.DORIS_FE_QUERY_PORT,
+      database: config.database ?? env.DORIS_DB,
+      username: config.username ?? env.DORIS_USER ?? "root",
+      password: config.password ?? env.DORIS_PASSWORD,
+      timeout: config.timeout ?? env.DORIS_REQUEST_TIMEOUT_MS,
+      maxRetries: config.maxRetries ?? 3,
+      retryDelay: config.retryDelay ?? 1000,
       headers: config.headers || {},
       maxOpenConnections:
-        config.maxOpenConnections || env.DORIS_MAX_OPEN_CONNECTIONS,
+        config.maxOpenConnections ?? env.DORIS_MAX_OPEN_CONNECTIONS,
     };
 
     this.httpClient = axios.create({
@@ -167,16 +175,11 @@ export class DorisClient {
   async query(
     queryString: string,
     params: any[] = [],
-    options: DorisQueryOptions = {},
+    _options: DorisQueryOptions = {},
   ): Promise<any[]> {
     if (!this.connectionPool) {
       throw new Error("MySQL connection pool not initialized");
     }
-
-    const queryOptions = {
-      timeout: this.config.timeout,
-      ...options,
-    };
 
     try {
       logger.debug("Executing Doris query", {
@@ -191,7 +194,7 @@ export class DorisClient {
       let finalQuery = queryString;
       if (params.length > 0) {
         // Manually replace ? placeholders with escaped values for basic compatibility
-        params.forEach((param, index) => {
+        params.forEach((param) => {
           const placeholder = "?";
           const escapedValue = this.escapeValue(param);
           const placeholderIndex = finalQuery.indexOf(placeholder);
@@ -590,10 +593,10 @@ export class DorisClientManager {
    */
   private generateClientKey(config: DorisClientConfig): string {
     const keyParams = {
-      feHttpUrl: config.feHttpUrl || env.DORIS_FE_HTTP_URL,
-      database: config.database || env.DORIS_DB,
-      username: config.username || env.DORIS_USER,
-      timeout: config.timeout || env.DORIS_REQUEST_TIMEOUT_MS,
+      feHttpUrl: config.feHttpUrl ?? env.DORIS_FE_HTTP_URL,
+      database: config.database ?? env.DORIS_DB,
+      username: config.username ?? env.DORIS_USER,
+      timeout: config.timeout ?? env.DORIS_REQUEST_TIMEOUT_MS,
       headers: config.headers,
     };
     return JSON.stringify(keyParams);
