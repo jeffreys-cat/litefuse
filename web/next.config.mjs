@@ -61,7 +61,6 @@ const nextConfig = {
     "@opentelemetry/sdk-node",
     "@opentelemetry/instrumentation-winston",
     "kysely",
-    "mysql2",
   ],
   poweredByHeader: false,
   basePath: env.NEXT_PUBLIC_BASE_PATH,
