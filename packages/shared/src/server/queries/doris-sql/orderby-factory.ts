@@ -51,4 +51,4 @@ export function orderByToDorisSQL(
 
   // Join all order by clauses with a comma and return
   return `ORDER BY ${orderByClauses.join(", ")}`;
-} 
+}

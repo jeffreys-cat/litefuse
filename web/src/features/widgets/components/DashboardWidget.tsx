@@ -218,7 +218,10 @@ export function DashboardWidget({
         };
       }
 
-      // Regular chart processing for non-pivot tables
+      // For HISTOGRAM chart type, preserve the raw metric value (JSON string)
+      // as HistogramChart needs to parse it
+      const isHistogramChart = widget.data.chartType === "HISTOGRAM";
+
       const metric = widget.data.metrics.slice().shift() ?? {
         measure: "count",
         agg: "count",
@@ -241,9 +244,11 @@ export function DashboardWidget({
                 return String(val);
               })()
             : formatMetricName(metricField),
-        metric: Array.isArray(metricValue)
-          ? metricValue
-          : Number(metricValue || 0),
+        metric: isHistogramChart
+          ? metricValue // Keep as-is (JSON string) for HistogramChart
+          : Array.isArray(metricValue)
+            ? metricValue
+            : Number(metricValue || 0),
         time_dimension: item["time_dimension"],
       };
     });

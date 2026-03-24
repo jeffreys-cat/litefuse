@@ -110,7 +110,9 @@ const EnvSchema = z.object({
     .default(3),
 
   // Analytics backend selection
-  LANGFUSE_ANALYTICS_BACKEND: z.enum(["clickhouse", "doris"]).default("clickhouse"),
+  LANGFUSE_ANALYTICS_BACKEND: z
+    .enum(["clickhouse", "doris"])
+    .default("clickhouse"),
 
   CLICKHOUSE_URL: z.string().url(),
   CLICKHOUSE_USER: z.string(),
@@ -130,7 +132,9 @@ const EnvSchema = z.object({
   DORIS_DB: z.string().default("langfuse").optional(),
   DORIS_USER: z.string().optional(),
   DORIS_PASSWORD: z.string().optional(),
-  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z.enum(["true", "false"]).default("false"),
+  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
+    .enum(["true", "false"])
+    .default("false"),
   LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY: z.coerce
     .number()
     .positive()

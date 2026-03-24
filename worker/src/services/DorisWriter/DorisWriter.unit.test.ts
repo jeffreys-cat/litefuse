@@ -79,9 +79,7 @@ describe("DorisWriter", () => {
     expect(writer.writeInterval).toBe(
       env.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS,
     );
-    expect(writer.maxAttempts).toBe(
-      env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS,
-    );
+    expect(writer.maxAttempts).toBe(env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS);
   });
 
   it("should add items to the queue", () => {
@@ -100,7 +98,7 @@ describe("DorisWriter", () => {
       updated_at: Date.now(),
       event_ts: Date.now(),
     } as any;
-    
+
     writer.addToQueue(TableName.Traces, traceData);
 
     expect(writer["queue"][TableName.Traces]).toHaveLength(1);
@@ -140,7 +138,7 @@ describe("DorisWriter", () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
-    
+
     writer.addToQueue(TableName.Traces, {
       id: "1",
       name: "test",
@@ -248,7 +246,7 @@ describe("DorisWriter", () => {
       updated_at: Date.now(),
       event_ts: Date.now(),
     } as any);
-    
+
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
@@ -257,9 +255,7 @@ describe("DorisWriter", () => {
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(writer["intervalId"]).toBeNull();
-    expect(logger.info).toHaveBeenCalledWith(
-      "DorisWriter shutdown complete.",
-    );
+    expect(logger.info).toHaveBeenCalledWith("DorisWriter shutdown complete.");
   });
 
   it("should handle multiple table types", async () => {
@@ -331,7 +327,7 @@ describe("DorisWriter", () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
-    
+
     writer["isIntervalFlushInProgress"] = true;
     writer.addToQueue(TableName.Traces, {
       id: "1",
@@ -369,7 +365,7 @@ describe("DorisWriter", () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
-    
+
     writer.addToQueue(TableName.Traces, {
       id: "1",
       name: "trace",
@@ -476,7 +472,7 @@ describe("DorisWriter", () => {
         created_at: Date.now(),
         updated_at: Date.now(),
         event_ts: Date.now(),
-      } as any)
+      } as any),
     );
 
     await Promise.all(writes);
@@ -596,7 +592,7 @@ describe("DorisWriter", () => {
       expect.arrayContaining(
         new Array(partialQueueSize).fill(expect.any(Object)),
       ),
-      expect.any(Object)
+      expect.any(Object),
     );
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
@@ -693,16 +689,16 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(recordIncrementSpy).toHaveBeenCalledWith(
-      "langfuse.queue.doris_writer.request"
+      "langfuse.queue.doris_writer.request",
     );
-    
+
     expect(recordGaugeSpy).toHaveBeenCalledWith(
       "ingestion_doris_insert_queue_length",
       0,
       {
         unit: "records",
         entityType: "traces",
-      }
+      },
     );
   });
 
@@ -710,7 +706,7 @@ describe("DorisWriter", () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
-    
+
     writer.addToQueue(TableName.Traces, {
       id: "1",
       name: "test",
@@ -732,4 +728,4 @@ describe("DorisWriter", () => {
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
-}); 
+});

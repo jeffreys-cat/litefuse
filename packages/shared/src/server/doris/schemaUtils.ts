@@ -13,9 +13,7 @@ export type IngestionEntityTypes =
   | "score"
   | "sdk_log";
 
-export const getDorisEntityType = (
-  eventType: string,
-): IngestionEntityTypes => {
+export const getDorisEntityType = (eventType: string): IngestionEntityTypes => {
   switch (eventType) {
     case eventTypes.TRACE_CREATE:
       return "trace";

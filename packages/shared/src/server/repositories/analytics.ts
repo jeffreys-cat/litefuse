@@ -1,15 +1,15 @@
 import { env } from "../../env";
-import { 
-  queryClickhouse, 
-  queryClickhouseStream, 
+import {
+  queryClickhouse,
+  queryClickhouseStream,
   commandClickhouse,
-  parseClickhouseUTCDateTimeFormat
+  parseClickhouseUTCDateTimeFormat,
 } from "./clickhouse";
-import { 
-  queryDoris, 
-  queryDorisStream, 
+import {
+  queryDoris,
+  queryDorisStream,
   commandDoris,
-  parseDorisUTCDateTimeFormat
+  parseDorisUTCDateTimeFormat,
 } from "./doris";
 import { logger } from "../logger";
 
@@ -25,9 +25,11 @@ export interface AnalyticsQueryOptions {
 /**
  * Query analytics backend (ClickHouse or Doris) based on configuration
  */
-export async function queryAnalytics<T>(opts: AnalyticsQueryOptions): Promise<T[]> {
+export async function queryAnalytics<T>(
+  opts: AnalyticsQueryOptions,
+): Promise<T[]> {
   const backend = env.LANGFUSE_ANALYTICS_BACKEND;
-  
+
   switch (backend) {
     case "doris":
       return await queryDoris<T>(opts);
@@ -40,9 +42,11 @@ export async function queryAnalytics<T>(opts: AnalyticsQueryOptions): Promise<T[
 /**
  * Stream query results from analytics backend
  */
-export async function* queryAnalyticsStream<T>(opts: AnalyticsQueryOptions): AsyncGenerator<T> {
+export async function* queryAnalyticsStream<T>(
+  opts: AnalyticsQueryOptions,
+): AsyncGenerator<T> {
   const backend = env.LANGFUSE_ANALYTICS_BACKEND;
-  
+
   switch (backend) {
     case "doris":
       yield* queryDorisStream<T>(opts);
@@ -54,13 +58,12 @@ export async function* queryAnalyticsStream<T>(opts: AnalyticsQueryOptions): Asy
   }
 }
 
-
 /**
  * Parse date format from analytics backend
  */
 export function parseAnalyticsDateTimeFormat(dateString: string): Date {
   const backend = env.LANGFUSE_ANALYTICS_BACKEND;
-  
+
   switch (backend) {
     case "doris":
       return parseDorisUTCDateTimeFormat(dateString);
@@ -75,16 +78,15 @@ export function parseAnalyticsDateTimeFormat(dateString: string): Date {
  */
 export function convertDateToAnalyticsDateTime(date: Date): string {
   const backend = env.LANGFUSE_ANALYTICS_BACKEND;
-  
+
   switch (backend) {
     case "doris":
     case "clickhouse":
     default:
       // Both Doris and ClickHouse store UTC time
-      return date.toISOString().replace('T', ' ').replace('Z', '');
+      return date.toISOString().replace("T", " ").replace("Z", "");
   }
 }
-
 
 /**
  * Get the current analytics backend name
@@ -102,13 +104,21 @@ export function isDorisBackend(): boolean {
 
 /**
  * Check if current backend is ClickHouse
- */ 
+ */
 export function isClickHouseBackend(): boolean {
   return getAnalyticsBackend() === "clickhouse";
 }
 
 // Doris reserved words that need backtick quoting
-const DORIS_RESERVED = new Set(["release", "public", "user", "key", "value", "index", "type"]);
+const DORIS_RESERVED = new Set([
+  "release",
+  "public",
+  "user",
+  "key",
+  "value",
+  "index",
+  "type",
+]);
 
 /**
  * Quote a column name for Doris if it's a reserved word.

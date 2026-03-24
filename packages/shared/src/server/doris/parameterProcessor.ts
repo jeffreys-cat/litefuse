@@ -18,23 +18,29 @@ export class DorisParameterProcessor {
 
     // Handle typed parameters: {paramName: Type}
     const typedParamPattern = /\{(\w+):\s*([^}]+)\}/g;
-    let processedQuery = query.replace(typedParamPattern, (match, paramName, typeInfo) => {
-      const paramValue = params[paramName];
-      if (paramValue === undefined) {
-        return match; // Keep original if parameter not found
-      }
-      return DorisParameterProcessor.formatValue(paramValue, typeInfo.trim());
-    });
+    let processedQuery = query.replace(
+      typedParamPattern,
+      (match, paramName, typeInfo) => {
+        const paramValue = params[paramName];
+        if (paramValue === undefined) {
+          return match; // Keep original if parameter not found
+        }
+        return DorisParameterProcessor.formatValue(paramValue, typeInfo.trim());
+      },
+    );
 
     // Handle simple parameters: {paramName}
     const simpleParamPattern = /\{(\w+)\}/g;
-    processedQuery = processedQuery.replace(simpleParamPattern, (match, paramName) => {
-      const paramValue = params[paramName];
-      if (paramValue === undefined) {
-        return match;
-      }
-      return DorisParameterProcessor.escapeBasicValue(paramValue);
-    });
+    processedQuery = processedQuery.replace(
+      simpleParamPattern,
+      (match, paramName) => {
+        const paramValue = params[paramName];
+        if (paramValue === undefined) {
+          return match;
+        }
+        return DorisParameterProcessor.escapeBasicValue(paramValue);
+      },
+    );
 
     return processedQuery;
   }
@@ -50,16 +56,16 @@ export class DorisParameterProcessor {
 
     // Handle null/undefined
     if (value === null || value === undefined) {
-      return 'NULL';
+      return "NULL";
     }
 
     // Handle Array types: Array(String), Array(Int64), etc.
-    if (normalizedType.startsWith('array(')) {
+    if (normalizedType.startsWith("array(")) {
       return DorisParameterProcessor.formatArrayValue(value, typeInfo);
     }
 
     // Handle DateTime types: DateTime64(3), DateTime, etc.
-    if (normalizedType.includes('datetime')) {
+    if (normalizedType.includes("datetime")) {
       return DorisParameterProcessor.formatDateTimeValue(value);
     }
 
@@ -69,7 +75,7 @@ export class DorisParameterProcessor {
     }
 
     // Handle Boolean type
-    if (normalizedType === 'boolean') {
+    if (normalizedType === "boolean") {
       return DorisParameterProcessor.formatBooleanValue(value);
     }
 
@@ -86,15 +92,17 @@ export class DorisParameterProcessor {
     }
 
     if (value.length === 0) {
-      return 'NULL';
+      return "NULL";
     }
 
     // Extract element type: Array(String) -> String
-    const elementType = typeInfo.match(/Array\((.+)\)/i)?.[1] || 'String';
-    const escapedValues = value.map(v => DorisParameterProcessor.formatValue(v, elementType));
+    const elementType = typeInfo.match(/Array\((.+)\)/i)?.[1] || "String";
+    const escapedValues = value.map((v) =>
+      DorisParameterProcessor.formatValue(v, elementType),
+    );
 
     // Return comma-separated values (works for both IN clauses and array functions)
-    return escapedValues.join(', ');
+    return escapedValues.join(", ");
   }
 
   /**
@@ -104,46 +112,46 @@ export class DorisParameterProcessor {
     if (value instanceof Date) {
       return `'${convertDateToAnalyticsDateTime(value)}'`;
     }
-    
-    if (typeof value === 'number') {
+
+    if (typeof value === "number") {
       const date = new Date(value);
       return `'${convertDateToAnalyticsDateTime(date)}'`;
     }
-    
-    if (typeof value === 'string') {
+
+    if (typeof value === "string") {
       // String already formatted (e.g., from convertDateToAnalyticsDateTime), use as-is
       return `'${value}'`;
     }
-    
-    return 'NULL';
+
+    return "NULL";
   }
 
   /**
    * Format numeric values
    */
   private static formatNumericValue(value: unknown): string {
-    if (typeof value === 'number') {
+    if (typeof value === "number") {
       if (isNaN(value) || !isFinite(value)) {
-        return 'NULL';
+        return "NULL";
       }
       return value.toString();
     }
-    
-    if (typeof value === 'string') {
+
+    if (typeof value === "string") {
       const numValue = Number(value);
       if (!isNaN(numValue) && isFinite(numValue)) {
         return numValue.toString();
       }
     }
-    
-    return 'NULL';
+
+    return "NULL";
   }
 
   /**
    * Format boolean values
    */
   private static formatBooleanValue(value: unknown): string {
-    return Boolean(value) ? 'TRUE' : 'FALSE';
+    return Boolean(value) ? "TRUE" : "FALSE";
   }
 
   /**
@@ -151,19 +159,19 @@ export class DorisParameterProcessor {
    */
   private static escapeBasicValue(value: unknown): string {
     if (value === null || value === undefined) {
-      return 'NULL';
+      return "NULL";
     }
 
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       return `'${value.replace(/'/g, "''")}'`;
     }
 
-    if (typeof value === 'number') {
+    if (typeof value === "number") {
       return value.toString();
     }
 
-    if (typeof value === 'boolean') {
-      return value ? 'TRUE' : 'FALSE';
+    if (typeof value === "boolean") {
+      return value ? "TRUE" : "FALSE";
     }
 
     if (value instanceof Date) {
@@ -187,14 +195,19 @@ export class DorisParameterProcessor {
    */
   static getSupportedTypes(): string[] {
     return [
-      'String',
-      'Int32', 'Int64',
-      'Float32', 'Float64',
-      'Decimal64(n)',
-      'Boolean',
-      'DateTime', 'DateTime64(3)',
-      'Array(String)', 'Array(Int64)', 'Array(Float64)',
+      "String",
+      "Int32",
+      "Int64",
+      "Float32",
+      "Float64",
+      "Decimal64(n)",
+      "Boolean",
+      "DateTime",
+      "DateTime64(3)",
+      "Array(String)",
+      "Array(Int64)",
+      "Array(Float64)",
       // Add more as needed
     ];
   }
-} 
+}

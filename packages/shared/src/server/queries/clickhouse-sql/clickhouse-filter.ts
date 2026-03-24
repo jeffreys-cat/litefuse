@@ -1,7 +1,6 @@
 import { filterOperators } from "../../../interfaces/filters";
 import { clickhouseCompliantRandomCharacters } from "../../repositories";
-import { Filter,DbFilter } from "../filter";
-
+import { Filter, DbFilter } from "../filter";
 
 export class StringFilter implements Filter {
   public table: string;
@@ -508,5 +507,3 @@ export class BooleanFilter implements Filter {
     };
   }
 }
-
-

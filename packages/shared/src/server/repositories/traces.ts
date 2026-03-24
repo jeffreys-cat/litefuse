@@ -21,7 +21,10 @@ import {
 } from "../queries/clickhouse-sql/clickhouse-filter";
 import { FilterList } from "../queries";
 import { TraceRecordReadType } from "./definitions";
-import { tracesTableUiColumnDefinitions, tracesTableUiColumnDefinitionsForDoris } from "../tableMappings/mapTracesTable";
+import {
+  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
+} from "../tableMappings/mapTracesTable";
 import { UiColumnMappings, ColumnDefinition } from "../../tableDefinitions";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import {
@@ -47,12 +50,20 @@ import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
-import { queryDoris, upsertDoris, commandDoris, queryDorisStream } from "./doris";
+import {
+  queryDoris,
+  upsertDoris,
+  commandDoris,
+  queryDorisStream,
+} from "./doris";
 import {
   StringFilter as DorisStringFilter,
   DateTimeFilter as DorisDateTimeFilter,
 } from "../queries/doris-sql/doris-filter";
-import { dorisSearchCondition, DorisSearchContext } from "../queries/doris-sql/search";
+import {
+  dorisSearchCondition,
+  DorisSearchContext,
+} from "../queries/doris-sql/search";
 
 /**
  * Checks if trace exists in clickhouse.
@@ -96,7 +107,10 @@ export const checkTraceExistsAndGetTimestamp = async ({
     ) as DorisDateTimeFilter | undefined;
 
     tracesFilter.push(
-      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+      ...createDorisFilterFromFilterState(
+        filter,
+        tracesTableUiColumnDefinitionsForDoris,
+      ),
       new DorisStringFilter({
         dorisTable: "t",
         field: "id",
@@ -115,7 +129,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
     // Helper function to convert Date to Doris DateTime string format
     const toDorisDateTime = (date: Date, offsetSeconds: number = 0) => {
       const adjustedDate = new Date(date.getTime() + offsetSeconds * 1000);
-      return adjustedDate.toISOString().replace('T', ' ').replace('Z', '');
+      return adjustedDate.toISOString().replace("T", " ").replace("Z", "");
     };
 
     // Doris version of the complex query
@@ -293,7 +307,6 @@ export const checkTraceExistsAndGetTimestamp = async ({
  * id, project_id, and timestamp must always be provided.
  */
 export const upsertTrace = async (trace: Partial<TraceRecordReadType>) => {
-
   if (!["id", "project_id", "timestamp"].every((key) => key in trace)) {
     throw new Error("Identifier fields must be provided to upsert Trace.");
   }
@@ -1865,7 +1878,10 @@ export const getTotalUserCount = async (
     });
 
     tracesFilter.push(
-      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+      ...createDorisFilterFromFilterState(
+        filter,
+        tracesTableUiColumnDefinitionsForDoris,
+      ),
     );
 
     const tracesFilterRes = tracesFilter.apply();
@@ -1962,12 +1978,12 @@ export const getUserMetrics = async (
     if (isDorisBackend() && timestamp instanceof Date) {
       return timestamp;
     }
-    
+
     // Default ClickHouse behavior - always expect string
-    if (typeof timestamp === 'string') {
+    if (typeof timestamp === "string") {
       return parseClickhouseUTCDateTimeFormat(timestamp);
     }
-    
+
     throw new Error(`Invalid timestamp format: ${typeof timestamp}`);
   };
 
@@ -1978,7 +1994,10 @@ export const getUserMetrics = async (
     });
 
     tracesFilter.push(
-      ...createDorisFilterFromFilterState(filter, tracesTableUiColumnDefinitionsForDoris),
+      ...createDorisFilterFromFilterState(
+        filter,
+        tracesTableUiColumnDefinitionsForDoris,
+      ),
     );
 
     const tracesFilterRes = tracesFilter.apply();
@@ -2077,7 +2096,9 @@ export const getUserMetrics = async (
         ...(tracesFilterRes ? tracesFilterRes.params : {}),
         ...(timestampFilter
           ? {
-              traceTimestamp: convertDateToAnalyticsDateTime(timestampFilter.value),
+              traceTimestamp: convertDateToAnalyticsDateTime(
+                timestampFilter.value,
+              ),
             }
           : {}),
       },

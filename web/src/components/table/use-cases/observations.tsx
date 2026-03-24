@@ -1247,7 +1247,7 @@ export default function ObservationsTable({
           const processedTraceTags = (() => {
             if (Array.isArray(generation.traceTags)) {
               return generation.traceTags;
-            } else if (typeof generation.traceTags === 'string') {
+            } else if (typeof generation.traceTags === "string") {
               try {
                 // Try to parse as JSON array
                 const parsed = JSON.parse(generation.traceTags);

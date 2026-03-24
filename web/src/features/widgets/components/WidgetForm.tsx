@@ -705,7 +705,32 @@ export function WidgetForm({
     validAggregationsForMeasure.includes("histogram");
 
   // Sync aggregation and chart type when selections change
+  const prevStateRef = React.useRef<{
+    chartType: string;
+    measure: string;
+    validAggs: string;
+  } | null>(null);
+
   useEffect(() => {
+    // Create a stable string representation of validAggs to prevent unnecessary re-runs
+    const validAggsKey = validAggregationsForMeasure.sort().join(",");
+
+    // Skip if state hasn't actually changed
+    if (
+      prevStateRef.current?.chartType === selectedChartType &&
+      prevStateRef.current?.measure === selectedMeasure &&
+      prevStateRef.current?.validAggs === validAggsKey
+    ) {
+      return;
+    }
+
+    // Update ref for next comparison
+    prevStateRef.current = {
+      chartType: selectedChartType,
+      measure: selectedMeasure,
+      validAggs: validAggsKey,
+    };
+
     const resolved = resolveAggregationAndChartType({
       chartType: selectedChartType,
       measure: selectedMeasure,
@@ -713,15 +738,19 @@ export function WidgetForm({
       validAggs: validAggregationsForMeasure,
     });
     if (!resolved) return;
-    if (resolved.chartType) setSelectedChartType(resolved.chartType);
-    if (resolved.aggregation) {
+
+    // Only update if values actually changed to prevent infinite loops
+    if (resolved.chartType && resolved.chartType !== selectedChartType) {
+      setSelectedChartType(resolved.chartType);
+    }
+    if (resolved.aggregation && resolved.aggregation !== selectedAggregation) {
       setSelectedAggregation(resolved.aggregation);
     }
   }, [
     selectedMeasure,
-    selectedAggregation,
     selectedChartType,
     validAggregationsForMeasure,
+    // Intentionally exclude selectedAggregation to prevent infinite loop
   ]);
 
   // Get available metrics for the selected view
@@ -990,6 +1019,18 @@ export function WidgetForm({
           const metricField = `${selectedAggregation}_${selectedMeasure}`;
           const metric = item[metricField];
           const dimensionField = selectedDimension;
+
+          // For HISTOGRAM chart type, preserve the raw metric value (JSON string)
+          // as HistogramChart needs to parse it
+          let processedMetric: unknown;
+          if (selectedChartType === "HISTOGRAM") {
+            processedMetric = metric; // Keep as-is (JSON string)
+          } else {
+            processedMetric = Array.isArray(metric)
+              ? metric
+              : Number(metric || 0);
+          }
+
           return {
             dimension:
               item[dimensionField] !== undefined && dimensionField !== "none"
@@ -1002,7 +1043,7 @@ export function WidgetForm({
                     return String(val);
                   })()
                 : formatMetricName(metricField),
-            metric: Array.isArray(metric) ? metric : Number(metric || 0),
+            metric: processedMetric,
             time_dimension: item["time_dimension"],
           };
         }

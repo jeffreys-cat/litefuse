@@ -157,14 +157,10 @@ export class DorisWriter {
         `Flushed ${queueItems.length} records to Doris ${tableName}. New queue length: ${entityQueue.length}`,
       );
 
-      recordGauge(
-        "ingestion_doris_insert_queue_length",
-        entityQueue.length,
-        {
-          unit: "records",
-          entityType: tableName,
-        },
-      );
+      recordGauge("ingestion_doris_insert_queue_length", entityQueue.length, {
+        unit: "records",
+        entityType: tableName,
+      });
     } catch (err) {
       logger.error(`DorisWriter.flush ${tableName}`, err);
 
@@ -228,9 +224,7 @@ export class DorisWriter {
         throw err;
       });
 
-    logger.debug(
-      `DorisWriter.writeToDoris: ${Date.now() - startTime} ms`,
-    );
+    logger.debug(`DorisWriter.writeToDoris: ${Date.now() - startTime} ms`);
 
     recordGauge("ingestion_doris_insert", params.records.length);
   }
@@ -245,7 +239,7 @@ export class DorisWriter {
 
 export enum TableName {
   Traces = "traces",
-  Scores = "scores", 
+  Scores = "scores",
   Observations = "observations",
   BlobStorageFileLog = "blob_storage_file_log",
 }

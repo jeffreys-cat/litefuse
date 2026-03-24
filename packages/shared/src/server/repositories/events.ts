@@ -920,9 +920,7 @@ function buildObservationsQueryComponents(
   );
 
   // Determine if we need to join traces (check both simple params and advanced filters)
-  const hasTraceFilter = observationsFilter.some(
-    (f) => f.table === "traces",
-  );
+  const hasTraceFilter = observationsFilter.some((f) => f.table === "traces");
 
   // Extract time filter and apply filters
   const startTimeFrom = extractTimeFilter(observationsFilter);
@@ -1268,9 +1266,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
   const appliedFilter = tracesFilter.apply();
 
   // Check if any filters reference the scores table
-  const filtersNeedScores = tracesFilter.some(
-    (f) => f.table === "scores",
-  );
+  const filtersNeedScores = tracesFilter.some((f) => f.table === "scores");
 
   // Check if filters specifically reference score aggregation columns
   const hasScoreAggregationFilters = tracesFilter.some(

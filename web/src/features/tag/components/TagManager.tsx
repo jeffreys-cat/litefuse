@@ -40,7 +40,7 @@ const TagManager = ({
   const processedTags = (() => {
     if (Array.isArray(tags)) {
       return tags;
-    } else if (typeof tags === 'string') {
+    } else if (typeof tags === "string") {
       try {
         // Try to parse as JSON array
         const parsed = JSON.parse(tags);

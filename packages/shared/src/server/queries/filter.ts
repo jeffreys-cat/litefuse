@@ -1,6 +1,5 @@
 import { filterOperators } from "../../interfaces/filters";
 
-
 export type DbOperator =
   | (typeof filterOperators)[keyof typeof filterOperators][number]
   | "!=";

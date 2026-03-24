@@ -1,4 +1,9 @@
-import { queryClickhouse, measureAndReturn, isDorisBackend, queryDoris } from "@langfuse/shared/src/server";
+import {
+  queryClickhouse,
+  measureAndReturn,
+  isDorisBackend,
+  queryDoris,
+} from "@langfuse/shared/src/server";
 import { QueryBuilder } from "@/src/features/query/server/queryBuilder";
 import { type QueryType, type ViewVersion } from "@/src/features/query/types";
 import { getViewDeclaration } from "@/src/features/query/dataModel";
@@ -65,10 +70,7 @@ export async function executeQuery(
             .toISOString()
             .replace("T", " ")
             .replace(/\.\d{3}Z$/, "");
-        } else if (
-          typeof value === "string" &&
-          /^-?\d+(\.\d+)?$/.test(value)
-        ) {
+        } else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
           out[key] = Number(value);
         } else {
           out[key] = value;
@@ -172,14 +174,18 @@ function fillTimeSeriesGaps(
   // Find the time dimension key in the data
   const timeKey = Object.keys(rows[0]!).find((k) => {
     const v = rows[0]![k];
-    return typeof v === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v as string);
+    return (
+      typeof v === "string" &&
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v as string)
+    );
   });
   if (!timeKey) return rows;
 
   // Determine granularity
-  const granularity = timeDimension.granularity === "auto"
-    ? determineGranularity(fromTimestamp, toTimestamp)
-    : timeDimension.granularity;
+  const granularity =
+    timeDimension.granularity === "auto"
+      ? determineGranularity(fromTimestamp, toTimestamp)
+      : timeDimension.granularity;
 
   const stepMs: Record<string, number> = {
     minute: 60 * 1000,
@@ -201,24 +207,48 @@ function fillTimeSeriesGaps(
   const zeroTemplate: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rows[0]!)) {
     if (key === timeKey) continue;
-    zeroTemplate[key] = typeof value === "number" ? 0 : value === null ? null : typeof value === "string" ? "" : null;
+    zeroTemplate[key] =
+      typeof value === "number"
+        ? 0
+        : value === null
+          ? null
+          : typeof value === "string"
+            ? ""
+            : null;
   }
 
   // Generate all time buckets
   const truncate = (d: Date): Date => {
     const t = new Date(d);
     switch (granularity) {
-      case "minute": t.setUTCSeconds(0, 0); break;
-      case "hour": t.setUTCMinutes(0, 0, 0); break;
-      case "day": t.setUTCHours(0, 0, 0, 0); break;
-      case "week": { const day = t.getUTCDay(); t.setUTCDate(t.getUTCDate() - ((day + 6) % 7)); t.setUTCHours(0, 0, 0, 0); break; }
-      case "month": t.setUTCDate(1); t.setUTCHours(0, 0, 0, 0); break;
+      case "minute":
+        t.setUTCSeconds(0, 0);
+        break;
+      case "hour":
+        t.setUTCMinutes(0, 0, 0);
+        break;
+      case "day":
+        t.setUTCHours(0, 0, 0, 0);
+        break;
+      case "week": {
+        const day = t.getUTCDay();
+        t.setUTCDate(t.getUTCDate() - ((day + 6) % 7));
+        t.setUTCHours(0, 0, 0, 0);
+        break;
+      }
+      case "month":
+        t.setUTCDate(1);
+        t.setUTCHours(0, 0, 0, 0);
+        break;
     }
     return t;
   };
 
   const formatTs = (d: Date): string =>
-    d.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+    d
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d{3}Z$/, "");
 
   const start = truncate(new Date(fromTimestamp));
   const end = new Date(toTimestamp);
@@ -237,8 +267,12 @@ function fillTimeSeriesGaps(
   return result;
 }
 
-function determineGranularity(fromTimestamp: string, toTimestamp: string): string {
-  const diffMs = new Date(toTimestamp).getTime() - new Date(fromTimestamp).getTime();
+function determineGranularity(
+  fromTimestamp: string,
+  toTimestamp: string,
+): string {
+  const diffMs =
+    new Date(toTimestamp).getTime() - new Date(fromTimestamp).getTime();
   const diffHours = diffMs / (1000 * 60 * 60);
   if (diffHours < 2) return "minute";
   if (diffHours < 72) return "hour";

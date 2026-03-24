@@ -177,9 +177,7 @@ const generateFilter = (query: QueryType) => {
   );
 
   // Remove score filters since observations don't support scores in response
-  const filteredChFilter = chFilter.filter(
-    (f) => f.table !== "scores",
-  );
+  const filteredChFilter = chFilter.filter((f) => f.table !== "scores");
 
   // Add project filter
   filteredChFilter.push(
