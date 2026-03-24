@@ -354,15 +354,10 @@ export const getTracesByIds = async (
         updated_at,
         event_ts,
         is_deleted
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM traces
-        WHERE id IN ({traceIds: Array(String)})
-        AND project_id = {projectId: String}
-        ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
-      ) ranked
-      WHERE rn = 1
+      FROM traces
+      WHERE id IN ({traceIds: Array(String)})
+      AND project_id = {projectId: String}
+      ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
       ORDER BY event_ts DESC`;
 
     const records = await queryDoris<TraceRecordReadType>({
@@ -455,15 +450,10 @@ export const getTracesBySessionId = async (
         updated_at,
         event_ts,
         is_deleted
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM traces
-        WHERE session_id IN ({sessionIds: Array(String)})
-        AND project_id = {projectId: String}
-        ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
-      ) ranked
-      WHERE rn = 1
+      FROM traces
+      WHERE session_id IN ({sessionIds: Array(String)})
+      AND project_id = {projectId: String}
+      ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
       ORDER BY event_ts DESC`;
 
     const records = await queryDoris<TraceRecordReadType>({
@@ -1425,20 +1415,9 @@ export const getTracesIdentifierForSession = async (
         timestamp,
         project_id,
         environment
-      FROM (
-        SELECT
-          id,
-          user_id,
-          name,
-          timestamp,
-          project_id,
-          environment,
-          ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY timestamp ASC) as rn
-        FROM traces
-        WHERE (project_id = {projectId: String})
-        AND (session_id = {sessionId: String})
-      ) ranked
-      WHERE rn = 1
+      FROM traces
+      WHERE (project_id = {projectId: String})
+      AND (session_id = {sessionId: String})
       ORDER BY timestamp ASC;
     `;
 
@@ -2029,12 +2008,7 @@ export const getUserMetrics = async (
                       o.trace_id,
                       o.usage_details,
                       o.total_cost,
-                      id,
-                      ROW_NUMBER() OVER (
-                          PARTITION BY id
-                          ORDER BY
-                              event_ts DESC
-                      ) AS rn
+                      o.id
                   FROM
                       observations o
                   WHERE
@@ -2050,7 +2024,6 @@ export const getUserMetrics = async (
                               AND project_id = {projectId: String}
                               ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
                       )
-                      AND o.type = 'GENERATION'
               ) as o
               JOIN (
                   SELECT
@@ -2058,12 +2031,7 @@ export const getUserMetrics = async (
                       t.user_id,
                       t.project_id,
                       t.timestamp,
-                      t.environment,
-                      ROW_NUMBER() OVER (
-                          PARTITION BY id
-                          ORDER BY
-                              event_ts DESC
-                      ) AS rn
+                      t.environment
                   FROM
                       traces t
                   WHERE
@@ -2072,9 +2040,6 @@ export const getUserMetrics = async (
                       ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
               ) as t on t.id = o.trace_id
               and t.project_id = o.project_id
-          WHERE
-              o.rn = 1
-              and t.rn = 1
           group by
               t.user_id
       )
@@ -2554,16 +2519,10 @@ export const getTracesForAnalyticsIntegrations = async function* (
  */
 export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   if (isDorisBackend()) {
-    // Use window function to achieve LIMIT 1 BY semantics in Doris
     const query = `
         SELECT id, project_id
-        FROM (
-          SELECT id, project_id,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM traces
-          WHERE id IN ({traceIds: Array(String)})
-        ) ranked
-        WHERE rn = 1
+        FROM traces
+        WHERE id IN ({traceIds: Array(String)})
         ORDER BY event_ts DESC;`;
     const records = await queryDoris<{
       id: string;

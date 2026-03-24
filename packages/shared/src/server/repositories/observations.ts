@@ -88,16 +88,12 @@ export const checkObservationExists = async (
 ): Promise<boolean> => {
   if (isDorisBackend()) {
     const query = `
-      SELECT id, project_id FROM (
-        SELECT id, project_id,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations o
-        WHERE project_id = {projectId: String}
-        AND id = {id: String}
-        ${startTime ? `AND start_time >= DATE_SUB({startTime: DateTime}, INTERVAL 2 DAY)` : ""}
-      ) ranked
-      WHERE rn = 1
-      ORDER BY event_ts DESC
+      SELECT id, project_id
+      FROM observations o
+      WHERE project_id = {projectId: String}
+      AND id = {id: String}
+      ${startTime ? `AND start_time >= DATE_SUB({startTime: DateTime}, INTERVAL 2 DAY)` : ""}
+      LIMIT 1
     `;
 
     const rows = await queryDoris<{ id: string; project_id: string }>({
@@ -297,15 +293,10 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
         created_at,
         updated_at,
         event_ts
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations
-        WHERE trace_id = {traceId: String}
-        AND project_id = {projectId: String}
-        ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
-      ) ranked
-      WHERE rn = 1
+      FROM observations
+      WHERE trace_id = {traceId: String}
+      AND project_id = {projectId: String}
+      ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
       ORDER BY start_time ASC
     `;
     const rawRecords = await queryDoris<any>({
@@ -485,16 +476,11 @@ export const getObservationForTraceIdByName = async ({
         created_at,
         updated_at,
         event_ts
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations
-        WHERE trace_id = {traceId: String}
-        AND project_id = {projectId: String}
-        AND name = {name: String}
-        ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
-      ) ranked
-      WHERE rn = 1
+      FROM observations
+      WHERE trace_id = {traceId: String}
+      AND project_id = {projectId: String}
+      AND name = {name: String}
+      ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
       ORDER BY event_ts DESC
     `;
     const rawRecords = await queryDoris<any>({
@@ -677,14 +663,9 @@ export const getObservationsById = async (
         created_at,
         updated_at,
         event_ts
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations
-        WHERE id IN ({ids: Array(String)})
-        AND project_id = {projectId: String}
-      ) ranked
-      WHERE rn = 1
+      FROM observations
+      WHERE id IN ({ids: Array(String)})
+      AND project_id = {projectId: String}
       ORDER BY event_ts DESC
     `;
     const rawRecords = await queryDoris<any>({
@@ -800,18 +781,13 @@ const getObservationByIdInternal = async ({
         created_at,
         updated_at,
         event_ts
-      FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations
-        WHERE id = {id: String}
-        AND project_id = {projectId: String}
-        ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
-        ${type ? `AND type = {type: String}` : ""}
-        ${traceId ? `AND trace_id = {traceId: String}` : ""}
-      ) ranked
-      WHERE rn = 1
-      ORDER BY event_ts DESC
+      FROM observations
+      WHERE id = {id: String}
+      AND project_id = {projectId: String}
+      ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
+      ${type ? `AND type = {type: String}` : ""}
+      ${traceId ? `AND trace_id = {traceId: String}` : ""}
+      LIMIT 1
     `;
     const rawRecords = await queryDoris<any>({
       query,
@@ -1157,16 +1133,12 @@ const getObservationsTableInternal = async <T>(
     const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
-      FROM (
-             SELECT o.*
-                    ${opts.select === "rows" ? ",ROW_NUMBER() OVER (PARTITION BY o.id, o.project_id ORDER BY o.event_ts DESC) as rn" : ""}
-             FROM observations o
+      FROM observations o
                ${traceTableFilter.length > 0 || orderByTraces || search.query ? "LEFT JOIN traces t ON t.id = o.trace_id AND t.project_id = o.project_id" : ""}
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.id` : ""}
-             WHERE ${appliedObservationsFilter.query}
+      WHERE ${appliedObservationsFilter.query}
                    ${timeFilter && (traceTableFilter.length > 0 || orderByTraces) ? `AND t.timestamp >= DATE_SUB({tracesTimestampFilter: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
                    ${search.query}
-           ) ${opts.select === "rows" ? "o WHERE rn = 1" : "o"}
         ${dorisOrderBy}
         ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
 
@@ -1951,15 +1923,11 @@ export const getCostForTraces = async (
 ) => {
   if (isDorisBackend()) {
     const query = `
-        SELECT sum(total_cost) as total_cost FROM (
-          SELECT total_cost,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM observations o
-          WHERE o.project_id = {projectId: String}
-          AND o.trace_id IN ({traceIds: Array(String)})
-          AND o.start_time >= DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})
-        ) ranked
-        WHERE rn = 1
+        SELECT sum(total_cost) as total_cost
+        FROM observations o
+        WHERE o.project_id = {projectId: String}
+        AND o.trace_id IN ({traceIds: Array(String)})
+        AND o.start_time >= DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})
       `;
 
     const res = await queryDoris<{ total_cost: string }>({
@@ -2933,17 +2901,12 @@ export const getTraceIdsForObservations = async (
 ) => {
   if (isDorisBackend()) {
     const query = `
-      SELECT 
+      SELECT
         trace_id,
         id
-      FROM (
-        SELECT trace_id, id,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM observations
-        WHERE project_id = {projectId: String}
-        AND id IN ({observationIds: Array(String)})
-      ) ranked
-      WHERE rn = 1
+      FROM observations
+      WHERE project_id = {projectId: String}
+      AND id IN ({observationIds: Array(String)})
     `;
 
     const rows = await queryDoris<{ id: string; trace_id: string }>({

@@ -1965,9 +1965,15 @@ export class IngestionService {
       }
     }
 
-    // 4. Array fields: Ensure they are arrays
+    // 4. Array fields: Ensure they are arrays or convert null to undefined
     if (table === TableName.Traces) {
       processed.tags = this.parseArrayField(processed.tags, 'tags', table, []);
+    }
+    if (table === TableName.Observations) {
+      // Doris SELECT * returns null for these optional fields, but schema expects undefined (not null)
+      if (processed.tool_definitions === null) processed.tool_definitions = undefined;
+      if (processed.tool_calls === null) processed.tool_calls = undefined;
+      if (processed.tool_call_names === null) processed.tool_call_names = undefined;
     }
 
     // 5. Boolean fields: Ensure they are booleans

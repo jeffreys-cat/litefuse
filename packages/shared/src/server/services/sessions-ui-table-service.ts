@@ -261,22 +261,15 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
 
           // Doris version with database-specific adaptations
       const query = `
-        WITH deduplicated_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        WITH filtered_traces AS (
+          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
           FROM traces t
-          WHERE t.session_id IS NOT NULL 
+          WHERE t.session_id IS NOT NULL
             AND t.project_id = {projectId: String}
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
-        filtered_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
-          FROM deduplicated_traces
-          WHERE rn = 1
-        ),
-        ${selectMetrics ? `deduplicated_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+        ${selectMetrics ? `filtered_observations AS (
+            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
             FROM observations o
             WHERE o.project_id = {projectId: String}
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
@@ -284,11 +277,6 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
               SELECT id
               FROM filtered_traces
             )
-          ),
-          filtered_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
-            FROM deduplicated_observations
-            WHERE rn = 1
           ),
           observations_agg AS (
             SELECT o.trace_id,
@@ -343,8 +331,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                     ? `
                 ,
                 sum(o.obs_count) as total_observations,
-                -- Use milliseconds_diff for duration calculation in Doris
-                milliseconds_diff(
+                -- Use seconds_diff for duration calculation in Doris (ClickHouse uses date_diff('second',...))
+                seconds_diff(
                   max(o.max_end_time),
                   CASE WHEN min(o.min_start_time) > '1970-01-01' THEN min(o.min_start_time) ELSE NULL END
                 ) as duration,
@@ -403,102 +391,63 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       },
     });
 
+    // Doris MySQL protocol returns ARRAY columns as JSON strings, need to parse them
+    const parseArrayField = (field: string[] | string | null | undefined): string[] => {
+      if (Array.isArray(field)) return field.filter(v => v !== null && v !== '');
+      if (typeof field === 'string') {
+        try {
+          const parsed = JSON.parse(field);
+          return Array.isArray(parsed) ? parsed.filter((v: unknown) => v !== null && v !== '') : [];
+        } catch {
+          return field ? [field] : [];
+        }
+      }
+      return [];
+    };
+
+    const parseDetailsField = (details: string | Record<string, number>): Record<string, number> => {
+      if (!details) return {};
+      if (typeof details === 'object' && !Array.isArray(details)) return details;
+      if (typeof details === 'string') {
+        try {
+          const parsed = JSON.parse(details.trim());
+          if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const result: Record<string, number> = {};
+            for (const [key, value] of Object.entries(parsed)) {
+              result[key] = Number(value) || 0;
+            }
+            return result;
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      return {};
+    };
+
     // Post-process Doris results to match ClickHouse format
     if (select === "metrics") {
       const processedRes = (res as Array<SessionWithMetricsReturnType & {
         session_usage_details: string | Record<string, number>;
         session_cost_details: string | Record<string, number>;
-      }>).map(row => {
-        // Helper function to parse details fields (session_usage_details, session_cost_details)
-        const parseDetails = (details: string | Record<string, number>): Record<string, number> => {
-          if (!details) {
-            return {};
-          }
-          
-          // If already an object (ClickHouse format), return as is
-          if (typeof details === 'object' && !Array.isArray(details)) {
-            return details;
-          }
-          
-          // If it's a string (Doris format), parse it
-          if (typeof details === 'string') {
-            const trimmed = details.trim();
-            
-            // Handle common null/empty cases
-            if (!trimmed || trimmed === 'null' || trimmed === 'NULL') {
-              return {};
-            }
-            
-            // Handle empty object/array cases
-            if (trimmed === '{}' || trimmed === '[]') {
-              return {};
-            }
-            
-            try {
-              const parsed = JSON.parse(trimmed);
-              if (typeof parsed === 'object' && !Array.isArray(parsed)) {
-                // Convert values to numbers
-                const result: Record<string, number> = {};
-                for (const [key, value] of Object.entries(parsed)) {
-                  result[key] = Number(value) || 0;
-                }
-                return result;
-              }
-              return {};
-            } catch (error) {
-              return {};
-            }
-          }
-          
-          return {};
-        };
-
-        // Return row with ClickHouse-compatible format
-        return {
-          ...row,
-          session_usage_details: parseDetails(row.session_usage_details),
-          session_cost_details: parseDetails(row.session_cost_details),
-          // Ensure trace_tags is always an array and filter out null values
-          trace_tags: Array.isArray(row.trace_tags) 
-            ? row.trace_tags.filter(tag => tag !== null && tag !== '')
-            : []
-        } as SessionWithMetricsReturnType;
-      });
+      }>).map(row => ({
+        ...row,
+        user_ids: parseArrayField(row.user_ids as unknown as string),
+        trace_ids: parseArrayField(row.trace_ids as unknown as string),
+        trace_tags: parseArrayField(row.trace_tags as unknown as string),
+        session_usage_details: parseDetailsField(row.session_usage_details),
+        session_cost_details: parseDetailsField(row.session_cost_details),
+      } as SessionWithMetricsReturnType));
 
       return processedRes as T[];
     }
 
-    // Post-process Doris results for rows to ensure trace_tags field is properly formatted as array
+    // Post-process Doris results for rows
     if (select === "rows") {
-      const processedRes = (res as Array<SessionDataReturnType & {
-        trace_tags: string[] | string | null;
-      }>).map(row => {
-        // Ensure trace_tags is always an array
-        let processedTraceTags: string[] = [];
-        
-        if (Array.isArray(row.trace_tags)) {
-          processedTraceTags = row.trace_tags.filter(tag => tag !== null && tag !== '');
-        } else if (typeof row.trace_tags === 'string') {
-          try {
-            // Try to parse as JSON array
-            const parsed = JSON.parse(row.trace_tags);
-            processedTraceTags = Array.isArray(parsed) ? parsed.filter(tag => tag !== null && tag !== '') : [row.trace_tags];
-          } catch {
-            // If parsing fails, treat as single tag
-            processedTraceTags = row.trace_tags ? [row.trace_tags] : [];
-          }
-        } else if (row.trace_tags == null) {
-          processedTraceTags = [];
-        } else {
-          // Convert any other type to empty array
-          processedTraceTags = [];
-        }
-        
-        return {
-          ...row,
-          trace_tags: processedTraceTags
-        } as SessionDataReturnType;
-      });
+      const processedRes = (res as Array<SessionDataReturnType>).map(row => ({
+        ...row,
+        user_ids: parseArrayField(row.user_ids as unknown as string),
+        trace_ids: parseArrayField(row.trace_ids as unknown as string),
+        trace_tags: parseArrayField(row.trace_tags as unknown as string),
+      } as SessionDataReturnType));
 
       return processedRes as T[];
     }

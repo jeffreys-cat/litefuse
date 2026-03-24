@@ -199,10 +199,8 @@ export class DorisClient {
 
       return Array.isArray(rows) ? rows : [];
     } catch (error) {
-      logger.error("Doris query failed", {
-        query: queryString,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Doris query failed: ${errMsg}, SQL: ${queryString}`);
       throw error;
     }
   }

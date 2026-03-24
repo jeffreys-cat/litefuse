@@ -99,11 +99,8 @@ export async function queryDoris<T>(opts: {
       
       return data as T[];
     } catch (error) {
-      logger.error("Doris query failed", {
-        query: opts.query,
-        error: error instanceof Error ? error.message : String(error),
-        tags: opts.tags,
-      });
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Doris query failed: ${errMsg}, SQL: ${processedQuery}`);
       throw error;
     }
   });

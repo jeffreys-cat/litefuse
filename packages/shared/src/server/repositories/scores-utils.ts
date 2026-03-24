@@ -28,17 +28,12 @@ export const _handleGetScoreById = async ({
 }): Promise<ScoreDomain | undefined> => {
   if (isDorisBackend()) {
     const query = `
-      SELECT * FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM scores s
-        WHERE s.project_id = {projectId: String}
-        AND s.id = {scoreId: String}
-        ${source ? `AND s.source = {source: String}` : ""}
-        ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-      ) ranked
-      WHERE rn = 1
-      ORDER BY event_ts DESC
+      SELECT *
+      FROM scores s
+      WHERE s.project_id = {projectId: String}
+      AND s.id = {scoreId: String}
+      ${source ? `AND s.source = {source: String}` : ""}
+      ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
       LIMIT 1
     `;
 
@@ -113,16 +108,12 @@ export const _handleGetScoresByIds = async ({
 }): Promise<ScoreDomain[]> => {
   if (isDorisBackend()) {
     const query = `
-      SELECT * FROM (
-        SELECT *,
-               ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-        FROM scores s
-        WHERE s.project_id = {projectId: String}
-        AND s.id IN ({scoreId: Array(String)})
-        ${source ? `AND s.source = {source: String}` : ""}
-        ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-      ) ranked
-      WHERE rn = 1
+      SELECT *
+      FROM scores s
+      WHERE s.project_id = {projectId: String}
+      AND s.id IN ({scoreId: Array(String)})
+      ${source ? `AND s.source = {source: String}` : ""}
+      ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
       ORDER BY event_ts DESC
     `;
 
