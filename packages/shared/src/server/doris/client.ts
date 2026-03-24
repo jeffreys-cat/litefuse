@@ -130,6 +130,7 @@ export class DorisClient {
         timeout: this.config.timeout,
         connectTimeout: this.config.timeout,
         timezone: '+00:00', // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
+        charset: 'utf8mb4', // Support 4-byte UTF-8 characters (emoji)
       };
 
       // Only add database to config if it's not empty
