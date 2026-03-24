@@ -9,10 +9,10 @@ import { DorisParameterProcessor } from "./parameterProcessor";
 // Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
 // mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
 // Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
-// Use require() because mysql2 package.json exports don't expose this internal path.
+// mysql2 is in serverExternalPackages (next.config.mjs) so this internal require works at runtime.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const CharsetToEncoding = require("mysql2/lib/constants/charset_encodings");
-CharsetToEncoding[33] = 'utf8';
+CharsetToEncoding[33] = "utf8";
 
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
