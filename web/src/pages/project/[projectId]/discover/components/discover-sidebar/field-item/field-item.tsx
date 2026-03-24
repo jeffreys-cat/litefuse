@@ -37,8 +37,9 @@ export default function FieldItem(props: FieldItemProps) {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            height: 32px;
+            min-height: 36px;
             padding: 0 8px;
+            gap: 8px;
             cursor: pointer;
             &:hover .icon-wrapper {
               opacity: 1;
@@ -48,16 +49,28 @@ export default function FieldItem(props: FieldItemProps) {
             }
           `}
         >
-          <div className="flex">
-            <div>{getFieldIcon(field["Type"])}</div>
+          <div className="flex min-w-0 items-center gap-2">
+            <div
+              className={css`
+                display: inline-flex;
+                height: 1.5rem;
+                width: 1.5rem;
+                flex-shrink: 0;
+                align-items: center;
+                justify-content: center;
+                color: ${theme.colors.text.secondary};
+              `}
+            >
+              {getFieldIcon(field["Type"])}
+            </div>
             <div
               className={css`
                 display: flex;
-                margin-left: 4px;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                max-width: 130px;
+                min-width: 0;
+                flex: 1 1 auto;
               `}
             >
               {field["Field"]}
@@ -82,6 +95,7 @@ export default function FieldItem(props: FieldItemProps) {
             {props.type === "add" ? (
               <IconButton
                 name="plus"
+                size="sm"
                 tooltip="添加到表格"
                 onClick={(e) => {
                   props?.onAdd?.(field);
@@ -91,6 +105,7 @@ export default function FieldItem(props: FieldItemProps) {
             ) : (
               <IconButton
                 name="minus"
+                size="sm"
                 tooltip="从表格删除"
                 onClick={(e: any) => {
                   props?.onRemove?.(field);

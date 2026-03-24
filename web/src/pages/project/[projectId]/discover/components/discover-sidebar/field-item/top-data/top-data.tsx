@@ -38,13 +38,12 @@ function countValueDistribution(
 }
 
 export function TopData({ field }: any) {
-  console.log(field);
   const topData = useAtomValue(topDataAtom);
   const tableTotalCount = useAtomValue(tableTotalCountAtom);
   const [dataFilter, setDataFilter] = useAtom(dataFilterAtom);
   const canDisplayTopData = field?.Type?.toUpperCase() !== "VARIANT";
   const res = Object.entries(countValueDistribution(topData, field.Field)).sort(
-    (a: any, b: any) => b[1].count - a[1].count,
+    (a: any, b: any) => b[1] - a[1],
   );
 
   return (
@@ -83,9 +82,14 @@ export function TopData({ field }: any) {
           {res.map(
             ([value, count], index) =>
               index < 5 && (
-                <div key={index} className="flex items-center justify-between">
+                <div
+                  key={index}
+                  className="flex items-start justify-between gap-3"
+                >
                   <div
                     className={css`
+                      flex: 1 1 auto;
+                      min-width: 0;
                       overflow: hidden;
                       text-overflow: ellipsis;
                       white-space: nowrap;
@@ -102,6 +106,7 @@ export function TopData({ field }: any) {
                       <div
                         className={css`
                           flex: 1 1 0%;
+                          min-width: 0;
                           overflow: hidden;
                           text-overflow: ellipsis;
                           white-space: nowrap;
@@ -137,13 +142,17 @@ export function TopData({ field }: any) {
                   {!isComplexType(field.Type) && (
                     <div
                       className={css`
-                        margin-left: 30px;
+                        margin-left: auto;
+                        display: flex;
+                        flex-shrink: 0;
+                        align-items: center;
+                        gap: 4px;
                       `}
                     >
                       <IconButton
                         name="plus-circle"
+                        size="sm"
                         onClick={(e) => {
-                          console.log(value);
                           setDataFilter([
                             ...dataFilter,
                             {
@@ -161,7 +170,7 @@ export function TopData({ field }: any) {
                       />
                       <IconButton
                         name="minus-circle"
-                        style={{ marginLeft: "4px" }}
+                        size="sm"
                         tooltip="Nonequivalent filtration"
                         onClick={(e) => {
                           setDataFilter([
@@ -169,7 +178,9 @@ export function TopData({ field }: any) {
                             {
                               fieldName: field.Field,
                               operator: "!=",
-                              value: [typeof value ? value : +value],
+                              value: [
+                                typeof value === "string" ? value : +value,
+                              ],
                               id: nanoid(),
                             },
                           ]);

@@ -96,23 +96,59 @@ export default function DiscoverSidebar() {
         className={css`
           display: flex;
           background-color: ${theme.isDark ? "rgb(24, 27, 31)" : "#FFF"};
-          padding: 0;
-          border-raduis: 0.25rem 0;
+          min-height: 40px;
+          padding: 4px 8px;
+          border-radius: 0.25rem 0.25rem 0 0;
           align-items: center;
           column-gap: 0.5rem;
         `}
       >
-        <Icon name="search" />
+        <span
+          className={css`
+            display: inline-flex;
+            height: 1.75rem;
+            width: 1.75rem;
+            flex-shrink: 0;
+            align-items: center;
+            justify-content: center;
+            color: ${theme.colors.text.secondary};
+          `}
+        >
+          <Icon name="search" size="md" />
+        </span>
         <Input
           placeholder={`Search`}
           className={css`
             border: none;
+            padding-left: 0;
+            padding-right: 0;
           `}
           value={searchValue}
           onChange={(e: any) => setSearchValue(e.target.value)}
         />
         <Toggletip content={<FilterContent />}>
-          <Icon name="filter" />
+          <button
+            type="button"
+            className={css`
+              display: inline-flex;
+              height: 1.75rem;
+              width: 1.75rem;
+              flex-shrink: 0;
+              align-items: center;
+              justify-content: center;
+              border-radius: 0.375rem;
+              color: ${theme.colors.text.secondary};
+              transition:
+                background-color 0.2s ease,
+                color 0.2s ease;
+              &:hover {
+                background-color: ${theme.colors.background.secondary};
+                color: ${theme.colors.text.primary};
+              }
+            `}
+          >
+            <Icon name="filter" size="md" />
+          </button>
         </Toggletip>
       </div>
       <div
@@ -171,9 +207,12 @@ export default function DiscoverSidebar() {
                 fill="text"
                 fullWidth={true}
                 className={css`
+                  min-height: 36px;
                   width: 100%;
                   text-align: left;
                   justify-content: flex-start;
+                  gap: 0.5rem;
+                  padding-left: 0.5rem;
                 `}
               >
                 _source
