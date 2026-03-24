@@ -6,15 +6,6 @@ import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
 
-// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
-// mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
-// Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
-// Use __non_webpack_require__ to bypass webpack's exports field validation for this internal module.
-declare const __non_webpack_require__: typeof require;
-const _require = typeof __non_webpack_require__ !== "undefined" ? __non_webpack_require__ : require;
-const CharsetToEncoding = _require("mysql2/lib/constants/charset_encodings");
-CharsetToEncoding[33] = "utf8";
-
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
   columns?: string;
