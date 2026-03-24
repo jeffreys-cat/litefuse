@@ -1,10 +1,17 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 import mysql from "mysql2/promise";
+// @ts-ignore - mysql2 internal module without type declarations
+import CharsetToEncoding from "mysql2/lib/constants/charset_encodings";
 import { env } from "../../env";
 import { getCurrentSpan } from "../instrumentation";
 import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
+
+// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
+// mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
+// Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
+CharsetToEncoding[33] = 'utf8';
 
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
@@ -130,7 +137,6 @@ export class DorisClient {
         timeout: this.config.timeout,
         connectTimeout: this.config.timeout,
         timezone: '+00:00', // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
-        charset: 'utf8mb4', // Support 4-byte UTF-8 characters (emoji)
       };
 
       // Only add database to config if it's not empty
