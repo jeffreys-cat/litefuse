@@ -48,6 +48,12 @@ export const tracesViewDoris: ViewDeclarationType = {
       type: "string",
       description: "Deployment environment (e.g., production, staging).",
     },
+    timestampMonth: {
+      sql: "date_format(timestamp, '%Y-%m')",
+      alias: "timestampMonth",
+      type: "string",
+      description: "Month of the trace timestamp in YYYY-MM format.",
+    },
     observationName: {
       sql: "name",
       alias: "observationName",
@@ -247,6 +253,26 @@ export const observationsViewDoris: ViewDeclarationType = {
       relationTable: "scores",
       description: "Name of the score.",
     },
+    startTimeMonth: {
+      sql: "date_format(start_time, '%Y-%m')",
+      alias: "startTimeMonth",
+      type: "string",
+      description: "Month of the observation start_time in YYYY-MM format.",
+    },
+    toolNames: {
+      sql: "map_keys(tool_definitions)",
+      alias: "toolNames",
+      type: "string[]",
+      explodeArray: true,
+      description: "Names of available tools defined for the observation.",
+    },
+    calledToolNames: {
+      sql: "tool_call_names",
+      alias: "calledToolNames",
+      type: "string[]",
+      explodeArray: true,
+      description: "Names of tools that were called by the observation.",
+    },
   },
   measures: {
     count: {
@@ -349,6 +375,20 @@ export const observationsViewDoris: ViewDeclarationType = {
       relationTable: "scores",
       description: "Unique scores attached to the observation.",
       unit: "scores",
+    },
+    toolDefinitions: {
+      sql: "ifNull(size(observations.tool_definitions), 0)",
+      alias: "toolDefinitions",
+      type: "integer",
+      description: "Number of available tools per observation.",
+      unit: "tools",
+    },
+    toolCalls: {
+      sql: "ifNull(size(observations.tool_calls), 0)",
+      alias: "toolCalls",
+      type: "integer",
+      description: "Number of tool calls per observation.",
+      unit: "calls",
     },
   },
   tableRelations: {

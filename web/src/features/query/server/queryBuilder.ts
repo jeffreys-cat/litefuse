@@ -975,8 +975,23 @@ export class QueryBuilder {
         (d) => skipIds.indexOf(d.sql) === -1,
       );
       for (const dimension of filteredDims) {
+        // Check if dimension.sql already includes table prefix (e.g., "observations.field")
+        // OR if it's a function call (contains parentheses) - in both cases don't add table prefix
+        const isFunctionCall = dimension.sql.includes("(");
+
+        // For explodeArray dimensions (like toolNames, calledToolNames), don't add table prefix
+        // For function calls, don't add table prefix either
+        let sqlWithPrefix: string;
+        if (dimension.explodeArray) {
+          // explodeArray dimensions - use as-is without any wrapper (will be handled in GROUP BY)
+          sqlWithPrefix = dimension.sql;
+        } else if (dimension.sql.includes(".") || isFunctionCall) {
+          sqlWithPrefix = dimension.sql;
+        } else {
+          sqlWithPrefix = `${dimension.table}.${dimension.sql}`;
+        }
         parts.push(
-          `any_value(${dimension.table}.${dimension.sql}) as ${dimension.alias ?? dimension.sql}`,
+          `any_value(${sqlWithPrefix}) as ${dimension.alias ?? dimension.sql}`,
         );
       }
     }
@@ -1046,9 +1061,29 @@ export class QueryBuilder {
       }
     });
 
+    // 判断 SQL 是否已经是聚合函数
+    const isAggregateFunction = (sql: string): boolean => {
+      const aggregateFuncs = [
+        "count(",
+        "sum(",
+        "avg(",
+        "min(",
+        "max(",
+        "any_value(",
+        "any(",
+      ];
+      return aggregateFuncs.some((func) => sql.toLowerCase().includes(func));
+    };
+
     // 转换为数组并生成 SQL
+    // 需要用 any_value() 包装非聚合函数的 metric，因为外层还会再做聚合
     return Array.from(uniqueMetrics.entries())
-      .map(([sql, alias]) => `${sql} as ${alias}`)
+      .map(([sql, alias]) => {
+        if (isAggregateFunction(sql)) {
+          return `${sql} as ${alias}`;
+        }
+        return `any_value(${sql}) as ${alias}`;
+      })
       .join(",\n");
   }
 
@@ -1068,11 +1103,15 @@ export class QueryBuilder {
 
     // Build inner GROUP BY - include exploded array dimensions (they must be in GROUP BY after arrayJoin)
     // Also include pairExpand dimensions (their key column is in scope after ARRAY JOIN clause)
+    // NOTE: For Doris, we don't include explodeArray dimensions in GROUP BY because Doris
+    // doesn't support GROUP BY on ARRAY type columns
     const groupByParts = [projectIdSql, idSql];
     for (const dim of appliedDimensions) {
-      if (dim.explodeArray || dim.pairExpand) {
+      if (dim.pairExpand) {
+        // pairExpand is for ClickHouse only
         groupByParts.push(dim.alias ?? dim.sql);
       }
+      // Skip explodeArray for Doris - ARRAY types can't be in GROUP BY
     }
 
     // Build SELECT parts - handle comma correctly between id, dimensions, and metrics
