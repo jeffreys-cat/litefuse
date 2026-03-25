@@ -327,8 +327,8 @@ export default function DiscoverHeader(props: {
 
     setLoc((prev: any) => {
       const searchParams = prev.searchParams;
-      searchParams?.set("startTime", start.format(FORMAT_DATE));
-      searchParams?.set("endTime", end.format(FORMAT_DATE));
+      searchParams?.set("startTime", start.utc().format(FORMAT_DATE));
+      searchParams?.set("endTime", end.utc().format(FORMAT_DATE));
       return {
         ...prev,
         searchParams,
@@ -347,8 +347,8 @@ export default function DiscoverHeader(props: {
 
       setLoc((prev) => {
         const searchParams = prev.searchParams;
-        searchParams?.set("startTime", start.format(FORMAT_DATE));
-        searchParams?.set("endTime", end.format(FORMAT_DATE));
+        searchParams?.set("startTime", start.utc().format(FORMAT_DATE));
+        searchParams?.set("endTime", end.utc().format(FORMAT_DATE));
         return {
           ...prev,
           searchParams,
