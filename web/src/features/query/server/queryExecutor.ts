@@ -162,6 +162,10 @@ export async function executeQuery(
 /**
  * Fill time series gaps with zero values for Doris queries.
  * ClickHouse uses WITH FILL natively; Doris needs application-level fill.
+ *
+ * When breakdown dimensions are present (e.g., grouped by type), each
+ * dimension combination is filled independently so that every series has
+ * a continuous set of time buckets.
  */
 function fillTimeSeriesGaps(
   rows: Record<string, unknown>[],
@@ -197,27 +201,22 @@ function fillTimeSeriesGaps(
   const step = stepMs[granularity];
   if (!step) return rows;
 
-  // Build a set of existing timestamps
-  const existingMap = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    existingMap.set(row[timeKey] as string, row);
+  // Identify metric keys (numeric) vs dimension keys (non-time strings).
+  // Metric columns come from SQL aggregations (count, sum, etc.) and are
+  // always numeric, but may be null in some rows. Check across all rows
+  // so a column whose first-row value is null is still correctly classified.
+  const metricKeys: string[] = [];
+  const dimensionKeys: string[] = [];
+  const nonTimeKeys = Object.keys(rows[0]!).filter((k) => k !== timeKey);
+  for (const key of nonTimeKeys) {
+    const hasNumber = rows.some((row) => typeof row[key] === "number");
+    if (hasNumber) {
+      metricKeys.push(key);
+    } else {
+      dimensionKeys.push(key);
+    }
   }
 
-  // Build zero-fill template from first row
-  const zeroTemplate: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(rows[0]!)) {
-    if (key === timeKey) continue;
-    zeroTemplate[key] =
-      typeof value === "number"
-        ? 0
-        : value === null
-          ? null
-          : typeof value === "string"
-            ? ""
-            : null;
-  }
-
-  // Generate all time buckets
   const truncate = (d: Date): Date => {
     const t = new Date(d);
     switch (granularity) {
@@ -250,17 +249,66 @@ function fillTimeSeriesGaps(
       .replace("T", " ")
       .replace(/\.\d{3}Z$/, "");
 
+  // Generate all time buckets
   const start = truncate(new Date(fromTimestamp));
   const end = new Date(toTimestamp);
-  const result: Record<string, unknown>[] = [];
-
+  const allTimeBuckets: string[] = [];
   for (let t = start; t <= end; t = new Date(t.getTime() + step)) {
-    const ts = formatTs(t);
-    const existing = existingMap.get(ts);
-    if (existing) {
-      result.push(existing);
-    } else {
-      result.push({ ...zeroTemplate, [timeKey]: ts });
+    allTimeBuckets.push(formatTs(t));
+  }
+
+  // No breakdown dimensions: simple fill (one series)
+  if (dimensionKeys.length === 0) {
+    const existingMap = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      existingMap.set(row[timeKey] as string, row);
+    }
+    const zeroTemplate: Record<string, unknown> = {};
+    for (const key of metricKeys) {
+      zeroTemplate[key] = 0;
+    }
+    return allTimeBuckets.map(
+      (ts) => existingMap.get(ts) ?? { ...zeroTemplate, [timeKey]: ts },
+    );
+  }
+
+  // With breakdown dimensions: group rows by dimension combination, fill each group
+  const getDimKey = (row: Record<string, unknown>): string =>
+    dimensionKeys.map((k) => String(row[k] ?? "")).join("\0");
+
+  // Collect all unique dimension combinations and index rows by (dimKey, timestamp)
+  const dimGroups = new Map<string, Record<string, unknown>>();
+  const rowIndex = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    const dk = getDimKey(row);
+    if (!dimGroups.has(dk)) {
+      // Store the dimension values as a template for zero-fill rows
+      const dimValues: Record<string, unknown> = {};
+      for (const key of dimensionKeys) {
+        dimValues[key] = row[key];
+      }
+      dimGroups.set(dk, dimValues);
+    }
+    rowIndex.set(`${dk}\0${row[timeKey] as string}`, row);
+  }
+
+  // Fill each dimension group across all time buckets
+  const result: Record<string, unknown>[] = [];
+  for (const [dk, dimValues] of dimGroups) {
+    for (const ts of allTimeBuckets) {
+      const existing = rowIndex.get(`${dk}\0${ts}`);
+      if (existing) {
+        result.push(existing);
+      } else {
+        const zeroRow: Record<string, unknown> = {
+          [timeKey]: ts,
+          ...dimValues,
+        };
+        for (const key of metricKeys) {
+          zeroRow[key] = 0;
+        }
+        result.push(zeroRow);
+      }
     }
   }
 
