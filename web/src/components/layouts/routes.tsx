@@ -180,6 +180,13 @@ export const ROUTES: Route[] = [
     section: RouteSection.Main,
   },
   {
+    title: "Logging",
+    pathname: `/project/[projectId]/discover`,
+    icon: Search,
+    group: RouteGroup.Observability,
+    section: RouteSection.Main,
+  },
+  {
     title: "Upgrade",
     icon: Sparkle,
     pathname: "/project/[projectId]/settings/billing",

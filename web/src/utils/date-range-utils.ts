@@ -323,23 +323,25 @@ export const isFullDayRange = (from: Date, to: Date) => {
 
 // Format date range with smart year display and time inclusion
 export const formatDateRange = (from: Date, to: Date) => {
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
   const currentYear = new Date().getFullYear();
-  const fromYear = from.getFullYear();
-  const toYear = to.getFullYear();
+  const fromYear = fromDate.getFullYear();
+  const toYear = toDate.getFullYear();
 
   const showFromYear = fromYear !== currentYear;
   const showToYear = toYear !== currentYear;
 
-  if (isFullDayRange(from, to)) {
+  if (isFullDayRange(fromDate, toDate)) {
     // Show just dates for full day ranges
     const fromPattern = showFromYear ? "LLL dd, yyyy" : "LLL dd";
     const toPattern = showToYear ? "LLL dd, yyyy" : "LLL dd";
-    return `${format(from, fromPattern)} - ${format(to, toPattern)}`;
+    return `${format(fromDate, fromPattern)} - ${format(toDate, toPattern)}`;
   } else {
     // Show dates with times for partial day ranges
     const fromPattern = showFromYear ? "LLL dd yyyy, HH:mm" : "LLL dd, HH:mm";
     const toPattern = showToYear ? "LLL dd yyyy, HH:mm" : "LLL dd, HH:mm";
-    return `${format(from, fromPattern)} - ${format(to, toPattern)}`;
+    return `${format(fromDate, fromPattern)} - ${format(toDate, toPattern)}`;
   }
 };
 

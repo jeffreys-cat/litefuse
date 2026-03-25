@@ -7,11 +7,15 @@ import { StringParam, useQueryParam, withDefault } from "use-query-params";
 export const PeekViewTraceDetail = ({ projectId }: { projectId: string }) => {
   const router = useRouter();
   const peekId = router.query.peek as string | undefined;
+  const peekProjectId =
+    typeof router.query.peekProjectId === "string"
+      ? router.query.peekProjectId
+      : projectId;
   const timestamp = router.query.timestamp
     ? new Date(router.query.timestamp as string)
     : undefined;
   const trace = usePeekData({
-    projectId,
+    projectId: peekProjectId,
     traceId: peekId,
     timestamp,
   });

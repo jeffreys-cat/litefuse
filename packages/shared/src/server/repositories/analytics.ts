@@ -81,9 +81,24 @@ export function convertDateToAnalyticsDateTime(date: Date): string {
 
   switch (backend) {
     case "doris":
+      // Doris stores data in Shanghai timezone (Asia/Shanghai)
+      // Use proper timezone formatting instead of manual offset calculation
+      return date
+        .toLocaleString("sv-SE", {
+          timeZone: "Asia/Shanghai",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          fractionalSecondDigits: 3,
+        })
+        .replace("T", " ")
+        .replace(",", ".");
     case "clickhouse":
     default:
-      // Both Doris and ClickHouse store UTC time
+      // ClickHouse stores UTC time, use original UTC format
       return date.toISOString().replace("T", " ").replace("Z", "");
   }
 }

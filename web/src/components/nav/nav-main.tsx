@@ -11,7 +11,13 @@ import {
 import Link from "next/link";
 import { type ReactNode } from "react";
 import { cn } from "@/src/utils/tailwind";
-import { type RouteGroup } from "@/src/components/layouts/routes";
+import { RouteGroup } from "@/src/components/layouts/routes";
+
+const NAV_GROUP_ORDER: RouteGroup[] = [
+  RouteGroup.Observability,
+  RouteGroup.PromptManagement,
+  RouteGroup.Evaluation,
+];
 
 export type NavMainItem = {
   title: string;
@@ -86,33 +92,35 @@ export function NavMain({
         </SidebarGroupContent>
       </SidebarGroup>
       {items.grouped &&
-        Object.entries(items.grouped).map(([group, items]) => (
-          <SidebarGroup key={group}>
-            <SidebarGroupLabel>{group}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    {item.menuNode || (
-                      <SidebarMenuButton
-                        asChild
-                        tooltip={item.title}
-                        isActive={item.isActive}
-                      >
-                        <Link
-                          href={item.url}
-                          target={item.newTab ? "_blank" : undefined}
+        NAV_GROUP_ORDER.filter((group) => items.grouped?.[group]?.length).map(
+          (group) => (
+            <SidebarGroup key={group}>
+              <SidebarGroupLabel>{group}</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {items.grouped?.[group]?.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      {item.menuNode || (
+                        <SidebarMenuButton
+                          asChild
+                          tooltip={item.title}
+                          isActive={item.isActive}
                         >
-                          <NavItemContent item={item} />
-                        </Link>
-                      </SidebarMenuButton>
-                    )}
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+                          <Link
+                            href={item.url}
+                            target={item.newTab ? "_blank" : undefined}
+                          >
+                            <NavItemContent item={item} />
+                          </Link>
+                        </SidebarMenuButton>
+                      )}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ),
+        )}
     </>
   );
 }
