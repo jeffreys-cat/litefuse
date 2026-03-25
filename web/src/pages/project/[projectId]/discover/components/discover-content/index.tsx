@@ -2,6 +2,7 @@
 import type { ColumnDef, Row } from "@tanstack/react-table";
 import React, { useEffect, useMemo, useState } from "react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useRouter } from "next/router";
 import { IconButton } from "components/ui/icon-button";
 import { Pagination } from "components/ui/pagination";
 import { Tab, TabContent, TabsBar } from "components/ui/tabs";
@@ -36,14 +37,37 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/src/components/ui/drawer";
+import { TablePeekView } from "@/src/components/table/peek";
+import { usePeekNavigation } from "@/src/components/table/peek/hooks/usePeekNavigation";
+import { PeekViewTraceDetail } from "@/src/components/table/peek/peek-trace-detail";
+
+type DiscoverTableRow = {
+  _original: Record<string, unknown>;
+  _source: string;
+  _uid?: string;
+  time: string;
+};
+
+function getTraceIdFromRow(row: DiscoverTableRow) {
+  const traceId = row._original?.trace_id;
+  if (typeof traceId === "string" && traceId.length > 0) {
+    return traceId;
+  }
+
+  const id = row._original?.id;
+  if (typeof id === "string" && id.length > 0) {
+    return id;
+  }
+
+  return undefined;
+}
 
 export default function DiscoverContent({
   fetchNextPage: _fetchNextPage,
-  getTraceData,
 }: {
   fetchNextPage: (page: number) => void;
-  getTraceData: (traceId: string) => any;
 }) {
+  const router = useRouter();
   const theme = useDiscoverTheme();
   const [fields, setFields] = useState<any[]>([]);
   const tableTotalCount = useAtomValue(tableTotalCountAtom);
@@ -98,6 +122,35 @@ export default function DiscoverContent({
     setFields(data);
   }, [tableData, currentTimeField]);
 
+  const projectId = router.query.projectId as string | undefined;
+
+  const peekNavigationProps = usePeekNavigation({
+    queryParams: ["observation", "display", "timestamp", "peekProjectId"],
+    extractParamsValuesFromRow: (row: DiscoverTableRow) => {
+      const params: Record<string, string> = {};
+
+      if (!row.time) {
+        const rowProjectId = row._original?.project_id;
+        if (typeof rowProjectId === "string" && rowProjectId.length > 0) {
+          params.peekProjectId = rowProjectId;
+        }
+        return params;
+      }
+
+      const parsedTimestamp = new Date(row.time);
+      if (!Number.isNaN(parsedTimestamp.getTime())) {
+        params.timestamp = parsedTimestamp.toISOString();
+      }
+
+      const rowProjectId = row._original?.project_id;
+      if (typeof rowProjectId === "string" && rowProjectId.length > 0) {
+        params.peekProjectId = rowProjectId;
+      }
+
+      return params;
+    },
+  });
+
   const handleRemove = React.useCallback(
     (field: any) => {
       const index = selectedFields.findIndex(
@@ -107,6 +160,17 @@ export default function DiscoverContent({
       setSelectedFields([...selectedFields]);
     },
     [selectedFields, setSelectedFields],
+  );
+
+  const openTracePeek = React.useCallback(
+    (traceId: unknown, row?: DiscoverTableRow) => {
+      if (typeof traceId !== "string" || !traceId) {
+        return;
+      }
+
+      peekNavigationProps.openPeek(traceId, row);
+    },
+    [peekNavigationProps],
   );
 
   const renderSubComponent = ({ row }: { row: Row<any> }) => {
@@ -267,10 +331,6 @@ export default function DiscoverContent({
     );
   };
 
-  const openTraceDrawer = (traceId: string) => {
-    getTraceData(traceId);
-  };
-
   const columns = useMemo<Array<ColumnDef<any>>>(() => {
     let dynamicColumns: Array<ColumnDef<any>> = [
       {
@@ -341,17 +401,50 @@ export default function DiscoverContent({
       dynamicColumns.push({
         accessorKey: "_source",
         header: "_source",
-        cell: ({ row: _row, getValue }) => {
+        cell: ({ row, getValue }) => {
+          const traceId = getTraceIdFromRow(row.original);
+          const isTracePeekEnabled = Boolean(traceId);
+          const hoverBackgroundColor = theme.isDark
+            ? "hsl(var(--muted) / 0.28)"
+            : "hsl(var(--muted) / 0.6)";
+          const hoverBorderColor = theme.isDark
+            ? "hsl(var(--border) / 0.55)"
+            : "hsl(var(--border) / 0.85)";
+
           function createMarkup() {
             return { __html: getValue<string>() };
           }
           return (
             <div
+              onClick={() => {
+                if (!isTracePeekEnabled) {
+                  return;
+                }
+                openTracePeek(traceId, row.original);
+              }}
+              onKeyDown={(event) => {
+                if (!isTracePeekEnabled) {
+                  return;
+                }
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openTracePeek(traceId, row.original);
+                }
+              }}
+              role={isTracePeekEnabled ? "button" : undefined}
+              tabIndex={isTracePeekEnabled ? 0 : undefined}
               className={css`
                 padding-top: 0.5rem;
                 padding-bottom: 0.5rem;
                 font-size: 0.875rem;
                 line-height: 1.25rem;
+                border-radius: 0.5rem;
+                transition:
+                  background-color 160ms ease,
+                  box-shadow 160ms ease;
+                ${isTracePeekEnabled
+                  ? `cursor: pointer; &:hover { background-color: ${hoverBackgroundColor}; box-shadow: inset 0 0 0 1px ${hoverBorderColor}; } &:focus-visible { outline: none; background-color: ${hoverBackgroundColor}; box-shadow: inset 0 0 0 1px ${hoverBorderColor}, 0 0 0 2px hsl(var(--ring) / 0.35); }`
+                  : ""}
               `}
             >
               <ColumnStyleWrapper
@@ -412,6 +505,9 @@ export default function DiscoverContent({
               let fieldValue = get(row.original._original, field.Field);
               const fieldName = field.Field;
               const fieldType = field.Type;
+              const traceId = getTraceIdFromRow(row.original);
+              const isTraceIdField =
+                field.Field === "trace_id" || field.Field === "id";
               if (typeof fieldValue === "object") {
                 fieldValue = JSON.stringify(fieldValue);
               }
@@ -437,9 +533,13 @@ export default function DiscoverContent({
                         word-break: break-all;
                       `}
                     >
-                      {field.value === "trace_id" ? (
+                      {isTraceIdField &&
+                      typeof fieldValue === "string" &&
+                      fieldValue === traceId ? (
                         <AntButton
-                          onClick={() => openTraceDrawer(fieldValue)}
+                          onClick={() =>
+                            openTracePeek(fieldValue, row.original)
+                          }
                           type="link"
                         >
                           {fieldValue}
@@ -474,11 +574,11 @@ export default function DiscoverContent({
       ];
     }
     return dynamicColumns;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentTimeField,
     handleRemove,
     hasSelectedFields,
+    openTracePeek,
     selectedFields,
     theme.isDark,
   ]);
@@ -545,6 +645,16 @@ export default function DiscoverContent({
           </DrawerContent>
         </Drawer>
       )}
+
+      {projectId ? (
+        <TablePeekView
+          peekView={{
+            itemType: "TRACE",
+            children: <PeekViewTraceDetail projectId={projectId} />,
+            ...peekNavigationProps,
+          }}
+        />
+      ) : null}
     </div>
   );
 }

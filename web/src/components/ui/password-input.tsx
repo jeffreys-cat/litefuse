@@ -2,7 +2,8 @@ import * as React from "react";
 import { cn } from "@/src/utils/tailwind";
 import { Eye, EyeOff } from "lucide-react";
 
-export interface PasswordInputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
+export interface PasswordInputProps
+  extends React.InputHTMLAttributes<HTMLInputElement> {}
 
 const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputProps>(
   ({ className, ...props }, ref) => {

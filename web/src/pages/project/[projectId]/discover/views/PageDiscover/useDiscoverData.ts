@@ -19,7 +19,6 @@ import {
   tableDataChartsAtom,
   tableFieldsAtom,
   tableTotalCountAtom,
-  tableTracesDataAtom,
   topDataAtom,
 } from "store/discover";
 import {
@@ -28,14 +27,12 @@ import {
   getTableDataService,
   getTopDataService,
 } from "services/discover";
-import { getTableDataTraceService } from "services/traces";
 import {
   encodeBase64,
   getChartsData,
   convertColumnToRow,
   convertColumnToRowViaFieldsType,
   generateHighlightedResults,
-  formatTracesResData,
   getIndexesStatement,
 } from "utils/data";
 import { generateTableDataUID } from "utils/utils";
@@ -65,7 +62,6 @@ export function useDiscoverData() {
   const currentDatabase = useAtomValue(currentDatabaseAtom);
   const currentDate = useAtomValue(currentDateAtom);
   const setTableTotalCount = useSetAtom(tableTotalCountAtom);
-  const setTraceData = useSetAtom(tableTracesDataAtom);
   const [loading, setLoading] = useAtom(discoverLoadingAtom);
   const buildLuceneWhereClause = useLuceneWhereClause();
 
@@ -430,68 +426,6 @@ export function useDiscoverData() {
     tableFields,
   ]);
 
-  const getTraceData = useCallback(
-    (trace_id: string) => {
-      const indexesStatement = getIndexesStatement(
-        currentIndexes,
-        tableFields,
-        searchValue,
-      );
-      const payload: any = {
-        catalog: currentCatalog,
-        database: currentDatabase,
-        table: currentTable || "otel_traces",
-        timeField: currentTimeField,
-        startDate: currentDate[0]?.format(FORMAT_DATE),
-        endDate: (currentDate[1] as Dayjs).format(FORMAT_DATE),
-        cluster: "",
-        sort: "DESC",
-        search_type: searchType,
-        indexes: "",
-        page: page,
-        page_size: pageSize,
-        trace_id,
-      };
-
-      if (searchType === "Search") {
-        payload.indexes_statement = indexesStatement;
-      }
-      payload.data_filters = dataFilter.length > 0 ? dataFilter : [];
-
-      if (searchValue) {
-        payload.search_value = encodeBase64(searchValue);
-      }
-
-      getTableDataTraceService(payload).subscribe({
-        next: ({ data, ok }: any) => {
-          if (!ok) {
-            return;
-          }
-          const formattedData = formatTracesResData(data);
-          setTraceData(formattedData);
-        },
-        error: (err: any) => {
-          console.log("查询错误", err);
-        },
-      });
-    },
-    [
-      currentCatalog,
-      currentDate,
-      currentDatabase,
-      currentIndexes,
-      currentTable,
-      currentTimeField,
-      dataFilter,
-      page,
-      pageSize,
-      searchType,
-      searchValue,
-      setTraceData,
-      tableFields,
-    ],
-  );
-
   const clearData = useCallback(() => {
     setTableDataCharts([]);
     setTableTotalCount(0);
@@ -551,6 +485,5 @@ export function useDiscoverData() {
   return {
     loading,
     onQuerying: handleQuerying,
-    getTraceData,
   };
 }

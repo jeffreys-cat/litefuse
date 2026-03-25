@@ -6,9 +6,8 @@ import { Input } from "./input";
 
 import { cn } from "@/src/utils/tailwind";
 
-export interface SliderProps extends React.ComponentPropsWithoutRef<
-  typeof SliderPrimitive.Root
-> {
+export interface SliderProps
+  extends React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root> {
   showInput?: boolean;
   displayAsPercentage?: boolean;
   decimalPlaces?: number;

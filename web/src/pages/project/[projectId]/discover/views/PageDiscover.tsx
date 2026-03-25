@@ -11,7 +11,7 @@ import { testIds } from "../components/testIds";
 import { useDiscoverData } from "./PageDiscover/useDiscoverData";
 
 export default function PageDiscover() {
-  const { loading, onQuerying, getTraceData } = useDiscoverData();
+  const { loading, onQuerying } = useDiscoverData();
   const shellClassName = css`
     min-height: 100%;
     background:
@@ -116,10 +116,7 @@ export default function PageDiscover() {
               className="min-h-0 flex-1 overflow-hidden px-2 pb-2 sm:px-3"
             >
               <div className="h-full overflow-auto">
-                <DiscoverContent
-                  getTraceData={getTraceData}
-                  fetchNextPage={() => {}}
-                />
+                <DiscoverContent fetchNextPage={() => {}} />
               </div>
             </div>
           </Card>

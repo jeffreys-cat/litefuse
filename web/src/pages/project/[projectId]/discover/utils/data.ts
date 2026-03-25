@@ -1,16 +1,14 @@
 import { getAutoInterval } from "../constants";
-import dayjs, { Dayjs, ManipulateType } from "dayjs";
+import dayjs from "dayjs";
+import type { Dayjs, ManipulateType } from "dayjs";
 import { flatten, orderBy, some } from "lodash-es";
 import { nanoid } from "nanoid";
-import {
-  DiscoverCurrent,
-  DataFilterType,
-  AutoInterval,
-  IntervalEnum,
-} from "types/type";
+import { IntervalEnum } from "types/type";
+import type { DiscoverCurrent, DataFilterType, AutoInterval } from "types/type";
 import jsTokens from "js-tokens";
 import localeData from "dayjs/plugin/localeData";
-import { DataFrame, FieldType } from "@grafana/data";
+import { FieldType } from "@grafana/data";
+import type { DataFrame } from "@grafana/data";
 import utc from "dayjs/plugin/utc";
 import { isIgnorableHighlightToken } from "./utils";
 dayjs.extend(utc);
@@ -670,6 +668,40 @@ export function getChartsData(
   return orderBy(result, ["TT"], ["asc"]);
 }
 
+function shouldParseVariantJsonString(value: string) {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue) {
+    return false;
+  }
+
+  return (
+    trimmedValue.startsWith("{") ||
+    trimmedValue.startsWith("[") ||
+    trimmedValue.startsWith('"') ||
+    trimmedValue === "true" ||
+    trimmedValue === "false" ||
+    trimmedValue === "null" ||
+    /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmedValue)
+  );
+}
+
+function parseVariantFieldValue(value: unknown, _fieldName: string) {
+  if (value == null || typeof value !== "string") {
+    return value;
+  }
+
+  if (!shouldParseVariantJsonString(value)) {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 export function convertColumnToRow(frame: any): Array<Record<string, any>> {
   const fieldNames = frame.schema.fields.map((f: any) => f.name);
   const columns = frame.data.values;
@@ -693,12 +725,10 @@ export function convertColumnToRow(frame: any): Array<Record<string, any>> {
         );
       }
       if (frame.schema.fields[j].type === "VARIANT") {
-        // 如果是 VARIANT 类型，转换为 JSON 对象
-        try {
-          row[fieldNames[j]] = JSON.parse(row[fieldNames[j]]);
-        } catch (e) {
-          console.error(`Error parsing VARIANT field ${fieldNames[j]}:`, e);
-        }
+        row[fieldNames[j]] = parseVariantFieldValue(
+          row[fieldNames[j]],
+          fieldNames[j],
+        );
       }
     }
     rows.push(row);
@@ -734,19 +764,18 @@ export function convertColumnToRowViaFieldsType(
         );
         // row[fieldNames[j]] = dayjs.utc(row[fieldNames[j]]).locale(currentLocale).format('YYYY-MM-DD HH:mm:ss.SSS');
       }
-      const currentFieldInfo = fields.filter(
+      const currentFieldInfo = fields.find(
         (item: any) => item.Field === frame.schema.fields[j].name,
-      )[0];
+      );
       // 如果是 VARIANT 类型，转换为 JSON 对象
       if (
         currentFieldInfo &&
         currentFieldInfo.Type.toUpperCase() === "VARIANT"
       ) {
-        try {
-          row[fieldNames[j]] = JSON.parse(row[fieldNames[j]]);
-        } catch (e) {
-          console.error(`Error parsing VARIANT field ${fieldNames[j]}:`, e);
-        }
+        row[fieldNames[j]] = parseVariantFieldValue(
+          row[fieldNames[j]],
+          fieldNames[j],
+        );
       }
     }
     rows.push(row);
