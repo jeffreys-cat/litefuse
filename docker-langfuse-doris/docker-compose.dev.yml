@@ -55,8 +55,8 @@ services:
       REDIS_TLS_CERT: ${REDIS_TLS_CERT:-}
       REDIS_TLS_KEY: ${REDIS_TLS_KEY:-}
 
-      # Time zone configuration
-      TZ: Asia/Shanghai
+      # Time zone configuration — must be UTC to match Doris storage
+      TZ: UTC
 
       LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: true
 
