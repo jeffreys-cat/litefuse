@@ -57,7 +57,7 @@ import {
 import { tokenCountAsync } from "../../features/tokenisation/async-usage";
 import { tokenCount } from "../../features/tokenisation/usage";
 import { ClickhouseWriter, TableName } from "../ClickhouseWriter";
-import { DorisWriter } from "../DorisWriter";
+import { DorisWriter, TableName as DorisTableName } from "../DorisWriter";
 import {
   convertJsonSchemaToRecord,
   convertPostgresJsonToMetadataRecord,
@@ -768,7 +768,7 @@ export class IngestionService {
         `Added trace ${entityId} to ClickHouse queue for project ${projectId}`,
       );
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      this.dorisWriter.addToQueue(DorisTableName.Traces, finalTraceRecord);
       logger.debug(
         `Added trace ${entityId} to Doris queue for project ${projectId}`,
       );
@@ -1003,7 +1003,7 @@ export class IngestionService {
       );
     } else if (analyticsBackend === "doris" && this.dorisWriter) {
       this.dorisWriter.addToQueue(
-        TableName.Observations,
+        DorisTableName.Observations,
         finalObservationRecord,
       );
     }

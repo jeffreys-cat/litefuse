@@ -8,8 +8,8 @@
 import React, { useEffect } from "react";
 import { useRouter } from "next/router";
 import Page from "@/src/components/layouts/page";
-import { setDiscoverProjectId } from "./shims/grafana-runtime";
-import PageDiscover from "./views/PageDiscover";
+import { setDiscoverProjectId } from "@/src/features/discover/shims/grafana-runtime";
+import PageDiscover from "@/src/features/discover/views/PageDiscover";
 
 // const PageDiscover = dynamic(() => import("./views/PageDiscover"), {
 //   ssr: false,

@@ -6,6 +6,10 @@ await import("./src/env.mjs");
 import { withSentryConfig } from "@sentry/nextjs";
 import { env } from "./src/env.mjs";
 import bundleAnalyzer from "@next/bundle-analyzer";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * CSP headers
@@ -192,6 +196,27 @@ const nextConfig = {
     // Exclude Datadog packages from webpack bundling to avoid issues
     // see: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/nodejs/#bundling-with-nextjs
     config.externals.push("@datadog/pprof", "dd-trace");
+
+    // Discover plugin — all non-page code lives in src/features/discover/.
+    // Webpack aliases mirror tsconfig paths so both TS and bundler resolve correctly.
+    const discoverBase = path.resolve(__dirname, "src/features/discover");
+    const shimBase = path.resolve(discoverBase, "shims");
+
+    // Module shim aliases (antd, grafana, etc.)
+    config.resolve.alias["antd"] = path.resolve(shimBase, "antd.tsx");
+    config.resolve.alias["@grafana/data"] = path.resolve(shimBase, "grafana-data.ts");
+    config.resolve.alias["@grafana/runtime"] = path.resolve(shimBase, "grafana-runtime.ts");
+    config.resolve.alias["react-i18next"] = path.resolve(shimBase, "react-i18next.ts");
+    config.resolve.alias["jotai-location"] = path.resolve(shimBase, "jotai-location.ts");
+
+    // Bare-name path aliases used by discover components
+    config.resolve.alias["store"] = path.resolve(discoverBase, "store");
+    config.resolve.alias["services"] = path.resolve(discoverBase, "services");
+    config.resolve.alias["components"] = path.resolve(discoverBase, "components");
+    config.resolve.alias["types"] = path.resolve(discoverBase, "types");
+    config.resolve.alias["utils"] = path.resolve(discoverBase, "utils");
+
+
     return config;
   },
 };

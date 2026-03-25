@@ -11,24 +11,16 @@
     ],
     "paths": {
       "@/*": ["./*"],
-      "store/*": ["./src/pages/project/[projectId]/discover/store/*"],
-      "services/*": ["./src/pages/project/[projectId]/discover/services/*"],
-      "components/*": ["./src/pages/project/[projectId]/discover/components/*"],
-      "types/*": ["./src/pages/project/[projectId]/discover/types/*"],
-      "utils/*": ["./src/pages/project/[projectId]/discover/utils/*"],
-      "@grafana/data": [
-        "./src/pages/project/[projectId]/discover/shims/grafana-data"
-      ],
-      "@grafana/runtime": [
-        "./src/pages/project/[projectId]/discover/shims/grafana-runtime"
-      ],
-      "jotai-location": [
-        "./src/pages/project/[projectId]/discover/shims/jotai-location"
-      ],
-      "antd": ["./src/pages/project/[projectId]/discover/shims/antd"],
-      "react-i18next": [
-        "./src/pages/project/[projectId]/discover/shims/react-i18next"
-      ]
+      "store/*": ["./src/features/discover/store/*"],
+      "services/*": ["./src/features/discover/services/*"],
+      "components/*": ["./src/features/discover/components/*"],
+      "types/*": ["./src/features/discover/types/*"],
+      "utils/*": ["./src/features/discover/utils/*"],
+      "@grafana/data": ["./src/lib/discover-shims/grafana-data"],
+      "@grafana/runtime": ["./src/lib/discover-shims/grafana-runtime"],
+      "jotai-location": ["./src/lib/discover-shims/jotai-location"],
+      "antd": ["./src/lib/discover-shims/antd"],
+      "react-i18next": ["./src/lib/discover-shims/react-i18next"]
     },
     "strictNullChecks": true
   },

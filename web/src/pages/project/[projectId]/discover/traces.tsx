@@ -9,9 +9,9 @@ import React, { useEffect } from "react";
 import { useRouter } from "next/router";
 import dynamic from "next/dynamic";
 import Page from "@/src/components/layouts/page";
-import { setDiscoverProjectId } from "./shims/grafana-runtime";
+import { setDiscoverProjectId } from "@/src/features/discover/shims/grafana-runtime";
 
-const PageTrace = dynamic(() => import("./views/PageTrace"), {
+const PageTrace = dynamic(() => import("@/src/features/discover/views/PageTrace"), {
   ssr: false,
   loading: () => (
     <div className="text-muted-foreground flex h-full items-center justify-center">
