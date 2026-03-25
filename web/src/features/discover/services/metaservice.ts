@@ -1,29 +1,11 @@
 // @ts-nocheck
-import { toDataFrame } from "@grafana/data";
-import { getBackendSrv, getDiscoverProjectId } from "../shims/grafana-runtime";
-import { lastValueFrom } from "rxjs";
-import { Observable } from "rxjs";
-
-type GetColumnParams = {
-  connectionId?: string;
-  database: string;
-  table: string;
-  column: string;
-  datasourceType?: string;
-};
-
-type ColumnMetadata = {
-  name: string;
-  dataType?: string;
-  columnType?: string;
-};
-
-type GetIndexesParams = {
-  connectionId?: string;
-  database: string;
-  table: string;
-  datasourceType?: string;
-};
+/**
+ * Discover metadata service — fetches schema metadata via tRPC.
+ *
+ * All functions are async and return row-major data directly.
+ */
+import { directApi } from "@/src/utils/api";
+import { lastValueFrom, Observable } from "rxjs";
 
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 
@@ -50,112 +32,109 @@ const normalizeColumnType = ({
     return normalizedInner ? `Nullable(${normalizedInner})` : source;
   }
 
-  if (lower.startsWith("map")) {
-    return source.replace(/^map/i, "Map");
-  }
-
-  if (lower.startsWith("array")) {
-    return source.replace(/^array/i, "Array");
-  }
-
-  if (lower.startsWith("json") || lower.startsWith("variant")) {
-    return "JSON";
-  }
-
-  if (
-    lower === "bool" ||
-    lower === "boolean" ||
-    lower.startsWith("tinyint(1)")
-  ) {
-    return "Bool";
-  }
-
-  if (lower.startsWith("tinyint")) {
-    return "Int8";
-  }
-
-  if (lower.startsWith("smallint")) {
-    return "Int16";
-  }
-
-  if (lower.startsWith("mediumint")) {
-    return "Int32";
-  }
-
-  if (
-    lower.startsWith("bigint") ||
-    lower.startsWith("int") ||
-    lower.startsWith("integer")
-  ) {
-    return "Int64";
-  }
-
-  if (
-    lower.startsWith("float") ||
-    lower.startsWith("double") ||
-    lower.startsWith("real")
-  ) {
-    return "Float64";
-  }
-
-  if (lower.startsWith("decimal") || lower.startsWith("numeric")) {
-    return "Float64";
-  }
-
-  if (lower.startsWith("date")) {
-    return source.replace(/^date/i, "Date");
-  }
-
-  if (lower.startsWith("timestamp") || lower.startsWith("datetime")) {
-    return "DateTime";
-  }
-
-  if (lower.startsWith("enum")) {
-    return source.replace(/^enum/i, "Enum");
-  }
-
-  if (lower.startsWith("uuid")) {
-    return "UUID";
-  }
-
-  if (lower.startsWith("ipv4")) {
-    return "IPv4";
-  }
-
-  if (lower.startsWith("ipv6")) {
-    return "IPv6";
-  }
-
-  if (lower.startsWith("tuple")) {
-    return source.replace(/^tuple/i, "Tuple");
-  }
-
-  if (lower.startsWith("struct")) {
-    return source.replace(/^struct/i, "Tuple");
-  }
-
-  if (
-    lower.startsWith("char") ||
-    lower.startsWith("varchar") ||
-    lower.startsWith("text") ||
-    lower.startsWith("string")
-  ) {
-    return "String";
-  }
+  if (lower.startsWith("map")) return source.replace(/^map/i, "Map");
+  if (lower.startsWith("array")) return source.replace(/^array/i, "Array");
+  if (lower.startsWith("json") || lower.startsWith("variant")) return "JSON";
+  if (lower === "bool" || lower === "boolean" || lower.startsWith("tinyint(1)")) return "Bool";
+  if (lower.startsWith("tinyint")) return "Int8";
+  if (lower.startsWith("smallint")) return "Int16";
+  if (lower.startsWith("mediumint")) return "Int32";
+  if (lower.startsWith("bigint") || lower.startsWith("int") || lower.startsWith("integer")) return "Int64";
+  if (lower.startsWith("float") || lower.startsWith("double") || lower.startsWith("real")) return "Float64";
+  if (lower.startsWith("decimal") || lower.startsWith("numeric")) return "Float64";
+  if (lower.startsWith("date")) return source.replace(/^date/i, "Date");
+  if (lower.startsWith("timestamp") || lower.startsWith("datetime")) return "DateTime";
+  if (lower.startsWith("enum")) return source.replace(/^enum/i, "Enum");
+  if (lower.startsWith("uuid")) return "UUID";
+  if (lower.startsWith("ipv4")) return "IPv4";
+  if (lower.startsWith("ipv6")) return "IPv6";
+  if (lower.startsWith("tuple")) return source.replace(/^tuple/i, "Tuple");
+  if (lower.startsWith("struct")) return source.replace(/^struct/i, "Tuple");
+  if (lower.startsWith("char") || lower.startsWith("varchar") || lower.startsWith("text") || lower.startsWith("string")) return "String";
 
   return source;
 };
 
+export { normalizeColumnType };
+
+// ---------------------------------------------------------------------------
+// tRPC-based metadata fetchers
+// ---------------------------------------------------------------------------
+
+// These return Observables for backward compatibility with existing subscribe() callers.
+// TODO: migrate callers to async/await and remove Observable wrappers.
+
+function wrapAsync<T>(fn: () => Promise<T>): Observable<{ data: T; ok: boolean }> {
+  return new Observable((subscriber) => {
+    fn()
+      .then((data) => {
+        subscriber.next({ data, ok: true });
+        subscriber.complete();
+      })
+      .catch((err) => {
+        subscriber.error(err);
+      });
+  });
+}
+
+export function getDatabases(projectId: string) {
+  return wrapAsync(() =>
+    directApi.discover.databases.query({ projectId }),
+  );
+}
+
+export function getTablesService({
+  projectId,
+  database,
+}: {
+  projectId: string;
+  database: string;
+}) {
+  return wrapAsync(() =>
+    directApi.discover.tables.query({ projectId, database }),
+  );
+}
+
+export function getFieldsService({
+  projectId,
+  database,
+  table,
+}: {
+  projectId: string;
+  database: string;
+  table: string;
+}) {
+  return wrapAsync(() =>
+    directApi.discover.fields.query({ projectId, database, table }),
+  );
+}
+
+export function getIndexesService({
+  projectId,
+  database,
+  table,
+}: {
+  projectId: string;
+  database: string;
+  table: string;
+}) {
+  return wrapAsync(() =>
+    directApi.discover.indexes.query({ projectId, database, table }),
+  );
+}
+
 export async function getColumn({
+  projectId,
   database,
   table,
   column,
-}: GetColumnParams): Promise<
-  (ColumnMetadata & { normalizedType: string }) | null
-> {
-  if (!database || !table || !column) {
-    return null;
-  }
+}: {
+  projectId: string;
+  database: string;
+  table: string;
+  column: string;
+}) {
+  if (!database || !table || !column) return null;
 
   const query = `
 SELECT
@@ -169,65 +148,26 @@ WHERE TABLE_SCHEMA = '${escapeSqlLiteral(database)}'
 LIMIT 1;
 `;
 
-  const response$ = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getColumn",
-          rawSql: query,
-          format: "table",
-        },
-      ],
-    },
-  });
-
   try {
-    const { data, ok } = await lastValueFrom(response$);
-    if (!ok) {
-      return null;
-    }
-
-    const resultData = data as { results?: Record<string, any> };
-    const frame = resultData?.results?.getColumn?.frames?.[0];
-    if (!frame) {
-      return null;
-    }
-
-    const dataFrame = toDataFrame(frame);
-    const nameField =
-      dataFrame.fields.find((field) => field.name === "Field") ??
-      dataFrame.fields[0];
-    const dataTypeField = dataFrame.fields.find(
-      (field) => field.name === "DataType",
-    );
-    const columnTypeField = dataFrame.fields.find(
-      (field) => field.name === "ColumnType",
-    );
-
-    const name = nameField?.values?.get?.(0);
-    if (!name) {
-      return null;
-    }
-
-    const dataTypeValue = dataTypeField?.values?.get?.(0);
-    const columnTypeValue = columnTypeField?.values?.get?.(0);
-
-    const columnInfo: ColumnMetadata = {
-      name: String(name),
-      dataType: dataTypeValue != null ? String(dataTypeValue) : undefined,
-      columnType: columnTypeValue != null ? String(columnTypeValue) : undefined,
-    };
-
-    const normalizedType = normalizeColumnType({
-      dataType: columnInfo.dataType,
-      columnType: columnInfo.columnType,
+    const { rows } = await directApi.discover.query.mutate({
+      projectId,
+      rawSql: query,
     });
 
+    if (!rows || rows.length === 0) return null;
+
+    const row = rows[0] as Record<string, unknown>;
+    const name = String(row.Field ?? row.COLUMN_NAME ?? "");
+    if (!name) return null;
+
+    const dataType = row.DataType != null ? String(row.DataType) : undefined;
+    const columnType = row.ColumnType != null ? String(row.ColumnType) : undefined;
+
     return {
-      ...columnInfo,
-      normalizedType,
+      name,
+      dataType,
+      columnType,
+      normalizedType: normalizeColumnType({ dataType, columnType }),
     };
   } catch (error) {
     console.error("Failed to fetch column metadata", error);
@@ -236,71 +176,29 @@ LIMIT 1;
 }
 
 export async function getInvertedIndexColumns({
+  projectId,
   database,
   table,
-}: GetIndexesParams): Promise<string[]> {
-  if (!database || !table) {
-    return [];
-  }
-
-  const query = `SHOW INDEXES FROM \`${database}\`.\`${table}\``;
-
-  const response$ = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getInvertedIndexes",
-          rawSql: query,
-          format: "table",
-        },
-      ],
-    },
-  });
+}: {
+  projectId: string;
+  database: string;
+  table: string;
+}) {
+  if (!database || !table) return [];
 
   try {
-    const { data, ok } = await lastValueFrom(response$);
-    if (!ok) {
-      return [];
-    }
+    const { rows } = await directApi.discover.query.mutate({
+      projectId,
+      rawSql: `SHOW INDEXES FROM \`${database}\`.\`${table}\``,
+    });
 
-    const resultData = data as { results?: Record<string, any> };
-    const frame =
-      resultData?.results?.getInvertedIndexes?.frames?.[0] ??
-      resultData?.results?.getIndexes?.frames?.[0];
+    if (!rows || rows.length === 0) return [];
 
-    if (!frame) {
-      return [];
-    }
-
-    const dataFrame = toDataFrame(frame);
-    const columnNameField =
-      dataFrame.fields.find((field) => field.name === "Column_name") ??
-      dataFrame.fields.find((field) => field.name === "COLUMN_NAME");
-    const indexTypeField =
-      dataFrame.fields.find((field) => field.name === "Index_type") ??
-      dataFrame.fields.find((field) => field.name === "INDEX_TYPE");
-
-    if (!columnNameField || !indexTypeField) {
-      return [];
-    }
-
-    const columnNames = Array.from(columnNameField.values ?? []);
-    const indexTypes = Array.from(indexTypeField.values ?? []);
     const indexedColumns = new Set<string>();
-
-    for (let i = 0; i < columnNames.length; i += 1) {
-      const columnName = columnNames[i];
-      const indexType = indexTypes[i];
-      if (typeof columnName !== "string" || columnName.length === 0) {
-        continue;
-      }
-      if (typeof indexType !== "string") {
-        continue;
-      }
-
-      if (indexType.toUpperCase().includes("INVERT")) {
+    for (const row of rows as Record<string, unknown>[]) {
+      const columnName = String(row.Column_name ?? row.COLUMN_NAME ?? "");
+      const indexType = String(row.Index_type ?? row.INDEX_TYPE ?? "");
+      if (columnName && indexType.toUpperCase().includes("INVERT")) {
         indexedColumns.add(columnName);
       }
     }
@@ -312,71 +210,6 @@ export async function getInvertedIndexColumns({
   }
 }
 
-export function getDatabases() {
-  return metadataFetch({ action: "databases" });
-}
-
-export function getTablesService({ database }: { database: string }) {
-  return metadataFetch({ action: "tables", database });
-}
-
-export function getFieldsService({
-  database,
-  table,
-}: {
-  database: string;
-  table: string;
-}) {
-  return metadataFetch({ action: "fields", database, table });
-}
-
 export function getColumnFromFieldService() {
-  // return getBackendSrv().fetch({
-  //     url: '/api/ds/query',
-  //     method: 'POST',
-  //     data: {
-  //         queries: [
-  //             {
-  //                 refId: 'getColumnFromFieldService',
-  //                 rawSql: `SHOW COLUMNS FROM \`${database}\`.\`${table}\``,
-  //                 format: 'table',
-  //             },
-  //         ],
-  //     },
-  // });
-}
-
-export function getIndexesService({
-  database,
-  table,
-}: {
-  database: string;
-  table: string;
-}) {
-  return metadataFetch({ action: "indexes", database, table });
-}
-
-function metadataFetch(body: Record<string, unknown>) {
-  return new Observable<{
-    data: { rows: unknown[] };
-    ok: boolean;
-    status: number;
-  }>((subscriber) => {
-    const projectId = getDiscoverProjectId();
-
-    fetch(`/api/project/${projectId}/discover-metadata`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(body),
-    })
-      .then(async (res) => {
-        const json = await res.json();
-        subscriber.next({ data: json, ok: res.ok, status: res.status });
-        subscriber.complete();
-      })
-      .catch((err) => {
-        subscriber.error(err);
-      });
-  });
+  // stub — not implemented
 }

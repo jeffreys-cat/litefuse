@@ -2,6 +2,7 @@
 import { useCallback, useEffect } from "react";
 import type { Dayjs } from "dayjs";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useRouter } from "next/router";
 import {
   currentCatalogAtom,
   currentDatabaseAtom,
@@ -31,14 +32,13 @@ import {
 import {
   encodeBase64,
   getChartsData,
-  convertColumnToRow,
-  convertColumnToRowViaFieldsType,
+  convertRowsToTableData,
+  convertRowsToTableDataViaFieldsType,
   generateHighlightedResults,
   getIndexesStatement,
 } from "utils/data";
 import { generateTableDataUID } from "utils/utils";
 import { FORMAT_DATE, getAutoInterval, IntervalEnum } from "../../constants";
-import { toDataFrame } from "@grafana/data";
 import { useLuceneWhereClause } from "./useLuceneWhereClause";
 
 type RefreshOptions = {
@@ -46,6 +46,9 @@ type RefreshOptions = {
 };
 
 export function useDiscoverData() {
+  const router = useRouter();
+  const projectId = router.query.projectId as string;
+
   const [page, setPage] = useAtom(pageAtom);
   const pageSize = useAtomValue(pageSizeAtom);
   const setTableData = useSetAtom(tableDataAtom);
@@ -67,7 +70,7 @@ export function useDiscoverData() {
   const buildLuceneWhereClause = useLuceneWhereClause();
 
   const getTableData = useCallback(async () => {
-    if (!currentTable || !currentDatabase) {
+    if (!currentTable || !currentDatabase || !projectId) {
       return;
     }
     setLoading((prev) => ({ ...prev, getTableData: true }));
@@ -115,34 +118,30 @@ export function useDiscoverData() {
         searchType === "Search" ? encodeBase64(searchValue) : searchValue;
     }
 
-    getTableDataService(payload).subscribe({
-      next: async ({ data, ok }: any) => {
-        setLoading((prev) => ({ ...prev, getTableData: false }));
-        if (!ok) {
-          return;
-        }
-        const frames = data?.results?.getTableData?.frames;
-        if (!frames || !frames[0]) {
-          setTableData([]);
-          return;
-        }
-        const rowsData = convertColumnToRow(frames[0]);
-        const resData = generateHighlightedResults(
-          {
-            search_value: searchValue,
-            indexes: currentIndexes || [],
-          },
-          rowsData,
-        );
+    try {
+      const { rows } = await getTableDataService(projectId, payload);
+      setLoading((prev) => ({ ...prev, getTableData: false }));
 
-        const rowsDataWithUid = await generateTableDataUID(resData);
-        setTableData(rowsDataWithUid);
-      },
-      error: (err: any) => {
-        setLoading((prev) => ({ ...prev, getTableData: false }));
-        console.log("查询错误", err);
-      },
-    });
+      if (!rows || rows.length === 0) {
+        setTableData([]);
+        return;
+      }
+
+      const rowsData = convertRowsToTableData(rows);
+      const resData = generateHighlightedResults(
+        {
+          search_value: searchValue,
+          indexes: currentIndexes || [],
+        },
+        rowsData,
+      );
+
+      const rowsDataWithUid = await generateTableDataUID(resData);
+      setTableData(rowsDataWithUid);
+    } catch (err) {
+      setLoading((prev) => ({ ...prev, getTableData: false }));
+      console.error("查询错误", err);
+    }
   }, [
     buildLuceneWhereClause,
     currentCatalog,
@@ -154,6 +153,7 @@ export function useDiscoverData() {
     dataFilter,
     page,
     pageSize,
+    projectId,
     searchType,
     searchValue,
     setLoading,
@@ -162,7 +162,7 @@ export function useDiscoverData() {
   ]);
 
   const getTableDataCharts = useCallback(async () => {
-    if (!currentTable || !currentDatabase) {
+    if (!currentTable || !currentDatabase || !projectId) {
       return;
     }
     setLoading((prev) => ({ ...prev, getTableDataCharts: true }));
@@ -215,34 +215,25 @@ export function useDiscoverData() {
         searchType === "Search" ? encodeBase64(searchValue) : searchValue;
     }
 
-    getTableDataChartsService(payload).subscribe({
-      next: ({ data, ok }: any) => {
-        setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
-        if (!ok) {
-          return;
-        }
-        const frame = toDataFrame(data.results.getTableDataCharts.frames[0]);
-        const times = Array.from(frame?.fields[0]?.values || []);
-        const values = Array.from(frame?.fields[1]?.values || []);
-        if (!times.length || !values.length) {
-          setTableDataCharts([]);
-          return;
-        }
-        const tableDataCharts = times.map((item: any, index: number) => ({
-          TT: item,
-          "sum(cnt)": values[index],
-        }));
-        const chartsData = getChartsData(
-          tableDataCharts,
-          currentDate as [Dayjs, Dayjs],
-        );
-        setTableDataCharts(chartsData);
-      },
-      error: (err: any) => {
-        setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
-        console.log("查询错误", err);
-      },
-    });
+    try {
+      const { rows } = await getTableDataChartsService(projectId, payload);
+      setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
+
+      if (!rows || rows.length === 0) {
+        setTableDataCharts([]);
+        return;
+      }
+
+      // rows are already row-major: [{ TT: "2026-03-25 14:00:00", "sum(cnt)": 5 }, ...]
+      const chartsData = getChartsData(
+        rows as any[],
+        currentDate as [Dayjs, Dayjs],
+      );
+      setTableDataCharts(chartsData);
+    } catch (err) {
+      setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
+      console.error("查询错误", err);
+    }
   }, [
     buildLuceneWhereClause,
     currentDate,
@@ -252,6 +243,7 @@ export function useDiscoverData() {
     currentTimeField,
     dataFilter,
     interval,
+    projectId,
     searchType,
     searchValue,
     setLoading,
@@ -260,7 +252,7 @@ export function useDiscoverData() {
   ]);
 
   const getTopData = useCallback(async () => {
-    if (!currentTable || !currentDatabase) {
+    if (!currentTable || !currentDatabase || !projectId) {
       return;
     }
     const indexesStatement = getIndexesStatement(
@@ -306,27 +298,21 @@ export function useDiscoverData() {
       }
     }
 
-    getTopDataService(payload).subscribe({
-      next: ({ data, ok }: any) => {
-        if (!ok) {
-          return;
-        }
-        const frames = data?.results?.getTableTopData?.frames;
-        if (!frames || !frames[0]) {
-          setTopData([]);
-          return;
-        }
-        const rowsData = convertColumnToRowViaFieldsType(
-          frames[0],
-          tableFields,
-        );
-        setTopData(rowsData);
-      },
-      error: (err: any) => {
-        console.log("查询错误", err);
+    try {
+      const { rows } = await getTopDataService(projectId, payload);
+
+      if (!rows || rows.length === 0) {
         setTopData([]);
-      },
-    });
+        return;
+      }
+
+      // Convert rows to the format expected by sidebar (with field type info)
+      const rowsData = convertRowsToTableDataViaFieldsType(rows, tableFields);
+      setTopData(rowsData);
+    } catch (err) {
+      console.error("查询错误", err);
+      setTopData([]);
+    }
   }, [
     buildLuceneWhereClause,
     currentCatalog,
@@ -337,6 +323,7 @@ export function useDiscoverData() {
     currentTimeField,
     dataFilter,
     page,
+    projectId,
     searchType,
     searchValue,
     setTopData,
@@ -344,7 +331,7 @@ export function useDiscoverData() {
   ]);
 
   const getTableDataCount = useCallback(async () => {
-    if (!currentTable || !currentDatabase) {
+    if (!currentTable || !currentDatabase || !projectId) {
       return;
     }
     const autoInterval = getAutoInterval(currentDate as any);
@@ -395,23 +382,21 @@ export function useDiscoverData() {
         searchType === "Search" ? encodeBase64(searchValue) : searchValue;
     }
 
-    getTableDataCountService(payload).subscribe({
-      next: ({ data, ok }: any) => {
-        if (!ok) {
-          return;
-        }
-        const frame = toDataFrame(data.results.getTableCountData.frames[0]);
-        const totalCount = frame.fields[0]?.values[0] as number;
-        if (!totalCount) {
-          setTableTotalCount(0);
-          return;
-        }
-        setTableTotalCount(totalCount);
-      },
-      error: (err: any) => {
-        console.log("查询错误", err);
-      },
-    });
+    try {
+      const { rows } = await getTableDataCountService(projectId, payload);
+
+      if (!rows || rows.length === 0) {
+        setTableTotalCount(0);
+        return;
+      }
+
+      const firstRow = rows[0] as Record<string, unknown>;
+      const totalCount = Number(firstRow.total_count ?? firstRow["SUM(table_per_time.cnt)"] ?? 0);
+      setTableTotalCount(totalCount || 0);
+    } catch (err) {
+      console.error("查询错误", err);
+      setTableTotalCount(0);
+    }
   }, [
     buildLuceneWhereClause,
     currentDate,
@@ -421,6 +406,7 @@ export function useDiscoverData() {
     currentTimeField,
     dataFilter,
     interval,
+    projectId,
     searchType,
     searchValue,
     setTableTotalCount,
