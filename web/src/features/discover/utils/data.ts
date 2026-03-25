@@ -649,6 +649,7 @@ export function getChartsData(
     const currentLocale = dayjs.locale();
     const date = dayjs
       .utc(e["TT"])
+      .local()
       .locale(currentLocale)
       .format(DATE_FORMAT_FROM_INTERVAL);
     tableDataMap.set(date, e["sum(cnt)"]);
@@ -796,7 +797,7 @@ export function formatTimestampToDateTime(timestamp: any, precision = 3) {
     formatString += `.${"S".repeat(precision)}`;
   }
   // 转换时间戳并格式化
-  return dayjs.utc(timestamp).locale(currentLocale).format(formatString);
+  return dayjs.utc(timestamp).local().locale(currentLocale).format(formatString);
 }
 
 export function formatTracesResData(frame: any) {
