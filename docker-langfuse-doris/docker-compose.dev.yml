@@ -1,6 +1,8 @@
+name: langfuse-doris
+
 services:
   langfuse-web:
-    image: langfuse-web:latest
+    image: langfuse-web:032602
     container_name: langfuse-doris-web
     hostname: langfuse-web
     depends_on: &langfuse-depends-on
@@ -86,7 +88,7 @@ services:
       - doris_internal
 
   langfuse-worker:
-    image: langfuse-worker:latest
+    image: langfuse-worker:032602
     container_name: langfuse-doris-worker
     hostname: langfuse-worker
     depends_on: *langfuse-depends-on
@@ -216,12 +218,28 @@ services:
 volumes:
   langfuse_doris_postgres_data:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LANGFUSE_DATA_DIR:-/data/data15/zhaobingquan/langfuse-doris-data}/postgres
   langfuse_doris_minio_data:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LANGFUSE_DATA_DIR:-/data/data15/zhaobingquan/langfuse-doris-data}/minio
   langfuse_doris_fe_meta:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LANGFUSE_DATA_DIR:-/data/data15/zhaobingquan/langfuse-doris-data}/doris-fe-meta
   langfuse_doris_be_storage:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${LANGFUSE_DATA_DIR:-/data/data15/zhaobingquan/langfuse-doris-data}/doris-be-storage
 
 networks:
   default:

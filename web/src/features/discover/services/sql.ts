@@ -38,7 +38,7 @@ export function getQueryTableResultSQL(params: QueryTableDataParams) {
 
 export function getQueryTableChartsSQL(params: QueryTableDataParams) {
   const indexes = params.indexes;
-  let statement = `SELECT ${params.interval}_FLOOR(table_per_time.T,${params.interval_value}) as TT,sum(table_per_time.cnt) FROM (SELECT ${params.interval}_FLOOR(${params.timeField}) as T,count(*) as cnt FROM \`${params.database}\`.\`${params.table}\` WHERE`;
+  let statement = `SELECT ${params.interval}_FLOOR(table_per_time.T,${params.interval_value}) as TT,sum(table_per_time.cnt) as \`sum(cnt)\` FROM (SELECT ${params.interval}_FLOOR(${params.timeField}) as T,count(*) as cnt FROM \`${params.database}\`.\`${params.table}\` WHERE`;
   if (indexes && params.search_type === "Search") {
     statement += ` (${indexes}) AND`;
   }

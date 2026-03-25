@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useEffect } from "react";
 import dayjs from "dayjs";
+import { useRouter } from "next/router";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/src/components/ui/button";
@@ -52,6 +53,8 @@ export default function DiscoverHeader(props: {
   onQuerying: () => void;
   loading: boolean;
 }) {
+  const router = useRouter();
+  const projectId = router.query.projectId as string;
   const setIndexes = useSetAtom(indexesAtom);
   const [discoverCurrent, setDiscoverCurrent] = useAtom(discoverCurrentAtom);
   const [_loc, setLoc] = useAtom(locationAtom);
@@ -79,7 +82,8 @@ export default function DiscoverHeader(props: {
   }, [currentIndex, setDisabledOptions]);
 
   useEffect(() => {
-    const subscription = getDatabases().subscribe({
+    if (!projectId) return;
+    const subscription = getDatabases(projectId).subscribe({
       next: ({ data, ok }: any) => {
         if (!ok) {
           return;
@@ -114,11 +118,12 @@ export default function DiscoverHeader(props: {
     });
 
     return () => subscription.unsubscribe();
-  }, [discoverCurrent.database, setDatabases]);
+  }, [discoverCurrent.database, projectId, setDatabases]);
 
   const getFields = React.useCallback(
     (database: string, selectedTable: string) => {
       getFieldsService({
+        projectId,
         database,
         table: selectedTable,
       }).subscribe({
@@ -190,6 +195,7 @@ export default function DiscoverHeader(props: {
   const getIndexes = React.useCallback(
     (database: string, selectedTable: string) => {
       getIndexesService({
+        projectId,
         database,
         table: selectedTable,
       }).subscribe({
@@ -281,6 +287,7 @@ export default function DiscoverHeader(props: {
         };
       });
       getTablesService({
+        projectId,
         database,
       }).subscribe({
         next: (resp: any) => {
@@ -320,8 +327,8 @@ export default function DiscoverHeader(props: {
 
     setLoc((prev: any) => {
       const searchParams = prev.searchParams;
-      searchParams?.set("startTime", start.format(FORMAT_DATE));
-      searchParams?.set("endTime", end.format(FORMAT_DATE));
+      searchParams?.set("startTime", start.utc().format(FORMAT_DATE));
+      searchParams?.set("endTime", end.utc().format(FORMAT_DATE));
       return {
         ...prev,
         searchParams,
@@ -340,8 +347,8 @@ export default function DiscoverHeader(props: {
 
       setLoc((prev) => {
         const searchParams = prev.searchParams;
-        searchParams?.set("startTime", start.format(FORMAT_DATE));
-        searchParams?.set("endTime", end.format(FORMAT_DATE));
+        searchParams?.set("startTime", start.utc().format(FORMAT_DATE));
+        searchParams?.set("endTime", end.utc().format(FORMAT_DATE));
         return {
           ...prev,
           searchParams,

@@ -1,5 +1,9 @@
 // @ts-nocheck
-import { getBackendSrv } from "../shims/grafana-runtime";
+/**
+ * Discover traces service — fetches trace query results via tRPC.
+ */
+import { directApi } from "@/src/utils/api";
+import { Observable } from "rxjs";
 import {
   buildTraceAggSQLFromParams,
   getOperationListSQL,
@@ -7,78 +11,59 @@ import {
   getServiceListSQL,
 } from "./traces.sql";
 
-// 获取table的Trace数据
-export function getTableDataTraceService(payload: any) {
-  const traceSQL = getQueryTableTraceSQL(payload);
-  return getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTableDataTrace",
-          rawSql: traceSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+function wrapAsync<T>(fn: () => Promise<T>): Observable<{ data: T; ok: boolean }> {
+  return new Observable((subscriber) => {
+    fn()
+      .then((data) => {
+        subscriber.next({ data, ok: true });
+        subscriber.complete();
+      })
+      .catch((err) => {
+        subscriber.error(err);
+      });
   });
 }
 
-// 查询Traces
-export function getTracesService(payload: any) {
-  const getTracesSQL = buildTraceAggSQLFromParams(payload);
-  return getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTraces",
-          rawSql: getTracesSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
-  });
+export function getTableDataTraceService(projectId: string, payload: any) {
+  const rawSql = getQueryTableTraceSQL(payload);
+  return wrapAsync(() =>
+    directApi.discover.query.mutate({
+      projectId,
+      rawSql,
+      database: payload.database,
+    }),
+  );
 }
 
-// 查询Trace Services
-export function getServiceListService(payload: any) {
-  const serviceListSQL = getServiceListSQL(payload);
-  return getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getServiceList",
-          rawSql: serviceListSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
-  });
+export function getTracesService(projectId: string, payload: any) {
+  const rawSql = buildTraceAggSQLFromParams(payload);
+  return wrapAsync(() =>
+    directApi.discover.query.mutate({
+      projectId,
+      rawSql,
+      database: payload.database,
+    }),
+  );
 }
 
-// 查询Trace Operations
-export function getOperationListService(payload: any) {
-  const operationListSQL = getOperationListSQL(payload);
-  return getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getOperationList",
-          rawSql: operationListSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
-  });
+export function getServiceListService(projectId: string, payload: any) {
+  const rawSql = getServiceListSQL(payload);
+  return wrapAsync(() =>
+    directApi.discover.query.mutate({
+      projectId,
+      rawSql,
+      database: payload.database,
+    }),
+  );
+}
+
+export function getOperationListService(projectId: string, payload: any) {
+  const rawSql = getOperationListSQL(payload);
+  return wrapAsync(() =>
+    directApi.discover.query.mutate({
+      projectId,
+      rawSql,
+      database: payload.database,
+    }),
+  );
 }

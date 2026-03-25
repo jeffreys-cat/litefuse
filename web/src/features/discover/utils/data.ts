@@ -649,6 +649,7 @@ export function getChartsData(
     const currentLocale = dayjs.locale();
     const date = dayjs
       .utc(e["TT"])
+      .local()
       .locale(currentLocale)
       .format(DATE_FORMAT_FROM_INTERVAL);
     tableDataMap.set(date, e["sum(cnt)"]);
@@ -785,6 +786,51 @@ export function convertColumnToRowViaFieldsType(
   return rows;
 }
 
+/**
+ * Convert row-major data from tRPC to the table display format.
+ * Formats time fields and parses VARIANT JSON values.
+ */
+export function convertRowsToTableData(
+  rows: Record<string, unknown>[],
+): Array<Record<string, any>> {
+  return rows.map((row) => {
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (value instanceof Date) {
+        out[key] = formatTimestampToDateTime(value);
+      } else if (typeof value === "string" && shouldParseVariantJsonString(value)) {
+        out[key] = parseVariantFieldValue(value, key);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  });
+}
+
+/**
+ * Convert row-major data with field type awareness (for sidebar top-data).
+ */
+export function convertRowsToTableDataViaFieldsType(
+  rows: Record<string, unknown>[],
+  fields: any[],
+): Array<Record<string, any>> {
+  return rows.map((row) => {
+    const out: Record<string, any> = {};
+    for (const [key, value] of Object.entries(row)) {
+      const fieldInfo = fields.find((f: any) => f.Field === key);
+      if (value instanceof Date) {
+        out[key] = formatTimestampToDateTime(value);
+      } else if (fieldInfo && fieldInfo.Type?.toUpperCase() === "VARIANT" && typeof value === "string") {
+        out[key] = parseVariantFieldValue(value, key);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  });
+}
+
 // 格式化时间戳为 DATETIME([number]) 格式
 export function formatTimestampToDateTime(timestamp: any, precision = 3) {
   const currentLocale = dayjs.locale();
@@ -796,7 +842,7 @@ export function formatTimestampToDateTime(timestamp: any, precision = 3) {
     formatString += `.${"S".repeat(precision)}`;
   }
   // 转换时间戳并格式化
-  return dayjs.utc(timestamp).locale(currentLocale).format(formatString);
+  return dayjs.utc(timestamp).local().locale(currentLocale).format(formatString);
 }
 
 export function formatTracesResData(frame: any) {

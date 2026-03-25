@@ -1,5 +1,11 @@
 // @ts-nocheck
-import { getBackendSrv } from "../shims/grafana-runtime";
+/**
+ * Discover data service — fetches query results via tRPC.
+ *
+ * All functions are async and return row-major data directly.
+ * The old Observable / Grafana-frame pipeline has been removed.
+ */
+import { directApi } from "@/src/utils/api";
 import {
   getQueryTableChartsSQL,
   getQueryTableResultCountSQL,
@@ -7,97 +13,62 @@ import {
   getSurroundingSQL,
 } from "./sql";
 
-export function getTableDataService(payload: any) {
-  const QueryTableResultSQL = getQueryTableResultSQL(payload);
-  const response = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTableData",
-          rawSql: QueryTableResultSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+export async function getTableDataService(
+  projectId: string,
+  payload: any,
+) {
+  const rawSql = getQueryTableResultSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
   });
-  return response;
 }
 
-export function getTableDataChartsService(payload: any) {
-  const QueryTableChartsSQL = getQueryTableChartsSQL(payload);
-  const response = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTableDataCharts",
-          rawSql: QueryTableChartsSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+export async function getTableDataChartsService(
+  projectId: string,
+  payload: any,
+) {
+  const rawSql = getQueryTableChartsSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
   });
-  return response;
 }
 
-export function getTopDataService(payload: any) {
-  const QueryTableResultSQL = getQueryTableResultSQL(payload);
-  const response = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTableTopData",
-          rawSql: QueryTableResultSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+export async function getTopDataService(
+  projectId: string,
+  payload: any,
+) {
+  const rawSql = getQueryTableResultSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
   });
-  return response;
 }
 
-export function getTableDataCountService(payload: any) {
-  const QueryTableResultCountSQL = getQueryTableResultCountSQL(payload);
-  const response = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getTableCountData",
-          rawSql: QueryTableResultCountSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+export async function getTableDataCountService(
+  projectId: string,
+  payload: any,
+) {
+  const rawSql = getQueryTableResultCountSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
   });
-  return response;
 }
 
-export function getSurroundingDataService(payload: any) {
-  const surroundingSQL = getSurroundingSQL(payload);
-  const response = getBackendSrv().fetch({
-    url: "/api/ds/query",
-    method: "POST",
-    data: {
-      queries: [
-        {
-          refId: "getSurroundingData",
-          rawSql: surroundingSQL,
-          format: "table",
-        },
-      ],
-    },
-    credentials: "include",
+export async function getSurroundingDataService(
+  projectId: string,
+  payload: any,
+) {
+  const rawSql = getSurroundingSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
   });
-  return response;
 }
