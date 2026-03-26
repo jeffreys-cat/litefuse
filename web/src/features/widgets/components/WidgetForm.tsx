@@ -567,6 +567,7 @@ export function WidgetForm({
   const tagsOptions = traceFilterOptions.data?.tags || [];
   const modelOptions = generationsFilterOptions.data?.model || [];
   const toolNamesOptions = generationsFilterOptions.data?.toolNames || [];
+  const typeOptions = generationsFilterOptions.data?.type || [];
 
   // Filter columns for PopoverFilterBuilder
   const filterColumns: ColumnDefinition[] = [
@@ -642,13 +643,22 @@ export function WidgetForm({
     },
   ];
   if (selectedView === "observations") {
-    filterColumns.push({
-      name: "Model",
-      id: "providedModelName",
-      type: "stringOptions",
-      options: modelOptions,
-      internal: "internalValue",
-    });
+    filterColumns.push(
+      {
+        name: "Type",
+        id: "type",
+        type: "stringOptions",
+        options: typeOptions,
+        internal: "internalValue",
+      },
+      {
+        name: "Model",
+        id: "providedModelName",
+        type: "stringOptions",
+        options: modelOptions,
+        internal: "internalValue",
+      },
+    );
   }
   if (selectedView === "scores-categorical") {
     filterColumns.push({
