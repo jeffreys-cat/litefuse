@@ -402,9 +402,7 @@ export default function SurroundingLogs() {
         if (typeof highlightValue === "object") {
           highlightValue = JSON.stringify(highlightValue);
         }
-        itemSource += `<span style="background-color: ${
-          theme.isDark ? "#3F3F4F" : "#BED8FD"
-        } ; padding: 0px 4px 2px; margin-right: 4px; border-radius: 4px;">${key}:</span>${highlightValue} `;
+        itemSource += `<span class="field-key">${key}:</span>${highlightValue} `;
       }
       return {
         _original: item,
@@ -499,10 +497,8 @@ export default function SurroundingLogs() {
             >
               <ColumnStyleWrapper
                 className={css`
-                  .field-key {
-                    background-color: ${theme.isDark
-                      ? "#3f3f4f"
-                      : "rgb(191, 217, 253)"};
+                  & .field-key {
+                    background-color: hsl(var(--primary) / 0.12);
                   }
                 `}
               >
@@ -603,10 +599,11 @@ export default function SurroundingLogs() {
   ]);
 
   return (
-    <div>
-      <SurroundingDiscoverFilter dataFilter={surroundingDataFilter} />
-      <div className="bg-b1 h-0.5 dark:bg-black" />
-      <div style={{ position: "relative" }}>
+    <div className="flex h-full flex-col overflow-auto">
+      <div className="bg-background sticky top-0 z-40 border-b">
+        <SurroundingDiscoverFilter dataFilter={surroundingDataFilter} />
+      </div>
+      <div className="border-b px-4 py-2" style={{ position: "relative" }}>
         <SurroundingLogsActions
           getSurroundingData={getBeforeSurroundingData}
           getSurroundingDataLoading={getBeforeSurroundingDataLoading}
@@ -620,13 +617,10 @@ export default function SurroundingLogs() {
         {renderBeforeLoadingBar()}
       </div>
       <div
-        style={{
-          height: "calc(100vh - 220px)",
-          overflow: "auto",
-          position: "relative",
-        }}
+        className="flex-1 overflow-auto p-4"
+        style={{ position: "relative" }}
       >
-        <div className="mx-6 border">
+        <div className="overflow-hidden rounded-md border">
           <SDCollapsibleTable
             data={fields}
             columns={columns}
@@ -634,16 +628,8 @@ export default function SurroundingLogs() {
             renderSubComponent={renderSubComponent}
           />
         </div>
-        {/* {initLoading ? (
-                    <LoadingBar width={100} />
-                ) : (
-                    {renderBeforeLoadingBar}
-                    <div className="mx-6 border">
-                        <SDCollapsibleTable data={fields} columns={columns} getRowCanExpand={() => true} renderSubComponent={renderSubComponent} />
-                    </div>
-                )} */}
       </div>
-      <div style={{ position: "relative" }}>
+      <div className="border-t px-4 py-2" style={{ position: "relative" }}>
         {renderAfterLoadingBar()}
         <SurroundingLogsActions
           getSurroundingData={getAfterSurroundingData}

@@ -9,8 +9,6 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { EmptySearchResult } from "components/ui/empty-search-result";
-import { useDiscoverTheme } from "components/ui/theme";
-import { css } from "@emotion/css";
 
 interface SDCollapsibleTableProps<TData> {
   data: TData[];
@@ -25,7 +23,6 @@ export default function SDCollapsibleTable<T>(
 ) {
   const { data, columns, renderSubComponent, getRowCanExpand, className } =
     props;
-  const theme = useDiscoverTheme();
   const table = useReactTable<any>({
     data,
     columns,
@@ -35,23 +32,16 @@ export default function SDCollapsibleTable<T>(
   });
 
   return (
-    <table className={className}>
+    <table className={`w-full text-sm ${className ?? ""}`}>
       <thead>
         {table.getHeaderGroups().map((headerGroup) => (
-          <tr
-            key={headerGroup.id}
-            className={css`
-              ${theme.isDark
-                ? "border-bottom: 1px solid hsl(var(--border-dark));"
-                : "border-bottom: 1px solid hsl(var(--border));"}
-            `}
-          >
+          <tr key={headerGroup.id} className="border-b">
             {headerGroup.headers.map((header) => {
               return (
                 <th
                   key={header.id}
                   colSpan={header.colSpan}
-                  className={css`position: sticky; top: 0; z-index: 2; height: 48px; white-space: nowrap; background-color: ${theme.isLight ? "hsl(var(--table-header-background)" : "hsl(var(--table-header-background-dark)"} ); padding-left: 16px; padding-right: 16px; text-align: left; vertical-align: middle; font-size: 14px; font-weight: 500; color: hsl(var(--n2)} &:has([role="checkbox"]) { padding-right: 0; }`}
+                  className="bg-muted sticky top-0 z-2 h-12 px-4 text-left align-middle text-sm font-medium whitespace-nowrap"
                 >
                   {header.isPlaceholder
                     ? null
@@ -65,42 +55,18 @@ export default function SDCollapsibleTable<T>(
           </tr>
         ))}
       </thead>
-      <tbody
-        className={css`
-          #selected {
-            background-color: #3f3f46cc;
-          }
-        `}
-      >
+      <tbody>
         {table.getRowModel().rows.length > 0 ? (
           table.getRowModel().rows.map((row) => {
             return (
               <Fragment key={row.id}>
                 <tr
                   id={row.original.selected ? "selected" : ""}
-                  // className={classNames(
-                  //     'transition-colors dark:hover:bg-n7/80 hover:bg-b1/80 data-[state=selected]:bg-muted',
-                  //     row.getIsExpanded() ? 'border-none' : 'border-b',
-                  //     row.original.selected ? 'dark:bg-n7 bg-b1/60' : 'hsl(val(--n8))',
-                  // )}
-                  className={css`
-                    ${row.getIsExpanded()
-                      ? `border:none;`
-                      : `${theme.isDark ? "border-bottom: 1px solid hsl(var(--border-dark));" : "border-bottom: 1px solid hsl(var(--border));"} `} ${theme.isLight
-                      ? `background-color: ${row.original.selected ? "hsl(var(--b1) / 0.6)" : "hsl(val(--n8))"}; &:hover { background-color: hsl(var(--b1) / 0.8); }`
-                      : `background-color: ${row.original.selected ? "hsl(var(--n7))" : "hsl(val(--n8))"}; &:hover { background-color: hsl(var(--n7) / 0.8); } }`}
-                  `}
+                  className={`hover:bg-muted/50 transition-colors ${row.getIsExpanded() ? "" : "border-b"} ${row.original.selected ? "bg-accent/60" : ""}`}
                 >
                   {row.getVisibleCells().map((cell) => {
                     return (
-                      <td
-                        key={cell.id}
-                        className={css`
-                          height: 48px;
-                          padding: 0 16px;
-                          font-size: 14px;
-                        `}
-                      >
+                      <td key={cell.id} className="h-12 px-4 text-sm">
                         {cell.getContext().getValue() !== null
                           ? flexRender(
                               cell.column.columnDef.cell,
@@ -112,29 +78,8 @@ export default function SDCollapsibleTable<T>(
                   })}
                 </tr>
                 {row.getIsExpanded() && (
-                  <tr
-                    //  className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted"
-                    className={css`
-                      border-bottom: 1px solid rgb(63, 63, 70);
-                      transition-property:
-                        background-color, border-color, color, fill, stroke;
-                      transition-duration: 150ms;
-                      transition-timing-function: ease-in-out;
-                      &:hover {
-                        background-color: hsl(var(--muted) / 0.5);
-                      }
-                      [data-state="selected"] {
-                        background-color: hsl(var(--muted));
-                      }
-                    `}
-                  >
-                    <td
-                      colSpan={row.getVisibleCells().length}
-                      className={css`
-                        height: 32px;
-                        padding: 0;
-                      `}
-                    >
+                  <tr className="hover:bg-muted/50 border-b transition-colors">
+                    <td colSpan={row.getVisibleCells().length} className="p-0">
                       {renderSubComponent({ row })}
                     </td>
                   </tr>

@@ -38,7 +38,7 @@ export function Toggletip({
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
           side={placement as "top" | "right" | "bottom" | "left"}
-          className="border-border bg-popover text-popover-foreground z-50 w-72 rounded border p-3 text-sm shadow-md"
+          className="border-border bg-popover text-popover-foreground z-50 w-auto rounded border p-3 text-sm shadow-md"
           sideOffset={6}
         >
           {closeButton ? (
