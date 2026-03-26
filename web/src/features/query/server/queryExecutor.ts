@@ -65,11 +65,9 @@ export async function executeQuery(
       const out: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(row)) {
         if (value instanceof Date) {
-          // Convert Date to ClickHouse-style string: "2026-03-20 13:00:00"
-          out[key] = value
-            .toISOString()
-            .replace("T", " ")
-            .replace(/\.\d{3}Z$/, "");
+          // Output ISO 8601 format with timezone indicator so frontend
+          // correctly interprets as UTC (matching ClickHouse iso output)
+          out[key] = value.toISOString();
         } else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
           out[key] = Number(value);
         } else {
@@ -175,12 +173,12 @@ function fillTimeSeriesGaps(
 ): Record<string, unknown>[] {
   if (rows.length === 0) return rows;
 
-  // Find the time dimension key in the data
+  // Find the time dimension key in the data (supports both ISO 8601 and plain datetime format)
   const timeKey = Object.keys(rows[0]!).find((k) => {
     const v = rows[0]![k];
     return (
       typeof v === "string" &&
-      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v as string)
+      /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(v as string)
     );
   });
   if (!timeKey) return rows;
@@ -243,11 +241,7 @@ function fillTimeSeriesGaps(
     return t;
   };
 
-  const formatTs = (d: Date): string =>
-    d
-      .toISOString()
-      .replace("T", " ")
-      .replace(/\.\d{3}Z$/, "");
+  const formatTs = (d: Date): string => d.toISOString();
 
   // Generate all time buckets
   const start = truncate(new Date(fromTimestamp));
