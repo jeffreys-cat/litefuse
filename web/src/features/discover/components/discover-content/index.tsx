@@ -41,6 +41,12 @@ import {
 import { TablePeekView } from "@/src/components/table/peek";
 import { usePeekNavigation } from "@/src/components/table/peek/hooks/usePeekNavigation";
 import { PeekViewTraceDetail } from "@/src/components/table/peek/peek-trace-detail";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/src/components/ui/tooltip";
 
 type DiscoverTableRow = {
   _original: Record<string, unknown>;
@@ -376,7 +382,7 @@ export default function DiscoverContent({
           function createMarkup() {
             return { __html: getValue<string>() };
           }
-          return (
+          const cellContent = (
             <div
               onClick={() => {
                 if (!isTracePeekEnabled) {
@@ -427,6 +433,17 @@ export default function DiscoverContent({
                 />
               </ColumnStyleWrapper>
             </div>
+          );
+          if (!isTracePeekEnabled) return cellContent;
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
+                <TooltipContent side="top" align="start">
+                  <p className="text-xs">点击查看 Trace：{traceId}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           );
         },
       });

@@ -13,7 +13,7 @@ export default function DiscoverPage() {
   const projectId = router.query.projectId as string;
 
   return (
-    <Page headerProps={{ title: "Logging" }} scrollable>
+    <Page headerProps={{ title: "Logging" }}>
       {projectId ? <PageDiscover /> : null}
     </Page>
   );
