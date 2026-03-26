@@ -2,10 +2,7 @@
 import React from "react";
 import { getFieldIcon } from "utils/icon";
 import { IconButton } from "components/ui/icon-button";
-import { useDiscoverTheme } from "components/ui/theme";
 import { Toggletip } from "components/ui/toggletip";
-import { css } from "@emotion/css";
-import { cn } from "utils/tailwind";
 import { TopData } from "./top-data/top-data";
 
 interface FieldItemProps {
@@ -16,7 +13,6 @@ interface FieldItemProps {
 }
 
 export default function FieldItem(props: FieldItemProps) {
-  const theme = useDiscoverTheme();
   const { field } = props;
   field.key = field.Field;
   if (field.children) {
@@ -31,68 +27,16 @@ export default function FieldItem(props: FieldItemProps) {
   return (
     <div>
       <Toggletip placement="right" content={<TopData field={field} />}>
-        <div
-          className={css`
-            width: 100%;
-            text-align: left;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 36px;
-            padding: 0 8px;
-            gap: 8px;
-            cursor: pointer;
-            &:hover .icon-wrapper {
-              opacity: 1;
-            }
-            &:hover {
-              background-color: ${theme.colors.background.secondary};
-            }
-          `}
-        >
+        <div className="group flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 px-2 text-left hover:bg-muted/50">
           <div className="flex min-w-0 items-center gap-2">
-            <div
-              className={css`
-                display: inline-flex;
-                height: 1.5rem;
-                width: 1.5rem;
-                flex-shrink: 0;
-                align-items: center;
-                justify-content: center;
-                color: ${theme.colors.text.secondary};
-              `}
-            >
+            <div className="text-muted-foreground inline-flex h-6 w-6 shrink-0 items-center justify-center">
               {getFieldIcon(field["Type"])}
             </div>
-            <div
-              className={css`
-                display: flex;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-                flex: 1 1 auto;
-              `}
-            >
+            <div className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
               {field["Field"]}
             </div>
           </div>
-          <div
-            className={cn(
-              "icon-wrapper",
-              css`
-                opacity: 0;
-                transition: opacity 0.2s;
-                margin-left: auto;
-                display: flex;
-                align-items: center;
-                color: ${theme.colors.text.secondary};
-                &:hover {
-                  color: ${theme.colors.text.primary};
-                }
-              `,
-            )}
-          >
+          <div className="text-muted-foreground hover:text-foreground ml-auto flex items-center opacity-0 transition-opacity group-hover:opacity-100">
             {props.type === "add" ? (
               <IconButton
                 name="plus"

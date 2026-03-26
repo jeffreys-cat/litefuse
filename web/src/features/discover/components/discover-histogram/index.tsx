@@ -4,7 +4,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import React, { useEffect, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { Select } from "components/ui/select";
-import { useDiscoverTheme } from "components/ui/theme";
+import { useTheme } from "next-themes";
 import { IntervalEnum } from "types/type";
 import { TIME_INTERVALS } from "utils/data";
 import {
@@ -23,10 +23,10 @@ import {
   pageAtom,
   timeRangeAtom,
 } from "store/discover";
-import { css } from "@emotion/css";
 
 export function DiscoverHistogram() {
-  const theme = useDiscoverTheme().isDark ? "dark" : "light";
+  const { resolvedTheme } = useTheme();
+  const theme = resolvedTheme === "dark" ? "dark" : "light";
   const [currentDate, setCurrentDate] = useAtom(currentDateAtom);
   const ReactEChartsInstance = useRef<ReactECharts>(null);
   const [discoverCurrent, setDiscoverCurrent] = useAtom(discoverCurrentAtom);
@@ -226,51 +226,23 @@ export function DiscoverHistogram() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tableDataCharts]);
   return (
-    <div
-      className={css`
-        padding: 0 16px;
-      `}
-    >
-      <div
-        className={css`
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-        `}
-      >
+    <div className="px-4">
+      <div className="flex items-center justify-between">
         <div>
-          <span
-            className={css`
-              font-size: 24px;
-              font-weight: 600;
-            `}
-          >
+          <span className="text-2xl font-semibold">
             {tableTotalCount
               ? tableTotalCount
                   .toString()
                   .replace(/(\d)(?=(?:\d{3})+$)/g, "$1,")
               : "0"}
           </span>{" "}
-          <span
-            className={css`
-              font-size: 12px;
-            `}
-          >{`hits`}</span>
+          <span className="text-xs">{`hits`}</span>
         </div>
-        <div
-          className={css`
-            font-size: 14px;
-            color: rgb(190, 190, 193);
-          `}
-        >
+        <div className="text-muted-foreground text-sm">
           {currentDate &&
             `${currentDate[0]?.format(FORMAT_DATE)} ~ ${currentDate[1]?.format(FORMAT_DATE)} `}
         </div>
-        <div
-          className={css`
-            width: 160px;
-          `}
-        >
+        <div className="w-40">
           <Select
             value={interval}
             onChange={(selectdbInterval) => {
@@ -280,11 +252,7 @@ export function DiscoverHistogram() {
           />
         </div>
       </div>
-      <div
-        className={css`
-          height: 300px;
-        `}
-      >
+      <div className="h-[300px]">
         <ReactECharts
           option={options}
           ref={ReactEChartsInstance}
