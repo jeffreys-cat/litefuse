@@ -27,7 +27,7 @@ export default function FieldItem(props: FieldItemProps) {
   return (
     <div>
       <Toggletip placement="right" content={<TopData field={field} />}>
-        <div className="group flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 px-2 text-left hover:bg-muted/50">
+        <div className="group hover:bg-muted/50 flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 px-2 text-left">
           <div className="flex min-w-0 items-center gap-2">
             <div className="text-muted-foreground inline-flex h-6 w-6 shrink-0 items-center justify-center">
               {getFieldIcon(field["Type"])}

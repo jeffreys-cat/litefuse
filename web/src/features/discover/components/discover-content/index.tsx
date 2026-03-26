@@ -201,7 +201,7 @@ export default function DiscoverContent({
 
         <TabContent>
           {state[0].active && (
-            <table className="w-full bg-muted/30 pl-4 backdrop-blur-md">
+            <table className="bg-muted/30 w-full pl-4 backdrop-blur-md">
               <tbody>
                 {subTableData.map((item: any) => {
                   let fieldValue = item.value;
@@ -289,7 +289,7 @@ export default function DiscoverContent({
             setSurroundingLogsOpen(true);
             setSelectedRow(row.original);
           }}
-          className="text-muted-foreground hover:text-primary absolute right-4 top-0 cursor-pointer pt-2 text-sm transition-colors"
+          className="text-muted-foreground hover:text-primary absolute top-0 right-4 cursor-pointer pt-2 text-sm transition-colors"
         >
           Surrounding Logs
         </button>

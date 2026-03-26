@@ -105,7 +105,9 @@ export default function DiscoverSidebar() {
       </div>
       <div className="mt-px h-full flex-1 overflow-auto">
         <CollapsableSection
-          label={<span className="ml-1 text-sm leading-8">Selected fields</span>}
+          label={
+            <span className="ml-1 text-sm leading-8">Selected fields</span>
+          }
           isOpen={true}
         >
           <div className="w-full">
@@ -139,7 +141,9 @@ export default function DiscoverSidebar() {
           </div>
         </CollapsableSection>
         <CollapsableSection
-          label={<span className="ml-1 text-sm leading-8">Available fields</span>}
+          label={
+            <span className="ml-1 text-sm leading-8">Available fields</span>
+          }
           isOpen={true}
         >
           <div className="w-full">
