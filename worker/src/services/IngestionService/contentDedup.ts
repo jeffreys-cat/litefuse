@@ -39,31 +39,32 @@ export function deduplicateInputContent(rawInput: any): {
     };
   }
 
-  // Structured input → per-part dedup
+  // Structured input → replace arrays with hash arrays
   const entries: ContentEntry[] = [];
   const result = structuredClone(rawInput);
 
-  function hashPart(part: any): void {
-    if (part?.content && typeof part.content === "string") {
-      const hash = sha256(part.content);
-      entries.push({ content_hash: hash, content: part.content });
-      part.content_hash = hash;
-      delete part.content;
-    }
-  }
-
-  // systemPrompt parts
-  if (Array.isArray(result.systemPrompt)) {
-    result.systemPrompt.forEach(hashPart);
-  }
-
-  // messages → parts
-  if (Array.isArray(result.messages)) {
-    for (const msg of result.messages) {
-      if (Array.isArray(msg.parts)) {
-        msg.parts.forEach(hashPart);
+  // Hash each element in an array and replace with hash array
+  function hashArrayElements(arr: any[]): string[] {
+    const hashes: string[] = [];
+    for (const item of arr) {
+      if (item && typeof item === "object") {
+        const serialized = JSON.stringify(item);
+        const hash = sha256(serialized);
+        entries.push({ content_hash: hash, content: serialized });
+        hashes.push(hash);
       }
     }
+    return hashes;
+  }
+
+  // Replace systemPrompt array with hash array
+  if (Array.isArray(result.systemPrompt)) {
+    result.systemPrompt = hashArrayElements(result.systemPrompt);
+  }
+
+  // Replace messages array with hash array
+  if (Array.isArray(result.messages)) {
+    result.messages = hashArrayElements(result.messages);
   }
 
   return { transformedInput: result, contentEntries: entries };

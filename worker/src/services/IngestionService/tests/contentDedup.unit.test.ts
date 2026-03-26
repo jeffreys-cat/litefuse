@@ -52,26 +52,24 @@ describe("deduplicateInputContent", () => {
     const { transformedInput, contentEntries } =
       deduplicateInputContent(original);
 
-    // Verify content replaced with hashes
-    expect(transformedInput.systemPrompt[0].content).toBeUndefined();
-    expect(transformedInput.systemPrompt[0].content_hash).toBe(
-      sha256("You are an AI assistant."),
-    );
+    // Verify arrays replaced with hash arrays
+    expect(transformedInput.systemPrompt).toEqual([
+      sha256(JSON.stringify(original.systemPrompt[0])),
+    ]);
 
-    expect(transformedInput.messages[0].parts[0].content).toBeUndefined();
-    expect(transformedInput.messages[0].parts[0].content_hash).toBe(
-      sha256("hello"),
-    );
+    expect(transformedInput.messages).toEqual([
+      sha256(JSON.stringify(original.messages[0])),
+      sha256(JSON.stringify(original.messages[1])),
+    ]);
 
-    expect(transformedInput.messages[1].parts[0].content).toBeUndefined();
-    expect(transformedInput.messages[1].parts[0].content_hash).toBe(
-      sha256("hi there"),
-    );
-
-    // Verify content entries
+    // Verify content entries contain serialized JSON
     expect(contentEntries).toHaveLength(3);
-    expect(contentEntries.map((e) => e.content).sort()).toEqual(
-      ["You are an AI assistant.", "hello", "hi there"].sort(),
+    expect(contentEntries.map((e) => JSON.parse(e.content)).sort()).toEqual(
+      [
+        original.systemPrompt[0],
+        original.messages[0],
+        original.messages[1],
+      ].sort(),
     );
 
     // Verify original is not mutated
@@ -86,12 +84,11 @@ describe("deduplicateInputContent", () => {
 
     const { transformedInput, contentEntries } = deduplicateInputContent(input);
 
-    // Non-string content should not be hashed
-    expect(transformedInput.systemPrompt[0].content).toEqual({
-      url: "http://example.com",
-    });
-    expect(transformedInput.systemPrompt[0].content_hash).toBeUndefined();
-    expect(contentEntries).toHaveLength(0);
+    // SystemPrompt array is replaced with hash array
+    expect(transformedInput.systemPrompt).toEqual([
+      sha256(JSON.stringify(input.systemPrompt[0])),
+    ]);
+    expect(contentEntries).toHaveLength(1);
   });
 
   it("should handle empty messages array", () => {
@@ -103,7 +100,6 @@ describe("deduplicateInputContent", () => {
     const { transformedInput, contentEntries } = deduplicateInputContent(input);
 
     expect(contentEntries).toHaveLength(1);
-    expect(contentEntries[0].content).toBe("system");
     expect(transformedInput.messages).toEqual([]);
   });
 
@@ -114,12 +110,11 @@ describe("deduplicateInputContent", () => {
 
     const { transformedInput, contentEntries } = deduplicateInputContent(input);
 
-    // Message without parts should be left unchanged
-    expect(transformedInput.messages[0]).toEqual({
-      role: "user",
-      text: "no parts here",
-    });
-    expect(contentEntries).toHaveLength(0);
+    // Messages array replaced with hash array
+    expect(transformedInput.messages).toEqual([
+      sha256(JSON.stringify(input.messages[0])),
+    ]);
+    expect(contentEntries).toHaveLength(1);
   });
 
   it("should produce deterministic hashes for same content", () => {
@@ -131,9 +126,11 @@ describe("deduplicateInputContent", () => {
 
     const { contentEntries } = deduplicateInputContent(input);
 
-    // Both entries should have the same hash
+    // Both entries should have different hashes (whole-element hash)
     expect(contentEntries).toHaveLength(2);
-    expect(contentEntries[0].content_hash).toBe(contentEntries[1].content_hash);
+    expect(contentEntries[0].content_hash).not.toBe(
+      contentEntries[1].content_hash,
+    );
   });
 
   it("round-trip: dedup + resolve should restore original", () => {
@@ -159,24 +156,33 @@ describe("deduplicateInputContent", () => {
     const { transformedInput, contentEntries } =
       deduplicateInputContent(original);
 
-    // Simulate content_dict table
+    // After dedup, systemPrompt and messages become hash arrays
+    expect(Array.isArray(transformedInput.systemPrompt)).toBe(true);
+    expect(Array.isArray(transformedInput.messages)).toBe(true);
+    expect(transformedInput.systemPrompt.length).toBe(1);
+    expect(transformedInput.messages.length).toBe(3);
+
+    // Verify content entries are serialized JSON
     const dict = new Map(
       contentEntries.map((e) => [e.content_hash, e.content]),
     );
 
-    // Read path: restore (inline simulation without DB)
+    // Read path: restore hash arrays to original elements
     function restore(obj: any): void {
       if (!obj || typeof obj !== "object") return;
-      if (obj.content_hash && dict.has(obj.content_hash)) {
-        obj.content = dict.get(obj.content_hash);
-        delete obj.content_hash;
+      if (Array.isArray(obj)) {
+        // Restore hash array to original elements
+        const restored = [];
+        for (const hash of obj) {
+          if (dict.has(hash)) {
+            restored.push(JSON.parse(dict.get(hash)!));
+          }
+        }
+        obj.length = 0;
+        obj.push(...restored);
         return;
       }
-      if (Array.isArray(obj)) {
-        obj.forEach((item) => restore(item));
-      } else {
-        Object.values(obj).forEach((val) => restore(val));
-      }
+      Object.values(obj).forEach((val) => restore(val));
     }
 
     const restored = JSON.parse(JSON.stringify(transformedInput));

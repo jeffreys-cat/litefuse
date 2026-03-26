@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS content_dict (
     content_hash CHAR(64)  NOT NULL COMMENT 'SHA-256(content)',
-    content      TEXT      NOT NULL COMMENT 'Actual text content'
+    content      VARIANT      NOT NULL COMMENT 'Actual text content'
 ) ENGINE = OLAP
 UNIQUE KEY (content_hash)
 DISTRIBUTED BY HASH(content_hash) BUCKETS AUTO
