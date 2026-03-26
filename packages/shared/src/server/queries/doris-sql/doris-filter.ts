@@ -135,19 +135,11 @@ export class DateTimeFilter implements Filter {
 
     // 将Date对象转换为Doris DateTime(3)格式的字符串
     // const dateTimeString = this.value.toISOString().replace('T', ' ').replace('Z', '');
+    // Doris stores UTC timestamps, convert Date to UTC string
     const dateTimeString = this.value
-      .toLocaleString("sv-SE", {
-        timeZone: "Asia/Shanghai",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        fractionalSecondDigits: 3,
-      })
+      .toISOString()
       .replace("T", " ")
-      .replace(",", ".");
+      .replace("Z", "");
 
     return {
       query: `${fieldWithPrefix} ${this.operator} '${dateTimeString}'`,
