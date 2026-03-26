@@ -2,7 +2,7 @@ name: langfuse-doris
 
 services:
   langfuse-web:
-    image: langfuse-web:032602
+    image: langfuse-web:032605
     container_name: langfuse-doris-web
     hostname: langfuse-web
     depends_on: &langfuse-depends-on
@@ -88,7 +88,7 @@ services:
       - doris_internal
 
   langfuse-worker:
-    image: langfuse-worker:032602
+    image: langfuse-worker:032605
     container_name: langfuse-doris-worker
     hostname: langfuse-worker
     depends_on: *langfuse-depends-on
