@@ -277,9 +277,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         ),
         ${
           selectMetrics
-            ? `deduplicated_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts,
-                   ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
+            ? `filtered_observations AS (
+            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
             FROM observations o
             WHERE o.project_id = {projectId: String}
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
@@ -506,10 +505,10 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           ...row,
           session_usage_details: parseDetails(row.session_usage_details),
           session_cost_details: parseDetails(row.session_cost_details),
-          // Ensure trace_tags is always an array and filter out null values
-          trace_tags: Array.isArray(row.trace_tags)
-            ? row.trace_tags.filter((tag) => tag !== null && tag !== "")
-            : [],
+          // Ensure array fields are always arrays and filter out null values
+          trace_tags: parseArrayField(row.trace_tags as any),
+          user_ids: parseArrayField(row.user_ids as any),
+          trace_ids: parseArrayField(row.trace_ids as any),
         } as SessionWithMetricsReturnType;
       });
 
@@ -553,6 +552,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         return {
           ...row,
           trace_tags: processedTraceTags,
+          user_ids: parseArrayField(row.user_ids as any),
+          trace_ids: parseArrayField(row.trace_ids as any),
         } as SessionDataReturnType;
       });
 
