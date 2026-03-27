@@ -257,6 +257,9 @@ export function WidgetForm({
   const [rawSqlFilter, setRawSqlFilter] = useState<string>(
     initialValues.rawSqlFilter ?? "",
   );
+  const [appliedRawSqlFilter, setAppliedRawSqlFilter] = useState<string>(
+    initialValues.rawSqlFilter ?? "",
+  );
 
   // Determine if this is an existing widget (editing mode)
   const isExistingWidget = Boolean(widgetId);
@@ -959,7 +962,7 @@ export function WidgetForm({
       dimensions: queryDimensions,
       metrics: queryMetrics,
       filters: [...mapLegacyUiTableFilterToView(selectedView, userFilterState)],
-      rawSqlFilter: rawSqlFilter.trim() || undefined,
+      rawSqlFilter: appliedRawSqlFilter.trim() || undefined,
       timeDimension: isTimeSeriesChart(
         selectedChartType as DashboardWidgetChartType,
       )
@@ -977,7 +980,7 @@ export function WidgetForm({
     selectedMeasure,
     selectedMetrics,
     userFilterState,
-    rawSqlFilter,
+    appliedRawSqlFilter,
     dateRange,
     selectedChartType,
     histogramBins,
@@ -1598,10 +1601,25 @@ export function WidgetForm({
                   onChange={(e) => setRawSqlFilter(e.target.value)}
                   rows={2}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Raw SQL appended to WHERE clause. Use Doris/ClickHouse
-                  syntax.
-                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    disabled={rawSqlFilter.trim() === appliedRawSqlFilter.trim()}
+                    onClick={() => setAppliedRawSqlFilter(rawSqlFilter)}
+                  >
+                    Apply
+                  </button>
+                  {rawSqlFilter.trim() !== appliedRawSqlFilter.trim() && (
+                    <span className="text-xs text-muted-foreground">
+                      Unapplied changes
+                    </span>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Raw SQL appended to WHERE clause. Use Doris/ClickHouse
+                    syntax.
+                  </p>
+                </div>
               </div>
 
               {/* Dimension Selection - Regular charts (Breakdown) */}
