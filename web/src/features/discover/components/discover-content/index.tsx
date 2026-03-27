@@ -7,7 +7,6 @@ import { useRouter } from "next/router";
 import { IconButton } from "components/ui/icon-button";
 import { Pagination } from "components/ui/pagination";
 import { Tab, TabContent, TabsBar } from "components/ui/tabs";
-import { useDiscoverTheme } from "components/ui/theme";
 import JsonView from "@uiw/react-json-view";
 import {
   tableTotalCountAtom,
@@ -24,8 +23,9 @@ import {
   currentTimeFieldAtom,
 } from "store/discover";
 import { get } from "lodash-es";
-import { Button as AntButton } from "antd";
+import { Button as ShadcnButton } from "@/src/components/ui/button";
 import SDCollapsibleTable from "components/selectdb-ui/sd-collapsible-table";
+import { useDiscoverTheme } from "components/ui/theme";
 import { ColumnStyleWrapper, HoverStyle } from "./discover-content.style";
 import { css } from "@emotion/css";
 import { ContentTableActions } from "./content-table-actions";
@@ -41,6 +41,12 @@ import {
 import { TablePeekView } from "@/src/components/table/peek";
 import { usePeekNavigation } from "@/src/components/table/peek/hooks/usePeekNavigation";
 import { PeekViewTraceDetail } from "@/src/components/table/peek/peek-trace-detail";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/src/components/ui/tooltip";
 
 type DiscoverTableRow = {
   _original: Record<string, unknown>;
@@ -88,15 +94,6 @@ export default function DiscoverContent({
   const [pageSize, _setPageSize] = useAtom(pageSizeAtom);
   const [page, setPage] = useAtom(pageAtom);
   const [surroundingLogsOpen, setSurroundingLogsOpen] = useState(false);
-  const [_fieldKeyBg, setFieldKeyBg] = useState<string>("#3f3f4f");
-
-  useEffect(() => {
-    if (theme.isDark) {
-      setFieldKeyBg("#3f3f4f");
-    } else {
-      setFieldKeyBg("rgb(191, 217, 253)");
-    }
-  }, [theme.isDark]);
 
   const [state, updateState] = useState([
     {
@@ -187,13 +184,7 @@ export default function DiscoverContent({
           position: relative;
         `}
       >
-        <TabsBar
-          className={css`
-            ${theme.isDark
-              ? "background-color: hsl(var(--n9) / 0.4);"
-              : "background-color: hsl(var(--b1) / 0.6);"}
-          `}
-        >
+        <TabsBar className="bg-muted/40">
           {state.map((tab, index) => {
             return (
               <Tab
@@ -216,18 +207,7 @@ export default function DiscoverContent({
 
         <TabContent>
           {state[0].active && (
-            <table
-              // className="bg-b1/20 pl-4 backdrop-blur-md dark:bg-n9/60"
-              className={css`
-                padding-left: 16px;
-                backdrop-filter: blur(12px);
-                -webkit-backdrop-filter: blur(12px);
-                width: 100%;
-                ${theme.isDark
-                  ? "background-color: hsl(var(--n9) / 0.6);"
-                  : "background-color: hsl(var(--b1) / 0.2)"}
-              `}
-            >
+            <table className="bg-muted/30 w-full pl-4 backdrop-blur-md">
               <tbody>
                 {subTableData.map((item: any) => {
                   let fieldValue = item.value;
@@ -309,25 +289,16 @@ export default function DiscoverContent({
             </div>
           )}
         </TabContent>
-        <a
+        <button
+          type="button"
           onClick={() => {
-            console.log("row", row);
             setSurroundingLogsOpen(true);
             setSelectedRow(row.original);
           }}
-          className={css`
-            position: absolute;
-            right: 1rem;
-            top: 0;
-            cursor: pointer;
-            padding-top: 0.5rem;
-            &:hover {
-              color: rgb(43, 102, 253);
-            }
-          `}
+          className="text-muted-foreground hover:text-primary absolute top-0 right-4 cursor-pointer pt-2 text-sm transition-colors"
         >
           Surrounding Logs
-        </a>
+        </button>
       </div>
     );
   };
@@ -405,17 +376,13 @@ export default function DiscoverContent({
         cell: ({ row, getValue }) => {
           const traceId = getTraceIdFromRow(row.original);
           const isTracePeekEnabled = Boolean(traceId);
-          const hoverBackgroundColor = theme.isDark
-            ? "hsl(var(--muted) / 0.28)"
-            : "hsl(var(--muted) / 0.6)";
-          const hoverBorderColor = theme.isDark
-            ? "hsl(var(--border) / 0.55)"
-            : "hsl(var(--border) / 0.85)";
+          const hoverBackgroundColor = "hsl(var(--muted) / 0.5)";
+          const hoverBorderColor = "hsl(var(--border) / 0.7)";
 
           function createMarkup() {
             return { __html: getValue<string>() };
           }
-          return (
+          const cellContent = (
             <div
               onClick={() => {
                 if (!isTracePeekEnabled) {
@@ -451,9 +418,7 @@ export default function DiscoverContent({
               <ColumnStyleWrapper
                 className={css`
                   & .field-key {
-                    background-color: ${theme.isDark
-                      ? "#3f3f4f"
-                      : "rgb(191, 217, 253)"};
+                    background-color: hsl(var(--primary) / 0.12);
                   }
                 `}
               >
@@ -468,6 +433,17 @@ export default function DiscoverContent({
                 />
               </ColumnStyleWrapper>
             </div>
+          );
+          if (!isTracePeekEnabled) return cellContent;
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
+                <TooltipContent side="top" align="start">
+                  <p className="text-xs">点击查看 Trace：{traceId}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           );
         },
       });
@@ -537,14 +513,16 @@ export default function DiscoverContent({
                       {isTraceIdField &&
                       typeof fieldValue === "string" &&
                       fieldValue === traceId ? (
-                        <AntButton
+                        <ShadcnButton
                           onClick={() =>
                             openTracePeek(fieldValue, row.original)
                           }
-                          type="link"
+                          variant="link"
+                          size="sm"
+                          className="h-auto p-0"
                         >
                           {fieldValue}
-                        </AntButton>
+                        </ShadcnButton>
                       ) : (
                         <span
                           className={css`

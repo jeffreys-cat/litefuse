@@ -63,9 +63,11 @@ export function SidebarNotifications() {
     setDismissedNotifications([...dismissedNotifications, id]);
   };
 
-  const activeNotifications = notifications.filter(
-    (notif) => !dismissedNotifications.includes(notif.id) && !isExpired(notif),
-  );
+  // const activeNotifications = notifications.filter(
+  //   (notif) => !dismissedNotifications.includes(notif.id) && !isExpired(notif),
+  // );
+
+  const activeNotifications = notifications.filter(() => false);
 
   if (activeNotifications.length === 0) {
     return null;

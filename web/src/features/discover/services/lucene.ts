@@ -7,6 +7,7 @@ import {
 
 type GetWhereSQLParams = {
   query: string;
+  projectId: string;
   databaseName: string;
   tableName: string;
   connectionId?: string;
@@ -16,6 +17,7 @@ type GetWhereSQLParams = {
 
 export async function getWhereSQLViaLucene({
   query,
+  projectId,
   databaseName,
   tableName,
   connectionId,
@@ -28,6 +30,7 @@ export async function getWhereSQLViaLucene({
   }
 
   const serializer = new CustomSchemaSQLSerializerV2({
+    projectId,
     databaseName,
     tableName,
     connectionId,

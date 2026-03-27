@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useCallback } from "react";
 import { useAtomValue } from "jotai";
+import { useRouter } from "next/router";
 import {
   currentDatabaseAtom,
   currentTableAtom,
@@ -12,6 +13,8 @@ import {
 import { getWhereSQLViaLucene } from "services/lucene";
 
 export function useLuceneWhereClause() {
+  const router = useRouter();
+  const projectId = router.query.projectId as string;
   const searchType = useAtomValue(searchTypeAtom);
   const searchValue = useAtomValue(searchValueAtom);
   const currentTable = useAtomValue(currentTableAtom);
@@ -25,7 +28,7 @@ export function useLuceneWhereClause() {
     }
 
     const trimmedQuery = searchValue?.trim();
-    if (!trimmedQuery || !currentTable || !currentDatabase) {
+    if (!trimmedQuery || !currentTable || !currentDatabase || !projectId) {
       return "";
     }
 
@@ -58,6 +61,7 @@ export function useLuceneWhereClause() {
 
     return await getWhereSQLViaLucene({
       query: trimmedQuery,
+      projectId,
       databaseName: currentDatabase,
       tableName: currentTable,
       implicitColumnExpression,
@@ -66,6 +70,7 @@ export function useLuceneWhereClause() {
     currentDatabase,
     currentTable,
     currentTimeField,
+    projectId,
     searchType,
     searchValue,
     tableFields,

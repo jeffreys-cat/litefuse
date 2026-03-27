@@ -15,6 +15,7 @@ import {
 import { useAtom, useAtomValue } from "jotai";
 import { useRequest } from "ahooks";
 import { css } from "@emotion/css";
+import { useRouter } from "next/router";
 import { SurroundingContentItem } from "./surrounding-content-item";
 import { SurroundingLogsActions } from "./logs-actions";
 import SurroundingDiscoverFilter from "./discover-filter";
@@ -45,12 +46,13 @@ import {
 // import dayjs from 'dayjs';
 import { get, sortBy } from "lodash-es";
 import { getSurroundingDataService } from "services/discover";
-import { lastValueFrom } from "rxjs";
-import { convertColumnToRow, formatTimestampToDateTime } from "utils/data";
+import { convertRowsToTableData, formatTimestampToDateTime } from "utils/data";
 import { generateTableDataUID } from "utils/utils";
 import { SurroundingContentTableActions } from "./content/content-table-actions";
 
 export default function SurroundingLogs() {
+  const router = useRouter();
+  const projectId = router.query.projectId as string;
   const theme = useDiscoverTheme();
   const selectedRow = useAtomValue(selectedRowAtom);
   const currentTimeField = useAtomValue(currentTimeFieldAtom);
@@ -102,33 +104,25 @@ export default function SurroundingLogs() {
     loading: getAfterSurroundingDataLoading,
     run: getAfterSurroundingData,
   } = useRequest(
-    ({ pageSize = afterTimeFieldPageSize, time = afterTime }: any) => {
-      console.log(time);
+    async ({ pageSize = afterTimeFieldPageSize, time = afterTime }: any) => {
       const params: SurroundingParams = getQueryParams({
         pageSize,
         operator: ">",
         time,
       });
-      console.log(params.time);
-
-      return lastValueFrom(getSurroundingDataService(params));
+      const { rows } = await getSurroundingDataService(projectId, params);
+      return convertRowsToTableData(rows);
     },
     {
       manual: true,
-      onSuccess: async (res: any) => {
-        if (res.ok) {
-          const rowsData = convertColumnToRow(
-            res.data.results.getSurroundingData.frames[0],
-          );
-          const result = generateSurroundingResult(rowsData, currentTimeField);
+      onSuccess: (rowsData: any) => {
+        const result = generateSurroundingResult(rowsData, currentTimeField);
+        if (result.length > 0) {
           let data = [...surroundingTableData];
           data.push(...result);
-          setAfterCount(afterCount + data.length);
-          setAfterTime(result[0]._original[currentTimeField]);
+          setAfterCount(afterCount + result.length);
+          setAfterTime(result[result.length - 1]._original[currentTimeField]);
           setSurroundingTableData(data);
-          // setTimeout(() => {
-          //     scrollToSelectedRow();
-          // }, 50);
         }
       },
     },
@@ -161,31 +155,28 @@ export default function SurroundingLogs() {
     loading: getBeforeSurroundingDataLoading,
     run: getBeforeSurroundingData,
   } = useRequest(
-    ({ pageSize = beforeTimeFieldPageSize, time = selectedRow.time }: any) => {
+    async ({
+      pageSize = beforeTimeFieldPageSize,
+      time = selectedRow.time,
+    }: any) => {
       const params: SurroundingParams = getQueryParams({
         pageSize,
         operator: "<",
         time,
       });
-
-      return lastValueFrom(getSurroundingDataService(params));
+      const { rows } = await getSurroundingDataService(projectId, params);
+      return convertRowsToTableData(rows);
     },
     {
       manual: true,
-      onSuccess: async (res: any) => {
-        if (res.ok) {
-          const rowsData = convertColumnToRow(
-            res.data.results.getSurroundingData.frames[0],
-          );
-          const result = generateSurroundingResult(rowsData, currentTimeField);
+      onSuccess: (rowsData: any) => {
+        const result = generateSurroundingResult(rowsData, currentTimeField);
+        if (result.length > 0) {
           let data = [...surroundingTableData];
-          data.unshift(...res.data);
+          data.unshift(...result);
           setBeforeCount(beforeCount + result.length);
-          setBeforeTime(res.data[0]._original[currentTimeField]);
+          setBeforeTime(result[0]._original[currentTimeField]);
           setSurroundingTableData(data);
-          // setTimeout(() => {
-          //     scrollToSelectedRow();
-          // }, 50);
         }
       },
     },
@@ -199,61 +190,49 @@ export default function SurroundingLogs() {
   }
 
   const { loading: initLoading } = useRequest(
-    () => {
+    async () => {
       const prevTimeParams: SurroundingParams = getQueryParams({
         operator: "<",
       });
       const afterTimeParams: SurroundingParams = getQueryParams({
         operator: ">",
       });
-      return Promise.all([
-        lastValueFrom(getSurroundingDataService(prevTimeParams)),
-        lastValueFrom(getSurroundingDataService(afterTimeParams)),
+      const [res1, res2] = await Promise.all([
+        getSurroundingDataService(projectId, prevTimeParams),
+        getSurroundingDataService(projectId, afterTimeParams),
       ]);
+      return [
+        convertRowsToTableData(res1.rows),
+        convertRowsToTableData(res2.rows),
+      ];
     },
     {
       refreshDeps: [surroundingDataFilter],
-      onSuccess: async (res: any) => {
-        if (res[0].ok && res[1].ok) {
-          const rowsData1 = convertColumnToRow(
-            res[0].data.results.getSurroundingData.frames[0],
-          );
-          const rowsData2 = convertColumnToRow(
-            res[1].data.results.getSurroundingData.frames[0],
-          );
-          const result1 = generateSurroundingResult(
-            rowsData1,
-            currentTimeField,
-          );
-          const result2 = generateSurroundingResult(
-            rowsData2,
-            currentTimeField,
-          );
-          const selectedResult = generateSurroundingResult(
-            [selectedRow._original],
-            currentTimeField,
-          );
-          const data = [...result1, ...selectedResult, ...result2];
-          const rowsDataWithUid = await generateTableDataUID(data);
-          if (result1.length > 0) {
-            setBeforeCount(result1.length);
-            setBeforeTime(result1[0]._original[currentTimeField]);
-          } else {
-            setBeforeTime(selectedRow.time);
-          }
-          if (result1.length > 0) {
-            setAfterCount(result1.length);
-            setAfterTime(result1[0]._original[currentTimeField]);
-          } else {
-            setAfterTime(selectedRow.time);
-          }
-          setSurroundingTableData(rowsDataWithUid);
-          setTimeout(() => {
-            scrollToSelectedRow();
-          }, 50);
+      onSuccess: async ([rowsData1, rowsData2]: any) => {
+        const result1 = generateSurroundingResult(rowsData1, currentTimeField);
+        const result2 = generateSurroundingResult(rowsData2, currentTimeField);
+        const selectedResult = generateSurroundingResult(
+          [selectedRow._original],
+          currentTimeField,
+        );
+        const data = [...result1, ...selectedResult, ...result2];
+        const rowsDataWithUid = await generateTableDataUID(data);
+        if (result1.length > 0) {
+          setBeforeCount(result1.length);
+          setBeforeTime(result1[0]._original[currentTimeField]);
         } else {
-          // toast.error(res[1].message);
+          setBeforeTime(selectedRow.time);
         }
+        if (result2.length > 0) {
+          setAfterCount(result2.length);
+          setAfterTime(result2[result2.length - 1]._original[currentTimeField]);
+        } else {
+          setAfterTime(selectedRow.time);
+        }
+        setSurroundingTableData(rowsDataWithUid);
+        setTimeout(() => {
+          scrollToSelectedRow();
+        }, 50);
       },
       onError: (err) => {
         console.log(err);
@@ -423,9 +402,7 @@ export default function SurroundingLogs() {
         if (typeof highlightValue === "object") {
           highlightValue = JSON.stringify(highlightValue);
         }
-        itemSource += `<span style="background-color: ${
-          theme.isDark ? "#3F3F4F" : "#BED8FD"
-        } ; padding: 0px 4px 2px; margin-right: 4px; border-radius: 4px;">${key}:</span>${highlightValue} `;
+        itemSource += `<span class="field-key">${key}:</span>${highlightValue} `;
       }
       return {
         _original: item,
@@ -520,10 +497,8 @@ export default function SurroundingLogs() {
             >
               <ColumnStyleWrapper
                 className={css`
-                  .field-key {
-                    background-color: ${theme.isDark
-                      ? "#3f3f4f"
-                      : "rgb(191, 217, 253)"};
+                  & .field-key {
+                    background-color: hsl(var(--primary) / 0.12);
                   }
                 `}
               >
@@ -624,10 +599,11 @@ export default function SurroundingLogs() {
   ]);
 
   return (
-    <div>
-      <SurroundingDiscoverFilter dataFilter={surroundingDataFilter} />
-      <div className="bg-b1 h-0.5 dark:bg-black" />
-      <div style={{ position: "relative" }}>
+    <div className="flex h-full flex-col overflow-auto">
+      <div className="bg-background sticky top-0 z-40 border-b">
+        <SurroundingDiscoverFilter dataFilter={surroundingDataFilter} />
+      </div>
+      <div className="border-b px-4 py-2" style={{ position: "relative" }}>
         <SurroundingLogsActions
           getSurroundingData={getBeforeSurroundingData}
           getSurroundingDataLoading={getBeforeSurroundingDataLoading}
@@ -641,13 +617,10 @@ export default function SurroundingLogs() {
         {renderBeforeLoadingBar()}
       </div>
       <div
-        style={{
-          height: "calc(100vh - 220px)",
-          overflow: "auto",
-          position: "relative",
-        }}
+        className="flex-1 overflow-auto p-4"
+        style={{ position: "relative" }}
       >
-        <div className="mx-6 border">
+        <div className="overflow-hidden rounded-md border">
           <SDCollapsibleTable
             data={fields}
             columns={columns}
@@ -655,16 +628,8 @@ export default function SurroundingLogs() {
             renderSubComponent={renderSubComponent}
           />
         </div>
-        {/* {initLoading ? (
-                    <LoadingBar width={100} />
-                ) : (
-                    {renderBeforeLoadingBar}
-                    <div className="mx-6 border">
-                        <SDCollapsibleTable data={fields} columns={columns} getRowCanExpand={() => true} renderSubComponent={renderSubComponent} />
-                    </div>
-                )} */}
       </div>
-      <div style={{ position: "relative" }}>
+      <div className="border-t px-4 py-2" style={{ position: "relative" }}>
         {renderAfterLoadingBar()}
         <SurroundingLogsActions
           getSurroundingData={getAfterSurroundingData}
