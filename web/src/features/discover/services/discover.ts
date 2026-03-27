@@ -13,7 +13,10 @@ import {
   getSurroundingSQL,
 } from "./sql";
 
-export async function getTableDataService(projectId: string, payload: any) {
+export async function getTableDataService(
+  projectId: string,
+  payload: any,
+) {
   const rawSql = getQueryTableResultSQL(payload);
   return directApi.discover.query.mutate({
     projectId,
@@ -34,7 +37,10 @@ export async function getTableDataChartsService(
   });
 }
 
-export async function getTopDataService(projectId: string, payload: any) {
+export async function getTopDataService(
+  projectId: string,
+  payload: any,
+) {
   const rawSql = getQueryTableResultSQL(payload);
   return directApi.discover.query.mutate({
     projectId,

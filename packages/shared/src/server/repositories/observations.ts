@@ -73,7 +73,6 @@ import { ObservationType } from "../../domain";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
 import { shouldSkipObservationsFinal } from "../queries/clickhouse-sql/query-options";
-import { resolveContentReferences } from "./contentResolver";
 
 /**
  * Checks if observation exists in clickhouse.
@@ -326,11 +325,6 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
     records = rawRecords.map(
       preprocessDorisUsageCostDetails,
     ) as ObservationRecordReadType[];
-
-    // Resolve content_hash references back to actual content
-    if (includeIO) {
-      await resolveContentReferences(records);
-    }
   } else {
     const query = `
     SELECT
@@ -518,12 +512,6 @@ export const getObservationForTraceIdByName = async ({
     const records = rawRecords.map(
       preprocessDorisUsageCostDetails,
     ) as ObservationRecordReadType[];
-
-    // Resolve content_hash references back to actual content
-    if (fetchWithInputOutput) {
-      await resolveContentReferences(records);
-    }
-
     return records.map((r) => convertObservation(r));
   }
 
@@ -698,12 +686,6 @@ export const getObservationsById = async (
     const records = rawRecords.map(
       preprocessDorisUsageCostDetails,
     ) as ObservationRecordReadType[];
-
-    // Resolve content_hash references back to actual content
-    if (fetchWithInputOutput) {
-      await resolveContentReferences(records);
-    }
-
     return records.map((r) => convertObservation(r));
   }
 
@@ -838,16 +820,9 @@ const getObservationByIdInternal = async ({
     });
 
     // Apply preprocessing to convert Doris string format to ClickHouse-compatible format
-    const records = rawRecords.map(
+    return rawRecords.map(
       preprocessDorisUsageCostDetails,
     ) as ObservationRecordReadType[];
-
-    // Resolve content_hash references back to actual content
-    if (fetchWithInputOutput) {
-      await resolveContentReferences(records);
-    }
-
-    return records;
   }
 
   const query = `
@@ -1203,13 +1178,6 @@ const getObservationsTableInternal = async <T>(
         projectId,
       },
     });
-
-    // Resolve content_hash references back to actual content
-    if (selectIOAndMetadata) {
-      await resolveContentReferences(
-        res as unknown as Array<{ input?: string | null }>,
-      );
-    }
 
     return res;
   }
@@ -3057,27 +3025,7 @@ export const getObservationsForBlobStorageExport = function (
       },
     });
 
-    // Wrap stream to resolve content_hash references in batches
-    return (async function* () {
-      const batch: Array<Record<string, unknown>> = [];
-      const BATCH_SIZE = 100;
-      for await (const record of records) {
-        batch.push(record);
-        if (batch.length >= BATCH_SIZE) {
-          await resolveContentReferences(
-            batch as Array<{ input?: string | null }>,
-          );
-          for (const r of batch) yield r;
-          batch.length = 0;
-        }
-      }
-      if (batch.length > 0) {
-        await resolveContentReferences(
-          batch as Array<{ input?: string | null }>,
-        );
-        for (const r of batch) yield r;
-      }
-    })();
+    return records;
   }
 
   const query = `
