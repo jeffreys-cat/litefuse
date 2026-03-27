@@ -35,41 +35,22 @@ const normalizeColumnType = ({
   if (lower.startsWith("map")) return source.replace(/^map/i, "Map");
   if (lower.startsWith("array")) return source.replace(/^array/i, "Array");
   if (lower.startsWith("json") || lower.startsWith("variant")) return "JSON";
-  if (lower === "bool" || lower === "boolean" || lower.startsWith("tinyint(1)"))
-    return "Bool";
+  if (lower === "bool" || lower === "boolean" || lower.startsWith("tinyint(1)")) return "Bool";
   if (lower.startsWith("tinyint")) return "Int8";
   if (lower.startsWith("smallint")) return "Int16";
   if (lower.startsWith("mediumint")) return "Int32";
-  if (
-    lower.startsWith("bigint") ||
-    lower.startsWith("int") ||
-    lower.startsWith("integer")
-  )
-    return "Int64";
-  if (
-    lower.startsWith("float") ||
-    lower.startsWith("double") ||
-    lower.startsWith("real")
-  )
-    return "Float64";
-  if (lower.startsWith("decimal") || lower.startsWith("numeric"))
-    return "Float64";
+  if (lower.startsWith("bigint") || lower.startsWith("int") || lower.startsWith("integer")) return "Int64";
+  if (lower.startsWith("float") || lower.startsWith("double") || lower.startsWith("real")) return "Float64";
+  if (lower.startsWith("decimal") || lower.startsWith("numeric")) return "Float64";
   if (lower.startsWith("date")) return source.replace(/^date/i, "Date");
-  if (lower.startsWith("timestamp") || lower.startsWith("datetime"))
-    return "DateTime";
+  if (lower.startsWith("timestamp") || lower.startsWith("datetime")) return "DateTime";
   if (lower.startsWith("enum")) return source.replace(/^enum/i, "Enum");
   if (lower.startsWith("uuid")) return "UUID";
   if (lower.startsWith("ipv4")) return "IPv4";
   if (lower.startsWith("ipv6")) return "IPv6";
   if (lower.startsWith("tuple")) return source.replace(/^tuple/i, "Tuple");
   if (lower.startsWith("struct")) return source.replace(/^struct/i, "Tuple");
-  if (
-    lower.startsWith("char") ||
-    lower.startsWith("varchar") ||
-    lower.startsWith("text") ||
-    lower.startsWith("string")
-  )
-    return "String";
+  if (lower.startsWith("char") || lower.startsWith("varchar") || lower.startsWith("text") || lower.startsWith("string")) return "String";
 
   return source;
 };
@@ -83,9 +64,7 @@ export { normalizeColumnType };
 // These return Observables for backward compatibility with existing subscribe() callers.
 // TODO: migrate callers to async/await and remove Observable wrappers.
 
-function wrapAsync<T>(
-  fn: () => Promise<T>,
-): Observable<{ data: T; ok: boolean }> {
+function wrapAsync<T>(fn: () => Promise<T>): Observable<{ data: T; ok: boolean }> {
   return new Observable((subscriber) => {
     fn()
       .then((data) => {
@@ -99,7 +78,9 @@ function wrapAsync<T>(
 }
 
 export function getDatabases(projectId: string) {
-  return wrapAsync(() => directApi.discover.databases.query({ projectId }));
+  return wrapAsync(() =>
+    directApi.discover.databases.query({ projectId }),
+  );
 }
 
 export function getTablesService({
@@ -180,8 +161,7 @@ LIMIT 1;
     if (!name) return null;
 
     const dataType = row.DataType != null ? String(row.DataType) : undefined;
-    const columnType =
-      row.ColumnType != null ? String(row.ColumnType) : undefined;
+    const columnType = row.ColumnType != null ? String(row.ColumnType) : undefined;
 
     return {
       name,

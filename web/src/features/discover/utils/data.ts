@@ -798,10 +798,7 @@ export function convertRowsToTableData(
     for (const [key, value] of Object.entries(row)) {
       if (value instanceof Date) {
         out[key] = formatTimestampToDateTime(value);
-      } else if (
-        typeof value === "string" &&
-        shouldParseVariantJsonString(value)
-      ) {
+      } else if (typeof value === "string" && shouldParseVariantJsonString(value)) {
         out[key] = parseVariantFieldValue(value, key);
       } else {
         out[key] = value;
@@ -824,11 +821,7 @@ export function convertRowsToTableDataViaFieldsType(
       const fieldInfo = fields.find((f: any) => f.Field === key);
       if (value instanceof Date) {
         out[key] = formatTimestampToDateTime(value);
-      } else if (
-        fieldInfo &&
-        fieldInfo.Type?.toUpperCase() === "VARIANT" &&
-        typeof value === "string"
-      ) {
+      } else if (fieldInfo && fieldInfo.Type?.toUpperCase() === "VARIANT" && typeof value === "string") {
         out[key] = parseVariantFieldValue(value, key);
       } else {
         out[key] = value;
@@ -849,11 +842,7 @@ export function formatTimestampToDateTime(timestamp: any, precision = 3) {
     formatString += `.${"S".repeat(precision)}`;
   }
   // 转换时间戳并格式化
-  return dayjs
-    .utc(timestamp)
-    .local()
-    .locale(currentLocale)
-    .format(formatString);
+  return dayjs.utc(timestamp).local().locale(currentLocale).format(formatString);
 }
 
 export function formatTracesResData(frame: any) {
