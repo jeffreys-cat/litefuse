@@ -391,7 +391,9 @@ export function useDiscoverData() {
       }
 
       const firstRow = rows[0] as Record<string, unknown>;
-      const totalCount = Number(firstRow.total_count ?? firstRow["SUM(table_per_time.cnt)"] ?? 0);
+      const totalCount = Number(
+        firstRow.total_count ?? firstRow["SUM(table_per_time.cnt)"] ?? 0,
+      );
       setTableTotalCount(totalCount || 0);
     } catch (err) {
       console.error("查询错误", err);
