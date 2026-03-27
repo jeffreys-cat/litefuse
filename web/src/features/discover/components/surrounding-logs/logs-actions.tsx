@@ -1,5 +1,4 @@
 // @ts-nocheck
-import { css } from "@emotion/css";
 import { Button } from "components/ui/button";
 import { IconButton } from "components/ui/icon-button";
 import React from "react";
@@ -28,16 +27,10 @@ export function SurroundingLogsActions(props: SurroundingLogsActionsProps) {
   } = props;
   const { t } = useTranslation();
   return (
-    <div
-      className={css`
-        display: flex;
-        align-items: center;
-        justify-content: flex-start;
-      `}
-    >
+    <div className="flex items-center gap-2">
       <Button
-        // loading={getSurroundingDataLoading}
-        className="text-n2 hover:text-b7 font-normal hover:no-underline"
+        variant="outline"
+        size="sm"
         onClick={() => {
           getSurroundingData({ time: time });
         }}
@@ -54,14 +47,10 @@ export function SurroundingLogsActions(props: SurroundingLogsActionsProps) {
         )}
         {`Load`} {timeFieldPageSize} {t`Items`}
       </Button>
-      <div
-        className={css`
-          margin-left: 8px;
-        `}
-      >
+      <span className="text-muted-foreground text-xs">
         {count} {`Items`} {` `}
         {tips}
-      </div>
+      </span>
     </div>
   );
 }

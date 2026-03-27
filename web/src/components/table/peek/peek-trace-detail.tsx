@@ -25,9 +25,22 @@ export const PeekViewTraceDetail = ({ projectId }: { projectId: string }) => {
     withDefault(StringParam, "details"),
   );
 
-  return !peekId || !trace.data ? (
-    <Skeleton className="h-full w-full rounded-none" />
-  ) : (
+  if (!peekId) return null;
+  if (trace.isLoading || trace.isFetching) {
+    return <Skeleton className="h-full w-full rounded-none" />;
+  }
+  if (!trace.data) {
+    return (
+      <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-sm">
+        <p className="font-medium">未找到 Trace</p>
+        <p className="text-xs opacity-70">
+          Trace ID：{peekId}
+          <br />该 Trace 可能尚未同步到 Langfuse，或所属项目与当前项目不一致。
+        </p>
+      </div>
+    );
+  }
+  return (
     <Trace
       key={trace.data.id}
       trace={trace.data}

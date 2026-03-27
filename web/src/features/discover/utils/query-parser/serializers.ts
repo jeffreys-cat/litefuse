@@ -6,7 +6,7 @@ import {
   getColumn as getColumnMetadata,
   getInvertedIndexColumns,
 } from "../../services/metaservice";
-import { convertCHTypeToPrimitiveJSType, type JSDataType } from "./enums";
+import { convertCHTypeToPrimitiveJSType, JSDataType } from "./enums";
 import { splitAndTrimWithBracket } from "./utils";
 import { CLICK_HOUSE_JSON_NUMBER_TYPES, IMPLICIT_FIELD } from "./constants";
 
@@ -210,7 +210,7 @@ export abstract class SQLSerializer implements Serializer {
       ]);
     } else if (propertyType === JSDataType.Number) {
       return SqlString.format(
-        `(${column} ${isNegatedField ? "!" : ""}= CAST(?, 'Float64'))`,
+        `(${column} ${isNegatedField ? "!" : ""}= CAST(? AS DOUBLE))`,
         [term],
       );
     } else if (propertyType === JSDataType.JSON) {
@@ -342,7 +342,7 @@ export abstract class SQLSerializer implements Serializer {
       ]);
     } else if (propertyType === JSDataType.Number) {
       return SqlString.format(
-        `(?? ${isNegatedField ? "!" : ""}= CAST(?, 'Float64'))`,
+        `(?? ${isNegatedField ? "!" : ""}= CAST(? AS DOUBLE))`,
         [column, term],
       );
     } else if (
@@ -403,7 +403,7 @@ export abstract class SQLSerializer implements Serializer {
               if (!identifier) {
                 return null;
               }
-              return SqlString.format(`(?? = CAST(?, 'Float64'))`, [
+              return SqlString.format(`(?? = CAST(? AS DOUBLE))`, [
                 identifier,
                 term,
               ]);
@@ -523,6 +523,7 @@ export abstract class SQLSerializer implements Serializer {
 }
 
 export type CustomSchemaConfig = {
+  projectId: string;
   databaseName: string;
   implicitColumnExpression?: string;
   tableName: string;
@@ -531,6 +532,7 @@ export type CustomSchemaConfig = {
 };
 
 export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
+  private projectId: string;
   private tableName: string;
   private databaseName: string;
   private implicitColumnExpression?: string;
@@ -543,6 +545,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
 
   constructor({
     metadata,
+    projectId,
     databaseName,
     tableName,
     connectionId,
@@ -551,6 +554,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
   }: { metadata?: LegacyMetadataProvider } & CustomSchemaConfig) {
     super();
     this.legacyMetadataProvider = metadata;
+    this.projectId = projectId;
     this.databaseName = databaseName;
     this.tableName = tableName;
     this.implicitColumnExpression = implicitColumnExpression;
@@ -569,6 +573,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
 
     try {
       const result = await getColumnMetadata({
+        projectId: this.projectId,
         connectionId: this.connectionId,
         database: this.databaseName,
         table: this.tableName,
@@ -625,6 +630,7 @@ export class CustomSchemaSQLSerializerV2 extends SQLSerializer {
       this.invertedIndexColumnsPromise = (async () => {
         try {
           const columns = await getInvertedIndexColumns({
+            projectId: this.projectId,
             connectionId: this.connectionId,
             database: this.databaseName,
             table: this.tableName,
