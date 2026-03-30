@@ -106,6 +106,7 @@ async function upsertWidgets(widgets: ParsedWidgets, force: boolean) {
       dimensions: widget.dimensions,
       metrics: widget.metrics,
       filters: widget.filters,
+      rawSqlFilter: widget.rawSqlFilter ?? null,
       chartType: widget.chartType,
       chartConfig: widget.chartConfig,
       updatedAt: widget.updatedAt,
