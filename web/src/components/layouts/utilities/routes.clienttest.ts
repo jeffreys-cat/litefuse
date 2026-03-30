@@ -1,5 +1,12 @@
-import { processNavigation, type NavigationItem } from "@/src/components/layouts/utilities/routes";
-import { RouteGroup, RouteSection, type Route } from "@/src/components/layouts/routes";
+import {
+  processNavigation,
+  type NavigationItem,
+} from "@/src/components/layouts/utilities/routes";
+import {
+  RouteGroup,
+  RouteSection,
+  type Route,
+} from "@/src/components/layouts/routes";
 
 const toNavItem = (route: Route): NavigationItem => ({
   ...route,

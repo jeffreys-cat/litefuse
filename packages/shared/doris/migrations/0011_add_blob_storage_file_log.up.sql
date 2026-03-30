@@ -1,4 +1,4 @@
-CREATE TABLE blob_storage_file_log
+CREATE TABLE IF NOT EXISTS blob_storage_file_log
 (
     `project_id`  varchar(65533),
     `entity_type` varchar(65533),

@@ -11,7 +11,9 @@ import {
   getServiceListSQL,
 } from "./traces.sql";
 
-function wrapAsync<T>(fn: () => Promise<T>): Observable<{ data: T; ok: boolean }> {
+function wrapAsync<T>(
+  fn: () => Promise<T>,
+): Observable<{ data: T; ok: boolean }> {
   return new Observable((subscriber) => {
     fn()
       .then((data) => {
