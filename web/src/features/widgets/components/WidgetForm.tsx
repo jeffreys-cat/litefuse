@@ -224,6 +224,7 @@ export function WidgetForm({
     aggregation: z.infer<typeof metricAggregations>;
     dimension: string;
     filters?: FilterState;
+    rawSqlFilter?: string;
     chartType: DashboardWidgetChartType;
     chartConfig?: ChartConfig;
     // Support for complete widget data (editing mode)
@@ -239,6 +240,7 @@ export function WidgetForm({
     dimensions: { field: string }[];
     metrics: { measure: string; agg: string }[];
     filters: any[];
+    rawSqlFilter?: string;
     chartType: DashboardWidgetChartType;
     chartConfig: ChartConfig;
     minVersion: number;
@@ -251,6 +253,12 @@ export function WidgetForm({
   const [widgetName, setWidgetName] = useState<string>(initialValues.name);
   const [widgetDescription, setWidgetDescription] = useState<string>(
     initialValues.description,
+  );
+  const [rawSqlFilter, setRawSqlFilter] = useState<string>(
+    initialValues.rawSqlFilter ?? "",
+  );
+  const [appliedRawSqlFilter, setAppliedRawSqlFilter] = useState<string>(
+    initialValues.rawSqlFilter ?? "",
   );
 
   // Determine if this is an existing widget (editing mode)
@@ -954,6 +962,7 @@ export function WidgetForm({
       dimensions: queryDimensions,
       metrics: queryMetrics,
       filters: [...mapLegacyUiTableFilterToView(selectedView, userFilterState)],
+      rawSqlFilter: appliedRawSqlFilter.trim() || undefined,
       timeDimension: isTimeSeriesChart(
         selectedChartType as DashboardWidgetChartType,
       )
@@ -971,6 +980,7 @@ export function WidgetForm({
     selectedMeasure,
     selectedMetrics,
     userFilterState,
+    appliedRawSqlFilter,
     dateRange,
     selectedChartType,
     histogramBins,
@@ -1117,6 +1127,7 @@ export function WidgetForm({
       dimensions: saveDimensions,
       metrics: saveMetrics,
       filters: mapLegacyUiTableFilterToView(selectedView, userFilterState),
+      rawSqlFilter: rawSqlFilter.trim() || undefined,
       chartType: selectedChartType as DashboardWidgetChartType,
       chartConfig: isTimeSeriesChart(
         selectedChartType as DashboardWidgetChartType,
@@ -1577,6 +1588,37 @@ export function WidgetForm({
                       "providedModelName",
                     ]}
                   />
+                </div>
+              </div>
+
+              {/* Custom SQL Filter */}
+              <div className="space-y-2">
+                <Label>Custom SQL Filter (Optional)</Label>
+                <textarea
+                  className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  placeholder="e.g. type = 'TOOL' AND cast(input as text) LIKE '%curl%'"
+                  value={rawSqlFilter}
+                  onChange={(e) => setRawSqlFilter(e.target.value)}
+                  rows={2}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    disabled={rawSqlFilter.trim() === appliedRawSqlFilter.trim()}
+                    onClick={() => setAppliedRawSqlFilter(rawSqlFilter)}
+                  >
+                    Apply
+                  </button>
+                  {rawSqlFilter.trim() !== appliedRawSqlFilter.trim() && (
+                    <span className="text-xs text-muted-foreground">
+                      Unapplied changes
+                    </span>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Raw SQL appended to WHERE clause. Use Doris/ClickHouse
+                    syntax.
+                  </p>
                 </div>
               </div>
 

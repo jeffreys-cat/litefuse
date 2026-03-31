@@ -283,6 +283,7 @@ export class DashboardService {
         dimensions: input.dimensions,
         metrics: input.metrics,
         filters: input.filters,
+        rawSqlFilter: input.rawSqlFilter ?? null,
         chartType: input.chartType,
         chartConfig: input.chartConfig,
         minVersion: input.minVersion ?? 1,
@@ -342,6 +343,7 @@ export class DashboardService {
         dimensions: input.dimensions,
         metrics: input.metrics,
         filters: input.filters,
+        rawSqlFilter: input.rawSqlFilter ?? null,
         chartType: input.chartType,
         chartConfig: input.chartConfig,
         ...(input.minVersion !== undefined

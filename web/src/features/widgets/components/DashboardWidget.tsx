@@ -155,6 +155,7 @@ export function DashboardWidget({
           filterState,
         ),
       ],
+      rawSqlFilter: widget.data?.rawSqlFilter,
       timeDimension: isTimeSeries ? { granularity: "auto" as const } : null,
       fromTimestamp: fromTimestamp.toISOString(),
       toTimestamp: toTimestamp.toISOString(),

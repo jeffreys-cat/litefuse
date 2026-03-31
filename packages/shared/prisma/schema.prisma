@@ -1394,7 +1394,8 @@ model DashboardWidget {
   view       DashboardWidgetViews @map("view")
   dimensions Json                 @map("dimensions")
   metrics    Json                 @map("metrics")
-  filters    Json                 @map("filters")
+  filters      Json                 @map("filters")
+  rawSqlFilter String?              @map("raw_sql_filter")
 
   chartType   DashboardWidgetChartType @map("chart_type")
   chartConfig Json                     @map("chart_config")

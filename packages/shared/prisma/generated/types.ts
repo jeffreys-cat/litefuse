@@ -445,6 +445,7 @@ export type DashboardWidget = {
   dimensions: unknown;
   metrics: unknown;
   filters: unknown;
+  raw_sql_filter: string | null;
   chart_type: DashboardWidgetChartType;
   chart_config: unknown;
   min_version: Generated<number>;

@@ -160,6 +160,7 @@ export const query = z
     dimensions: z.array(dimension),
     metrics: z.array(metric),
     filters: z.array(singleFilter),
+    rawSqlFilter: z.string().nullish(),
     timeDimension: z
       .object({
         // TODO: We may want to extend this and allow custom intervals like 3h in the future.

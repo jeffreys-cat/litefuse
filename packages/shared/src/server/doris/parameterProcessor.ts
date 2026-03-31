@@ -119,9 +119,20 @@ export class DorisParameterProcessor {
     }
 
     if (typeof value === "string") {
-      // Try to parse as date, fallback to original string
+      // Ensure timezone-less datetime strings are interpreted as UTC.
+      // new Date("2026-03-27 04:42:02") without "Z" uses local timezone,
+      // causing 8-hour offset in non-UTC environments.
+      // Append "Z" to force UTC interpretation before parsing.
+      let normalized = value;
+      if (
+        /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(value) &&
+        !value.endsWith("Z") &&
+        !/[+-]\d{2}:\d{2}$/.test(value)
+      ) {
+        normalized = value.replace(" ", "T") + "Z";
+      }
       try {
-        const date = new Date(value);
+        const date = new Date(normalized);
         if (!isNaN(date.getTime())) {
           return `'${convertDateToAnalyticsDateTime(date)}'`;
         }

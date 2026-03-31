@@ -62,6 +62,7 @@ export default function EditWidget() {
     dimensions: { field: string }[];
     metrics: { measure: string; agg: string }[];
     filters: any[];
+    rawSqlFilter?: string;
     chartType: DashboardWidgetChartType;
     chartConfig: WidgetChartConfig;
     minVersion: number;
@@ -80,6 +81,7 @@ export default function EditWidget() {
         agg: metric.agg as z.infer<typeof metricAggregations>,
       })),
       filters: widgetFormData.filters,
+      rawSqlFilter: widgetFormData.rawSqlFilter,
       chartType: widgetFormData.chartType,
       chartConfig: widgetFormData.chartConfig,
       minVersion: widgetFormData.minVersion,
@@ -116,6 +118,7 @@ export default function EditWidget() {
                 typeof metricAggregations
               >) ?? "count",
             filters: widgetData.filters,
+            rawSqlFilter: widgetData.rawSqlFilter ?? undefined,
             chartType: widgetData.chartType,
             chartConfig: widgetData.chartConfig,
             minVersion: widgetData.minVersion,

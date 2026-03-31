@@ -1643,6 +1643,11 @@ export class QueryBuilder {
       Object.assign(parameters, part.params);
     }
 
+    // Append raw SQL filter if provided
+    if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
+      fromClause += ` AND (${query.rawSqlFilter.trim()})`;
+    }
+
     // When rootEventCondition is set, add a subquery filter to restrict rows
     // to traces whose root event has timeDimension in the query window.
     // The existing start_time filter above is kept for ClickHouse partition pruning.
@@ -2058,6 +2063,11 @@ export class QueryBuilder {
     for (const part of whereRawParts) {
       fromClause += ` AND ${part.query}`;
       Object.assign(parameters, part.params);
+    }
+
+    // Append raw SQL filter if provided
+    if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
+      fromClause += ` AND (${query.rawSqlFilter.trim()})`;
     }
 
     // Build inner SELECT parts

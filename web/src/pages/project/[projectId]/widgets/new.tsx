@@ -51,6 +51,7 @@ export default function NewWidget() {
     dimensions: { field: string }[];
     metrics: { measure: string; agg: string }[];
     filters: any[];
+    rawSqlFilter?: string;
     chartType: DashboardWidgetChartType;
     chartConfig: WidgetChartConfig;
     minVersion: number;
@@ -72,6 +73,7 @@ export default function NewWidget() {
         agg: metric.agg as z.infer<typeof metricAggregations>,
       })),
       filters: widgetData.filters,
+      rawSqlFilter: widgetData.rawSqlFilter,
       chartType: widgetData.chartType,
       chartConfig: widgetData.chartConfig,
       minVersion: widgetData.minVersion,
