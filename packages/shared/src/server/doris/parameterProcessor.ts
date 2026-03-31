@@ -119,7 +119,13 @@ export class DorisParameterProcessor {
     }
 
     if (typeof value === "string") {
-      // Try to parse as date, fallback to original string
+      // If the string already looks like a formatted datetime (YYYY-MM-DD HH:mm:ss),
+      // use it directly to avoid timezone re-interpretation via new Date().
+      // new Date("2026-03-27 04:42:02") without "Z" uses local timezone, causing
+      // 8-hour offset in non-UTC environments.
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)) {
+        return `'${value}'`;
+      }
       try {
         const date = new Date(value);
         if (!isNaN(date.getTime())) {
