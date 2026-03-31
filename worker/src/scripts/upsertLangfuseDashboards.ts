@@ -117,6 +117,7 @@ async function upsertWidgets(widgets: ParsedWidgets, force: boolean) {
         where: { id: widget.id },
         update: {
           ...baseWidget,
+          projectId: null,
         },
         create: {
           id: widget.id,
@@ -173,6 +174,7 @@ async function upsertDashboards(dashboards: ParsedDashboards, force: boolean) {
         where: { id: dashboard.id },
         update: {
           ...baseDashboard,
+          projectId: null,
         },
         create: {
           id: dashboard.id,
