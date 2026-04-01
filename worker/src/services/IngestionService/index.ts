@@ -1140,12 +1140,21 @@ export class IngestionService {
     T extends TraceEventType | ScoreEventType | ObservationEvent,
   >(eventList: T[]): T[] {
     return eventList.slice().sort((a, b) => {
+      const aIsCreate = a.type.includes("create");
+      const bIsCreate = b.type.includes("create");
+
+      // Create events always come before update events regardless of timestamp.
+      // The Langfuse SDK's enqueue() uses fire-and-forget async processing, so
+      // a large create body (with input/output) can finish later than a small
+      // update body, giving the create event a later timestamp.  Sorting purely
+      // by timestamp would then place updates before create, causing the merge's
+      // immutable-key protection to lock in the update's wrong start_time.
+      if (aIsCreate !== bIsCreate) {
+        return aIsCreate ? -1 : 1;
+      }
+
       const aTimestamp = new Date(a.timestamp).getTime();
       const bTimestamp = new Date(b.timestamp).getTime();
-
-      if (aTimestamp === bTimestamp) {
-        return a.type.includes("create") ? -1 : 1; // create events should come first
-      }
 
       return aTimestamp - bTimestamp;
     });
