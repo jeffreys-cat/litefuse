@@ -27,12 +27,12 @@ export default function FieldItem(props: FieldItemProps) {
   return (
     <div>
       <Toggletip placement="right" content={<TopData field={field} />}>
-        <div className="group hover:bg-muted/50 flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 px-2 text-left">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="group hover:bg-muted/50 flex min-h-6 w-full cursor-pointer items-center justify-between gap-2 px-2 text-left">
+          <div className="flex min-w-0 items-center gap-1">
             <div className="text-muted-foreground inline-flex h-6 w-6 shrink-0 items-center justify-center">
               {getFieldIcon(field["Type"])}
             </div>
-            <div className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
+            <div className="text-muted-foreground hover:text-foreground flex min-w-0 flex-1 items-center justify-between gap-1 overflow-hidden py-1.5 text-sm font-normal text-ellipsis whitespace-nowrap hover:no-underline [&[data-state=open]>svg]:rotate-180">
               {field["Field"]}
             </div>
           </div>
@@ -41,7 +41,7 @@ export default function FieldItem(props: FieldItemProps) {
               <IconButton
                 name="plus"
                 size="sm"
-                tooltip="添加到表格"
+                tooltip="Add to table"
                 onClick={(e) => {
                   props?.onAdd?.(field);
                   e.stopPropagation();
@@ -51,7 +51,7 @@ export default function FieldItem(props: FieldItemProps) {
               <IconButton
                 name="minus"
                 size="sm"
-                tooltip="从表格删除"
+                tooltip="Remove from table"
                 onClick={(e: any) => {
                   props?.onRemove?.(field);
                   e.stopPropagation();
