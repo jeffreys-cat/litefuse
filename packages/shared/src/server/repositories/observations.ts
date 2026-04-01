@@ -2372,11 +2372,9 @@ export const getObservationMetricsForPrompts = async (
             min(start_time) AS first_observation,
             max(start_time) AS last_observation,
             percentile_approx(
-              CASE WHEN MAP_CONTAINS_KEY(usage_details,'input') THEN 
-                usage_details['input'] ELSE 0 END, 0.5) AS median_input_usage,
+              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_input_usage,
             percentile_approx(
-              CASE WHEN MAP_CONTAINS_KEY(usage_details,'output') THEN 
-                usage_details['output'] ELSE 0 END, 0.5) AS median_output_usage,
+              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_output_usage,
             percentile_approx(
               CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN 
                 cost_details['total'] ELSE 0 END, 0.5) AS median_total_cost,

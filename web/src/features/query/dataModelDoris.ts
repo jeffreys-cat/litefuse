@@ -118,6 +118,20 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "Total cost accumulated across observations in the trace.",
       unit: "USD",
     },
+    uniqueUserIds: {
+      sql: "count(distinct traces.user_id)",
+      alias: "uniqueUserIds",
+      type: "integer",
+      description: "Count of unique userIds.",
+      unit: "users",
+    },
+    uniqueSessionIds: {
+      sql: "count(distinct traces.session_id)",
+      alias: "uniqueSessionIds",
+      type: "integer",
+      description: "Count of unique sessionIds.",
+      unit: "sessions",
+    },
   },
   tableRelations: {
     observations: {
@@ -298,16 +312,15 @@ export const observationsViewDoris: ViewDeclarationType = {
         "Latency of the generation step (completion start time to end time).",
       unit: "millisecond",
     },
-    //todo
     inputTokens: {
-      sql: "sum(if(MAP_CONTAINS_KEY(usage_details,'input'),usage_details['input'],0))",
+      sql: "sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0))",
       alias: "inputTokens",
       type: "integer",
       description: "Sum of input tokens consumed by the observation.",
       unit: "tokens",
     },
     outputTokens: {
-      sql: "sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))",
+      sql: "sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0))",
       alias: "outputTokens",
       type: "integer",
       description: "Sum of output tokens produced by the observation.",
@@ -324,7 +337,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       // Calculate average output tokens per second. Denominator uses seconds to align
       // with the `tokens/s` unit; NULL values avoided by guarding against a 0-second
       // duration.
-      sql: "sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0)) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
+      sql: "sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
       alias: "outputTokensPerSecond",
       type: "decimal",
       description:
@@ -340,14 +353,14 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "tokens/s",
     },
     inputCost: {
-      sql: "sum(if(MAP_CONTAINS_KEY(cost_details,'input'),cost_details['input'],0))",
+      sql: "sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0))",
       alias: "inputCost",
       type: "decimal",
       description: "Sum of input cost incurred by the observation.",
       unit: "USD",
     },
     outputCost: {
-      sql: "sum(if(MAP_CONTAINS_KEY(cost_details,'output'),cost_details['output'],0))",
+      sql: "sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0))",
       alias: "outputCost",
       type: "decimal",
       description: "Sum of output cost incurred by the observation.",
