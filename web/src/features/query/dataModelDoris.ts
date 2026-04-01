@@ -118,6 +118,20 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "Total cost accumulated across observations in the trace.",
       unit: "USD",
     },
+    uniqueUserIds: {
+      sql: "count(distinct traces.user_id)",
+      alias: "uniqueUserIds",
+      type: "integer",
+      description: "Count of unique userIds.",
+      unit: "users",
+    },
+    uniqueSessionIds: {
+      sql: "count(distinct traces.session_id)",
+      alias: "uniqueSessionIds",
+      type: "integer",
+      description: "Count of unique sessionIds.",
+      unit: "sessions",
+    },
   },
   tableRelations: {
     observations: {
