@@ -1179,7 +1179,11 @@ const getObservationsTableInternal = async <T>(
       },
     });
 
-    return res;
+    // Doris MySQL protocol returns MAP columns as strings.
+    // Parse them into objects so downstream converters work correctly.
+    return res.map(
+      (r) => preprocessDorisUsageCostDetails(r) as T,
+    );
   }
 
   const select =
