@@ -139,24 +139,9 @@ export class DorisWriter {
     try {
       const processingStartTime = Date.now();
 
-      let records = queueItems.map((item) => item.data);
-
-      // Deduplicate observations: when create and update events for the same
-      // observation land in separate ingestion batches, the update batch may
-      // produce a record with a wrong start_time (falls back to event
-      // timestamp because the create batch hasn't committed yet).  Merging
-      // duplicates here – preferring the earliest start_time and the latest
-      // non-null values for other fields – ensures the correct start_time
-      // survives regardless of processing order.
-      if (tableName === TableName.Observations) {
-        records = this.deduplicateObservations(
-          records as ObservationRecordInsertType[],
-        ) as RecordInsertType<T>[];
-      }
-
       await this.writeToDoris({
         table: tableName,
-        records,
+        records: queueItems.map((item) => item.data),
       });
 
       // Log processing time
@@ -242,82 +227,6 @@ export class DorisWriter {
     logger.debug(`DorisWriter.writeToDoris: ${Date.now() - startTime} ms`);
 
     recordGauge("ingestion_doris_insert", params.records.length);
-  }
-
-  /**
-   * Deduplicate observation records that share the same (project_id, id).
-   *
-   * When create and update events for the same observation are processed in
-   * separate ingestion batches, each batch produces its own merged record.
-   * The update-only record typically has a wrong start_time (event envelope
-   * timestamp) because the create record wasn't available during its merge.
-   *
-   * This method merges such duplicates by:
-   *  - Keeping the earliest (smallest) start_time (the correct one from the
-   *    create event is always earlier than the event-timestamp fallback).
-   *  - Keeping the latest non-null end_time / completion_start_time.
-   *  - For all other fields, preferring the later record's non-null value.
-   */
-  private deduplicateObservations(
-    records: ObservationRecordInsertType[],
-  ): ObservationRecordInsertType[] {
-    if (records.length <= 1) return records;
-
-    const grouped = new Map<string, ObservationRecordInsertType[]>();
-    for (const record of records) {
-      const key = `${record.project_id}:${record.id}`;
-      const group = grouped.get(key);
-      if (group) {
-        group.push(record);
-      } else {
-        grouped.set(key, [record]);
-      }
-    }
-
-    const result: ObservationRecordInsertType[] = [];
-    for (const group of grouped.values()) {
-      if (group.length === 1) {
-        result.push(group[0]);
-        continue;
-      }
-
-      // Sort by event_ts ascending so later values overwrite earlier ones
-      group.sort((a, b) => (a.event_ts ?? 0) - (b.event_ts ?? 0));
-
-      // Start from the first record, layer subsequent records on top
-      const merged = { ...group[0] };
-      for (let i = 1; i < group.length; i++) {
-        const rec = group[i];
-        for (const [k, v] of Object.entries(rec)) {
-          if (v != null && v !== undefined) {
-            (merged as any)[k] = v;
-          }
-        }
-      }
-
-      // Always use the earliest start_time across all records
-      merged.start_time = Math.min(...group.map((r) => r.start_time));
-
-      // Use the latest non-null end_time
-      const endTimes = group
-        .map((r) => r.end_time)
-        .filter((t): t is number => t != null);
-      if (endTimes.length > 0) {
-        merged.end_time = Math.max(...endTimes);
-      }
-
-      // Use the latest non-null completion_start_time
-      const cstTimes = group
-        .map((r) => r.completion_start_time)
-        .filter((t): t is number => t != null);
-      if (cstTimes.length > 0) {
-        merged.completion_start_time = Math.max(...cstTimes);
-      }
-
-      result.push(merged);
-    }
-
-    return result;
   }
 
   /**
