@@ -15,16 +15,29 @@ export const getEnvironmentsForProject = async (
 
   if (isDorisBackend()) {
     const query = `
-      SELECT environments
-      FROM project_environments
-      WHERE project_id = {projectId: String}
+      SELECT DISTINCT environment FROM (
+        SELECT DISTINCT environment
+        FROM traces
+        WHERE project_id = {projectId: String}
+        ${fromTimestamp ? "AND timestamp >= {fromTimestamp: DateTime64(3)}" : ""}
+        UNION ALL
+        SELECT DISTINCT environment
+        FROM observations
+        WHERE project_id = {projectId: String}
+        ${fromTimestamp ? "AND start_time >= {fromTimestamp: DateTime64(3)}" : ""}
+        UNION ALL
+        SELECT DISTINCT environment
+        FROM scores
+        WHERE project_id = {projectId: String}
+        ${fromTimestamp ? "AND timestamp >= {fromTimestamp: DateTime64(3)}" : ""}
+      ) t
     `;
 
     const results = await queryDoris<{
-      environments: string[];
+      environment: string;
     }>({
       query,
-      params: { projectId },
+      params: { projectId, fromTimestamp },
       tags: {
         feature: "tracing",
         type: "environment",
@@ -33,11 +46,14 @@ export const getEnvironmentsForProject = async (
       },
     });
 
-    const environments = results.length > 0 ? results[0].environments : [];
-    environments.push("default");
-    return Array.from(new Set(environments)).map((environment) => ({
-      environment,
-    }));
+    // Always add default environment to list
+    results.push({ environment: "default" });
+
+    return Array.from(new Set(results.map((e) => e.environment))).map(
+      (environment) => ({
+        environment,
+      }),
+    );
   }
 
   const query = `
