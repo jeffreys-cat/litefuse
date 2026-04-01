@@ -261,6 +261,12 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     );
 
     // Doris version with database-specific adaptations
+    // Note: Tag aggregation is done in a separate CTE (session_tags) to avoid
+    // LATERAL VIEW EXPLODE_OUTER duplicating rows before the observations join,
+    // which would multiply cost/token metrics by the number of tags per trace.
+    // Also, usage/cost key matching uses substring matching (LIKE '%input%') instead
+    // of exact key matching, to include keys like cache_read_input_tokens and
+    // cache_creation_input_tokens — matching ClickHouse's positionCaseInsensitive behavior.
     const query = `
         WITH deduplicated_traces AS (
           SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts,
@@ -292,12 +298,14 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                   count(*) as obs_count,
                   min(o.start_time) as min_start_time,
                   max(o.end_time) as max_end_time,
-                  -- Doris doesn't have sumMap, so we manually aggregate usage and cost
-                  sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'input') THEN usage_details['input'] ELSE 0 END) as sum_input_usage,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'output') THEN usage_details['output'] ELSE 0 END) as sum_output_usage,
+                  -- Use substring matching on map keys to include all input/output related keys
+                  -- (e.g. input, cache_read_input_tokens, cache_creation_input_tokens)
+                  -- matching ClickHouse's positionCaseInsensitive behavior
+                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_input_usage,
+                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_output_usage,
                   sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'total') THEN usage_details['total'] ELSE 0 END) as sum_total_usage,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(cost_details,'input') THEN cost_details['input'] ELSE 0 END) as sum_input_cost,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(cost_details,'output') THEN cost_details['output'] ELSE 0 END) as sum_output_cost,
+                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_input_cost,
+                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_output_cost,
                   sum(CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN cost_details['total'] ELSE 0 END) as sum_total_cost,
                   any_value(project_id) as project_id
             FROM filtered_observations o
@@ -307,36 +315,30 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           ),`
             : ""
         }
-        traces_with_tags AS (
-          SELECT 
-            t.session_id,
-            t.project_id,
-            t.timestamp,
-            t.id,
-            t.user_id,
-            t.environment,
-            COALESCE(tag_exploded.tag, '') as individual_tag
+        session_tags AS (
+          SELECT
+            t.session_id as tag_session_id,
+            collect_set(
+              CASE
+                WHEN tag_exploded.tag IS NOT NULL AND tag_exploded.tag != ''
+                THEN tag_exploded.tag
+                ELSE NULL
+              END
+            ) as trace_tags
           FROM filtered_traces t
           LATERAL VIEW EXPLODE_OUTER(t.tags) tag_exploded AS tag
+          GROUP BY t.session_id
         ),
         session_data AS (
             SELECT
-                tt.session_id,
-                any_value(tt.project_id) as project_id,
-                max(tt.timestamp) as max_timestamp,
-                min(tt.timestamp) as min_timestamp,
-                collect_list(DISTINCT tt.id) AS trace_ids,
-                collect_set(CASE WHEN tt.user_id IS NOT NULL AND tt.user_id != '' THEN tt.user_id ELSE NULL END) AS user_ids,
-                count(DISTINCT tt.id) as trace_count,
-                -- Always aggregate trace tags (like ClickHouse)
-                collect_set(
-                  CASE 
-                    WHEN tt.individual_tag IS NOT NULL AND tt.individual_tag != '' 
-                    THEN tt.individual_tag 
-                    ELSE NULL 
-                  END
-                ) as trace_tags,
-                any_value(tt.environment) as trace_environment
+                t.session_id,
+                any_value(t.project_id) as project_id,
+                max(t.timestamp) as max_timestamp,
+                min(t.timestamp) as min_timestamp,
+                collect_list(DISTINCT t.id) AS trace_ids,
+                collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
+                count(DISTINCT t.id) as trace_count,
+                any_value(t.environment) as trace_environment
                 ${
                   selectMetrics
                     ? `
@@ -359,20 +361,21 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 sum(o.sum_total_usage) as session_total_usage`
                     : ""
                 }
-            FROM traces_with_tags tt
+            FROM filtered_traces t
             ${
               selectMetrics
                 ? `LEFT JOIN observations_agg o
-            ON tt.id = o.trace_id AND tt.project_id = o.project_id`
+            ON t.id = o.trace_id AND t.project_id = o.project_id`
                 : ""
             }
-            WHERE tt.session_id IS NOT NULL
-                AND tt.project_id = {projectId: String}
+            WHERE t.session_id IS NOT NULL
+                AND t.project_id = {projectId: String}
                 ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
-            GROUP BY tt.session_id
+            GROUP BY t.session_id
         )
-                  SELECT ${sqlSelect}
+                  SELECT ${sqlSelect.includes("trace_tags") ? `s.*, st.trace_tags` : sqlSelect}
         FROM session_data s
+        LEFT JOIN session_tags st ON s.session_id = st.tag_session_id
         WHERE ${tracesFilterRes.query ? tracesFilterRes.query : "1=1"}
         ${dorisOrderBy}
         ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
