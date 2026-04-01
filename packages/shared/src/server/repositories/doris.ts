@@ -66,6 +66,45 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
 }
 
 /**
+ * Partial column update for Doris Unique Key tables.
+ * Only the provided fields (plus Unique Key columns) are updated;
+ * all other columns retain their existing values in Doris.
+ * This avoids reading and re-writing large fields (input/output) for
+ * small mutations like bookmark or tag updates.
+ */
+export async function partialUpdateDoris(opts: {
+  table: "traces" | "observations" | "scores";
+  records: Record<string, unknown>[];
+  tags?: Record<string, string>;
+}): Promise<void> {
+  if (opts.records.length === 0) return;
+
+  const formattedRecords = formatDataForDoris(
+    opts.records.map((r) => ({
+      ...r,
+      event_ts: convertDateToAnalyticsDateTime(new Date()),
+    })),
+    opts.table,
+  );
+
+  try {
+    await dorisClient().streamLoad(opts.table, formattedRecords, {
+      format: "json",
+      strip_outer_array: true,
+      read_json_by_line: false,
+      partial_columns: true,
+      timeout: 600,
+    });
+  } catch (error) {
+    logger.error(`Doris partial update failed for ${opts.table}`, {
+      error: error instanceof Error ? error.message : String(error),
+      table: opts.table,
+    });
+    throw error;
+  }
+}
+
+/**
  * Query Doris with parameters - compatible with ClickHouse queryClickhouse interface
  */
 export async function queryDoris<T>(opts: {

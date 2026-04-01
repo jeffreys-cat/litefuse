@@ -50,6 +50,8 @@ import {
   getTracesGroupedBySessionId,
   updateEvents,
   getScoresAndCorrectionsForTraces,
+  isDorisBackend,
+  partialUpdateDoris,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 import { createBatchActionJob } from "@/src/features/table/server/createBatchActionJob";
@@ -495,9 +497,29 @@ export const traceRouter = createTRPCRouter({
         if (clickhouseTrace) {
           trace = clickhouseTrace;
           clickhouseTrace.bookmarked = input.bookmarked;
-          const promises = [
-            upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
-          ];
+          const promises: Promise<void>[] = [];
+          if (isDorisBackend()) {
+            // Partial column update: only send Unique Key fields + changed field.
+            // Avoids reading/writing large input/output for a single-field mutation.
+            promises.push(
+              partialUpdateDoris({
+                table: "traces",
+                records: [
+                  {
+                    project_id: input.projectId,
+                    id: input.traceId,
+                    timestamp: convertTraceDomainToClickhouse(clickhouseTrace)
+                      .timestamp,
+                    bookmarked: input.bookmarked,
+                  },
+                ],
+              }),
+            );
+          } else {
+            promises.push(
+              upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
+            );
+          }
           if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
             promises.push(
               updateEvents(

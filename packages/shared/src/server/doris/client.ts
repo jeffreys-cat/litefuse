@@ -23,6 +23,8 @@ export interface DorisStreamLoadOptions {
   max_filter_ratio?: number;
   timeout?: number;
   load_mem_limit?: number;
+  /** Enable partial column update for Unique Key tables (merge-on-write). */
+  partial_columns?: boolean;
 }
 
 export interface DorisQueryOptions {
@@ -334,6 +336,9 @@ export class DorisClient {
       strip_outer_array: loadOptions.strip_outer_array.toString(),
       read_json_by_line: loadOptions.read_json_by_line.toString(),
       timeout: loadOptions.timeout.toString(),
+      ...(loadOptions.partial_columns
+        ? { partial_columns: "true", unique_key_update_mode: "UPDATE_FLEXIBLE_COLUMNS" }
+        : {}),
     };
 
     // Convert data to JSON string
