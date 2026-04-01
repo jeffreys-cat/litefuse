@@ -170,6 +170,13 @@ export class StringOptionsFilter implements Filter {
   }
 
   apply(): DbFilter {
+    if (this.values.length === 0) {
+      return {
+        query: this.operator === "any of" ? "1=0" : "1=1",
+        params: {},
+      };
+    }
+
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // Escape single quotes in values
@@ -271,6 +278,14 @@ export class ArrayOptionsFilter implements Filter {
   }
 
   apply(): DbFilter {
+    // Empty values: "any of" nothing → always false; "none of" / "all of" nothing → always true
+    if (this.values.length === 0) {
+      return {
+        query: this.operator === "any of" ? "1=0" : "1=1",
+        params: {},
+      };
+    }
+
     const fieldWithPrefix = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
 
     // Escape single quotes in values
@@ -331,6 +346,13 @@ export class CategoryOptionsFilter implements Filter {
   }
 
   apply(): DbFilter {
+    if (this.values.length === 0) {
+      return {
+        query: this.operator === "any of" ? "1=0" : "1=1",
+        params: {},
+      };
+    }
+
     // Flatten category values to "key:value" format
     const flattenedValues: string[] = [];
     this.values.forEach((child) => {
