@@ -66,42 +66,46 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
 }
 
 /**
- * Partial column update for Doris Unique Key tables.
- * Only the provided fields (plus Unique Key columns) are updated;
- * all other columns retain their existing values in Doris.
- * This avoids reading and re-writing large fields (input/output) for
- * small mutations like bookmark or tag updates.
+ * Update specific columns on a Doris Unique Key table using SQL UPDATE.
+ * Only the columns in `set` are modified; all other columns (including
+ * large input/output fields) are untouched. Suitable for low-frequency
+ * single-row mutations like bookmark, publish, and tag updates.
  */
 export async function partialUpdateDoris(opts: {
   table: "traces" | "observations" | "scores";
-  records: Record<string, unknown>[];
-  tags?: Record<string, string>;
+  where: Record<string, unknown>;
+  set: Record<string, unknown>;
 }): Promise<void> {
-  if (opts.records.length === 0) return;
+  const setClauses: string[] = [];
+  const params: Record<string, unknown> = {};
 
-  const formattedRecords = formatDataForDoris(
-    opts.records.map((r) => ({
-      ...r,
-      event_ts: convertDateToAnalyticsDateTime(new Date()),
-    })),
-    opts.table,
-  );
-
-  try {
-    await dorisClient().streamLoad(opts.table, formattedRecords, {
-      format: "json",
-      strip_outer_array: true,
-      read_json_by_line: false,
-      partial_columns: true,
-      timeout: 600,
-    });
-  } catch (error) {
-    logger.error(`Doris partial update failed for ${opts.table}`, {
-      error: error instanceof Error ? error.message : String(error),
-      table: opts.table,
-    });
-    throw error;
+  for (const [key, value] of Object.entries(opts.set)) {
+    const paramName = `set_${key}`;
+    if (Array.isArray(value)) {
+      const escaped = value.map((v: unknown) =>
+        typeof v === "string" ? `'${String(v).replace(/'/g, "''")}'` : String(v),
+      );
+      setClauses.push(`\`${key}\` = [${escaped.join(", ")}]`);
+    } else if (typeof value === "boolean") {
+      setClauses.push(`\`${key}\` = ${value ? "TRUE" : "FALSE"}`);
+    } else if (typeof value === "number") {
+      setClauses.push(`\`${key}\` = ${value}`);
+    } else {
+      setClauses.push(`\`${key}\` = {${paramName}: String}`);
+      params[paramName] = value;
+    }
   }
+
+  const whereClauses: string[] = [];
+  for (const [key, value] of Object.entries(opts.where)) {
+    const paramName = `where_${key}`;
+    whereClauses.push(`\`${key}\` = {${paramName}: String}`);
+    params[paramName] = value;
+  }
+
+  const sql = `UPDATE \`${opts.table}\` SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
+
+  await queryDoris({ query: sql, params });
 }
 
 /**

@@ -499,20 +499,11 @@ export const traceRouter = createTRPCRouter({
           clickhouseTrace.bookmarked = input.bookmarked;
           const promises: Promise<void>[] = [];
           if (isDorisBackend()) {
-            // Partial column update: only send Unique Key fields + changed field.
-            // Avoids reading/writing large input/output for a single-field mutation.
             promises.push(
               partialUpdateDoris({
                 table: "traces",
-                records: [
-                  {
-                    project_id: input.projectId,
-                    id: input.traceId,
-                    timestamp: convertTraceDomainToClickhouse(clickhouseTrace)
-                      .timestamp,
-                    bookmarked: input.bookmarked,
-                  },
-                ],
+                where: { project_id: input.projectId, id: input.traceId },
+                set: { bookmarked: input.bookmarked },
               }),
             );
           } else {
@@ -582,9 +573,20 @@ export const traceRouter = createTRPCRouter({
           });
         }
         clickhouseTrace.public = input.public;
-        const promises = [
-          upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
-        ];
+        const promises: Promise<void>[] = [];
+        if (isDorisBackend()) {
+          promises.push(
+            partialUpdateDoris({
+              table: "traces",
+              where: { project_id: input.projectId, id: input.traceId },
+              set: { public: input.public },
+            }),
+          );
+        } else {
+          promises.push(
+            upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
+          );
+        }
         if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
           promises.push(
             updateEvents(
@@ -641,7 +643,15 @@ export const traceRouter = createTRPCRouter({
           });
         }
         clickhouseTrace.tags = input.tags;
-        await upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace));
+        if (isDorisBackend()) {
+          await partialUpdateDoris({
+            table: "traces",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { tags: input.tags },
+          });
+        } else {
+          await upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace));
+        }
       } catch (error) {
         logger.error("Failed to call traces.updateTags", error);
         throw new TRPCError({
