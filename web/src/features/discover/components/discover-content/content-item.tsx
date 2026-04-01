@@ -4,13 +4,31 @@ import { css } from "@emotion/css";
 import { nanoid } from "nanoid";
 import { dataFilterAtom } from "store/discover";
 import React from "react";
-import { isComplexType } from "utils/data";
+import { isComplexType, isValidTimeFieldType } from "utils/data";
 import { IconButton } from "components/ui/icon-button";
+import dayjs from "dayjs";
 
 interface ContentItemProps {
   fieldName: string;
   fieldValue: string | number;
   fieldType: string;
+}
+
+function toFilterValue(
+  value: string | number,
+  fieldType: string,
+): string | number {
+  if (typeof value === "string" && isValidTimeFieldType(fieldType)) {
+    const d = dayjs(value);
+    if (d.isValid()) {
+      const msPart = value.includes(".") ? value.split(".")[1] : null;
+      const fmt = msPart
+        ? `YYYY-MM-DD HH:mm:ss.${"S".repeat(msPart.length)}`
+        : "YYYY-MM-DD HH:mm:ss";
+      return d.utc().format(fmt);
+    }
+  }
+  return value;
 }
 
 export function ContentItem({
@@ -34,7 +52,12 @@ export function ContentItem({
             onClick={(e) => {
               setDataFilter([
                 ...dataFilter,
-                { fieldName, operator: "=", value: [fieldValue], id: nanoid() },
+                {
+                  fieldName,
+                  operator: "=",
+                  value: [toFilterValue(fieldValue, fieldType)],
+                  id: nanoid(),
+                },
               ]);
               e.stopPropagation();
             }}
@@ -49,7 +72,7 @@ export function ContentItem({
                 {
                   fieldName,
                   operator: "!=",
-                  value: [fieldValue],
+                  value: [toFilterValue(fieldValue, fieldType)],
                   id: nanoid(),
                 },
               ]);
