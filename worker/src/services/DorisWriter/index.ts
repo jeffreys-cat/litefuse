@@ -240,7 +240,7 @@ export class DorisWriter {
 export enum TableName {
   Traces = "traces",
   Scores = "scores",
-  Observations = "observations",
+  Observations = "observation_source",
   BlobStorageFileLog = "blob_storage_file_log",
 }
 
