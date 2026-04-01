@@ -1,5 +1,5 @@
 import { env } from "../../env";
-import { dorisClient } from "../doris/client";
+import { dorisClient, formatDataForDoris } from "../doris/client";
 import { DorisParameterProcessor } from "../doris/parameterProcessor";
 import { logger } from "../logger";
 import { instrumentAsync } from "../instrumentation";
@@ -27,13 +27,17 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
       return;
     }
 
-    // Format records for Doris compatibility - consistent with ClickHouse logic
-    const formattedRecords = opts.records.map((record) => ({
+    // Format records for Doris compatibility:
+    // 1. Set event_ts
+    // 2. Run through formatDataForDoris to generate date partition fields
+    //    (timestamp_date for traces/scores, start_time_date for observations)
+    //    and normalize timestamp formats. Without this, Stream Load rejects
+    //    rows missing the NOT NULL date field that is part of the Unique Key.
+    const withEventTs = opts.records.map((record) => ({
       ...record,
-      // Only set event_ts, let updated_at use database default (same as ClickHouse)
       event_ts: convertDateToAnalyticsDateTime(new Date()),
-      // updated_at will use database DEFAULT CURRENT_TIMESTAMP(3)
     }));
+    const formattedRecords = formatDataForDoris(withEventTs, opts.table);
 
     try {
       // Use Stream Load for direct upsert
