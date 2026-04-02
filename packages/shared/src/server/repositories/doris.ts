@@ -1,5 +1,5 @@
 import { env } from "../../env";
-import { dorisClient } from "../doris/client";
+import { dorisClient, formatDataForDoris } from "../doris/client";
 import { DorisParameterProcessor } from "../doris/parameterProcessor";
 import { logger } from "../logger";
 import { instrumentAsync } from "../instrumentation";
@@ -27,13 +27,17 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
       return;
     }
 
-    // Format records for Doris compatibility - consistent with ClickHouse logic
-    const formattedRecords = opts.records.map((record) => ({
+    // Format records for Doris compatibility:
+    // 1. Set event_ts
+    // 2. Run through formatDataForDoris to generate date partition fields
+    //    (timestamp_date for traces/scores, start_time_date for observations)
+    //    and normalize timestamp formats. Without this, Stream Load rejects
+    //    rows missing the NOT NULL date field that is part of the Unique Key.
+    const withEventTs = opts.records.map((record) => ({
       ...record,
-      // Only set event_ts, let updated_at use database default (same as ClickHouse)
       event_ts: convertDateToAnalyticsDateTime(new Date()),
-      // updated_at will use database DEFAULT CURRENT_TIMESTAMP(3)
     }));
+    const formattedRecords = formatDataForDoris(withEventTs, opts.table);
 
     try {
       // Use Stream Load for direct upsert
@@ -59,6 +63,49 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
       throw error;
     }
   });
+}
+
+/**
+ * Update specific columns on a Doris Unique Key table using SQL UPDATE.
+ * Only the columns in `set` are modified; all other columns (including
+ * large input/output fields) are untouched. Suitable for low-frequency
+ * single-row mutations like bookmark, publish, and tag updates.
+ */
+export async function partialUpdateDoris(opts: {
+  table: "traces" | "observations" | "scores";
+  where: Record<string, unknown>;
+  set: Record<string, unknown>;
+}): Promise<void> {
+  const setClauses: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(opts.set)) {
+    const paramName = `set_${key}`;
+    if (Array.isArray(value)) {
+      const escaped = value.map((v: unknown) =>
+        typeof v === "string" ? `'${String(v).replace(/'/g, "''")}'` : String(v),
+      );
+      setClauses.push(`\`${key}\` = [${escaped.join(", ")}]`);
+    } else if (typeof value === "boolean") {
+      setClauses.push(`\`${key}\` = ${value ? "TRUE" : "FALSE"}`);
+    } else if (typeof value === "number") {
+      setClauses.push(`\`${key}\` = ${value}`);
+    } else {
+      setClauses.push(`\`${key}\` = {${paramName}: String}`);
+      params[paramName] = value;
+    }
+  }
+
+  const whereClauses: string[] = [];
+  for (const [key, value] of Object.entries(opts.where)) {
+    const paramName = `where_${key}`;
+    whereClauses.push(`\`${key}\` = {${paramName}: String}`);
+    params[paramName] = value;
+  }
+
+  const sql = `UPDATE \`${opts.table}\` SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
+
+  await queryDoris({ query: sql, params });
 }
 
 /**

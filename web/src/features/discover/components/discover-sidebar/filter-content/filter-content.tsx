@@ -36,7 +36,7 @@ export function FilterContent() {
           font-size: 1.125rem;
           font-weight: 500;
         `}
-      >{`筛选字段`}</div>
+      >{`Filter Fields`}</div>
       <div
         className={css`
           margin-top: 1rem;

@@ -667,7 +667,17 @@ const parseTimestamp = (value: unknown): Date | null => {
   if (typeof value === "string") {
     // Handle ISO format or space-separated datetime strings
     if (value.includes("T") || value.includes(" ")) {
-      const date = new Date(value);
+      // Ensure timezone-less datetime strings (e.g. "2026-04-01 06:59:08.264"
+      // from ClickHouse format) are interpreted as UTC, not local time.
+      let normalized = value;
+      if (
+        /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(value) &&
+        !value.endsWith("Z") &&
+        !/[+-]\d{2}(:\d{2})?$/.test(value)
+      ) {
+        normalized = value.replace(" ", "T") + "Z";
+      }
+      const date = new Date(normalized);
       return isNaN(date.getTime()) ? null : date;
     }
     // Handle millisecond timestamp strings

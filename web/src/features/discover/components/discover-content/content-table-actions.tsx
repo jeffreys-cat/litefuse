@@ -8,7 +8,8 @@ import {
   dataFilterAtom,
   tableFieldsAtom,
 } from "store/discover";
-import { isComplexType } from "utils/data";
+import { isComplexType, isValidTimeFieldType } from "utils/data";
+import dayjs from "dayjs";
 
 export function ContentTableActions({ fieldName, fieldValue }: any) {
   const [selectedFields, setSelectedFields] = useAtom(selectedFieldsAtom);
@@ -18,8 +19,23 @@ export function ContentTableActions({ fieldName, fieldValue }: any) {
     (field) => field.Field === fieldName,
   )?.Type;
   const hasField = selectedFields.some((item: any) => item.Field === fieldName);
-  const filterValue =
+  const rawFilterValue =
     typeof fieldValue === "object" ? JSON.stringify(fieldValue) : fieldValue;
+  const filterValue = (() => {
+    if (typeof rawFilterValue === "string" && isValidTimeFieldType(fieldType)) {
+      const d = dayjs(rawFilterValue);
+      if (d.isValid()) {
+        const msPart = rawFilterValue.includes(".")
+          ? rawFilterValue.split(".")[1]
+          : null;
+        const fmt = msPart
+          ? `YYYY-MM-DD HH:mm:ss.${"S".repeat(msPart.length)}`
+          : "YYYY-MM-DD HH:mm:ss";
+        return d.utc().format(fmt);
+      }
+    }
+    return rawFilterValue;
+  })();
   return (
     <>
       <div
