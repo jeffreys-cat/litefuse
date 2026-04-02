@@ -1,7 +1,7 @@
 -- Create the project_environments 
 -- todo : query this table in packages/shared/src/server/repositories/environments.ts 
 -- should rewrite the SQL
-CREATE TABLE project_environments (
+CREATE TABLE IF NOT EXISTS project_environments (
     `project_id` varchar(65533),
     `environments` Array<String>
 ) ENGINE=OLAP

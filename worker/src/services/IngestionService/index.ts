@@ -67,6 +67,7 @@ import {
 import { randomUUID } from "crypto";
 import { SpanKind } from "@opentelemetry/api";
 import { ClickhouseReadSkipCache } from "../../utils/clickhouseReadSkipCache";
+import { deduplicateInputContent, ContentEntry } from "./contentDedup";
 
 type InsertRecord =
   | TraceRecordInsertType
@@ -920,10 +921,24 @@ export class IngestionService {
     // Search for the first non-null input and output in the observation events and set them on the merged result.
     // Fallback to the existing record input/output if none are found within the events list.
     const reversedRawRecords = timeSortedEvents.slice().reverse();
-    mergedObservationRecord.input = this.stringify(
+    const rawInput =
       reversedRawRecords.find((record) => record?.body?.input)?.body?.input ??
-        existingObservationRecord?.input,
-    );
+      existingObservationRecord?.input;
+
+    // Content dedup for GENERATION input: replace text content with SHA-256 hash references
+    if (type === "GENERATION" && rawInput && this.dorisClient) {
+      const { transformedInput, contentEntries } =
+        deduplicateInputContent(rawInput);
+
+      if (contentEntries.length > 0) {
+        await this.batchInsertContentDict(contentEntries);
+      }
+
+      mergedObservationRecord.input = this.stringify(transformedInput);
+    } else {
+      mergedObservationRecord.input = this.stringify(rawInput);
+    }
+
     mergedObservationRecord.output = this.stringify(
       reversedRawRecords.find((record) => record?.body?.output)?.body?.output ??
         existingObservationRecord?.output,
@@ -2336,6 +2351,39 @@ export class IngestionService {
     if (obj == null) return; // return undefined on undefined or null
 
     return typeof obj === "string" ? obj : JSON.stringify(obj);
+  }
+
+  /**
+   * Batch insert content entries into content_dict table via Doris stream load.
+   * Doris UNIQUE KEY merge-on-write automatically deduplicates by content_hash.
+   */
+  private async batchInsertContentDict(entries: ContentEntry[]): Promise<void> {
+    if (!this.dorisClient || entries.length === 0) return;
+
+    // Deduplicate within the batch (same hash may appear multiple times)
+    const uniqueEntries = new Map<string, string>();
+    for (const e of entries) {
+      uniqueEntries.set(e.content_hash, e.content);
+    }
+
+    const records = [...uniqueEntries.entries()].map(([hash, content]) => ({
+      content_hash: hash,
+      content,
+    }));
+
+    try {
+      await this.dorisClient.insert("content_dict", records, {
+        format: "json",
+        strip_outer_array: true,
+        read_json_by_line: false,
+      });
+    } catch (error) {
+      logger.error("Failed to insert into content_dict", {
+        error: error instanceof Error ? error.message : String(error),
+        entryCount: records.length,
+      });
+      // Don't fail ingestion — content will be stored inline as fallback
+    }
   }
 
   private getMicrosecondTimestamp(timestamp?: string | null): number {
