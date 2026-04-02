@@ -1,5 +1,5 @@
 import { OrderByState } from "../../interfaces/orderBy";
-import { tracesTableUiColumnDefinitions } from "../tableMappings";
+import { tracesTableUiColumnDefinitions, tracesTableUiColumnDefinitionsForDoris } from "../tableMappings";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { FilterState } from "../../types";
 import {
@@ -309,7 +309,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     tracesFilter.push(
       ...createDorisFilterFromFilterState(
         filter,
-        tracesTableUiColumnDefinitions,
+        tracesTableUiColumnDefinitionsForDoris,
       ),
     );
 
@@ -351,14 +351,14 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
 
     const requiresScoresJoin =
       tracesFilter.find((f) => f.table === "scores") !== undefined ||
-      tracesTableUiColumnDefinitions.find(
+      tracesTableUiColumnDefinitionsForDoris.find(
         (c) =>
           c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
       )?.clickhouseTableName === "scores";
 
     const requiresObservationsJoin =
       tracesFilter.find((f) => f.table === "observations") !== undefined ||
-      tracesTableUiColumnDefinitions.find(
+      tracesTableUiColumnDefinitionsForDoris.find(
         (c) =>
           c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
       )?.clickhouseTableName === "observations";
@@ -373,7 +373,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
 
     const defaultOrder = orderBy?.order && orderBy?.column === "timestamp";
     const orderByCols = [
-      ...tracesTableUiColumnDefinitions,
+      ...tracesTableUiColumnDefinitionsForDoris,
       {
         clickhouseSelect: "DATE(t.timestamp)",
         uiTableName: "timestamp_to_date",

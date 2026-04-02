@@ -224,6 +224,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "level",
     clickhouseTableName: "observations",
     clickhouseSelect: "aggregated_level",
+    queryPrefix: "os",
   },
   {
     uiTableName: "ID",
@@ -290,31 +291,35 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "warningCount",
     clickhouseTableName: "observations",
     clickhouseSelect: "warning_count",
+    queryPrefix: "os",
   },
   {
     uiTableName: "Error Level Count",
     uiTableId: "errorCount",
     clickhouseTableName: "observations",
     clickhouseSelect: "error_count",
+    queryPrefix: "os",
   },
   {
     uiTableName: "Default Level Count",
     uiTableId: "defaultCount",
     clickhouseTableName: "observations",
     clickhouseSelect: "default_count",
+    queryPrefix: "os",
   },
   {
     uiTableName: "Debug Level Count",
     uiTableId: "debugCount",
     clickhouseTableName: "observations",
     clickhouseSelect: "debug_count",
+    queryPrefix: "os",
   },
   {
     uiTableName: "Input Tokens",
     uiTableId: "inputTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'input'),usage_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -322,7 +327,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "outputTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -330,7 +335,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "totalTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "if(MAP_CONTAINS_KEY(usage_details,'total'),usage_details['total'],NULL)",
+      "if(MAP_CONTAINS_KEY(os.usage_details, 'total'), os.usage_details['total'], NULL)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -338,7 +343,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "if(MAP_CONTAINS_KEY(usage_details,'total'),usage_details['total'],NULL)",
+      "if(MAP_CONTAINS_KEY(os.usage_details, 'total'), os.usage_details['total'], NULL)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   // Scores column duplicated to allow renaming column name. Will be removed once session storage cache is outdated
@@ -366,27 +371,27 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "latency",
     clickhouseTableName: "observations",
     clickhouseSelect: "latency_milliseconds / 1000",
-    // If we use the default of Decimal64(12), we cannot filter for more than ~40min due to an overflow
     clickhouseTypeOverwrite: "Decimal64(3)",
+    queryPrefix: "os",
   },
   {
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'input'),cost_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'output'),cost_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
   },
   {
     uiTableName: "Total Cost ($)",
     uiTableId: "totalCost",
     clickhouseTableName: "observations",
-    clickhouseSelect: "cost_details['total']",
+    clickhouseSelect: "os.cost_details['total']",
   },
 ];
