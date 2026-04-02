@@ -134,7 +134,7 @@ export function TopData({ field }: any) {
                           }
                         }
                       `}
-                      style={{ width: "100%", height: "0px" }}
+                      style={{ width: "100%", height: "0px", marginTop: "4px" }}
                       percent={+((count * 100) / topData.length).toFixed(1)}
                       status="normal"
                       showInfo={false}

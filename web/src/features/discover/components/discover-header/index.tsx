@@ -303,7 +303,9 @@ export default function DiscoverHeader(props: {
               }));
             setTables(options);
 
-            const initialTable = options[0]?.value;
+            const initialTable =
+              options.find((o) => o.value === "traces")?.value ??
+              options[0]?.value;
 
             if (initialTable) {
               selectTable(database, initialTable);

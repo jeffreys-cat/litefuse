@@ -4,7 +4,8 @@ import { nanoid } from "nanoid";
 import { IconButton } from "components/ui/icon-button";
 import React from "react";
 import { surroundingDataFilterAtom, tableFieldsAtom } from "store/discover";
-import { isComplexType } from "utils/data";
+import { isComplexType, isValidTimeFieldType } from "utils/data";
+import dayjs from "dayjs";
 import { css } from "@emotion/css";
 
 export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
@@ -15,8 +16,21 @@ export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
   );
   const tableFields = useAtomValue(tableFieldsAtom);
   const fieldType = tableFields.find((field) => field.Field === fieldName).Type;
-  // const hasField = selectedSurroundingFields.some((item: any) => item.Field === fieldName);
-  // const filterValue = typeof fieldValue === 'object' ? JSON.stringify(fieldValue) : fieldValue;
+  const filterValue = (() => {
+    const raw =
+      typeof fieldValue === "object" ? JSON.stringify(fieldValue) : fieldValue;
+    if (typeof raw === "string" && isValidTimeFieldType(fieldType)) {
+      const d = dayjs(raw);
+      if (d.isValid()) {
+        const msPart = raw.includes(".") ? raw.split(".")[1] : null;
+        const fmt = msPart
+          ? `YYYY-MM-DD HH:mm:ss.${"S".repeat(msPart.length)}`
+          : "YYYY-MM-DD HH:mm:ss";
+        return d.utc().format(fmt);
+      }
+    }
+    return raw;
+  })();
   return (
     <>
       <div
@@ -34,13 +48,12 @@ export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
             <IconButton
               name="plus-circle"
               onClick={(e) => {
-                console.log(e);
                 setSurroundingDataFilter([
                   ...surroundingDataFilter,
                   {
                     fieldName,
                     operator: "=",
-                    value: [fieldValue],
+                    value: [filterValue],
                     id: nanoid(),
                   },
                 ]);
@@ -52,13 +65,12 @@ export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
               name="minus-circle"
               style={{ marginLeft: "4px" }}
               onClick={(e) => {
-                console.log(e);
                 setSurroundingDataFilter([
                   ...surroundingDataFilter,
                   {
                     fieldName,
                     operator: "!=",
-                    value: [fieldValue],
+                    value: [filterValue],
                     id: nanoid(),
                   },
                 ]);

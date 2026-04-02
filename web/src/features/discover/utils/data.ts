@@ -70,7 +70,7 @@ export const getFieldType = (columnType: string | undefined) => {
 
 export const DISCOVER_DEFAULT_STATUS: DiscoverCurrent = {
   catalog: "internal",
-  database: "",
+  database: "langfuse",
   table: "",
   cluster: "",
   timeField: "",
