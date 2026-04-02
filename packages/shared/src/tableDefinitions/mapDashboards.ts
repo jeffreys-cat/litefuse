@@ -65,7 +65,7 @@ export const dashboardColumnDefinitions: UiColumnMappings = [
   },
   {
     clickhouseTableName: "observations",
-    clickhouseSelect: "o.type",
+    clickhouseSelect: "o.`type`",
     uiTableId: "type",
     uiTableName: "Type",
   },
@@ -77,7 +77,7 @@ export const dashboardColumnDefinitions: UiColumnMappings = [
   },
   {
     clickhouseTableName: "traces",
-    clickhouseSelect: "t.release",
+    clickhouseSelect: "t.`release`",
     uiTableId: "release",
     uiTableName: "Release",
   },
