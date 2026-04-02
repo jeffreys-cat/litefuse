@@ -2679,7 +2679,7 @@ const usersFromEventsTableColumnDefinitions: UiColumnMappings = [
     uiTableName: "Timestamp",
     uiTableId: "timestamp",
     clickhouseTableName: "events_proto",
-    clickhouseSelect: 'e.`start_time`',
+    clickhouseSelect: "e.`start_time`",
   },
 ];
 

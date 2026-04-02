@@ -3,16 +3,14 @@ services:
     image: selectdb/langfuse-web:latest
     container_name: langfuse-web
     hostname: langfuse-web
-    depends_on: &langfuse-depends-on
+    depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
       redis:
         condition: service_healthy
-      doris_fe:
-        condition: service_healthy
-      doris_be:
+      doris:
         condition: service_healthy
     ports:
       - "3000:3000"
@@ -53,9 +51,6 @@ services:
       REDIS_TLS_CERT: ${REDIS_TLS_CERT:-}
       REDIS_TLS_KEY: ${REDIS_TLS_KEY:-}
 
-      # Time zone configuration
-      TZ: Asia/Shanghai
-
       LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: true
 
       LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: false
@@ -66,7 +61,7 @@ services:
       # Note: Doris is enabled automatically when LANGFUSE_ANALYTICS_BACKEND="doris"
       LANGFUSE_ANALYTICS_BACKEND: ${LANGFUSE_ANALYTICS_BACKEND:-doris}
       DORIS_URL: ${DORIS_FE_HTTP_URL:-}
-      DORIS_FE_HTTP_URL: ${DORIS_FE_HTTP_URL:-http://172.30.0.2:8030}
+      DORIS_FE_HTTP_URL: ${DORIS_FE_HTTP_URL:-http://doris:8040}
       DORIS_FE_QUERY_PORT: ${DORIS_FE_QUERY_PORT:-9030}
       DORIS_DB: ${DORIS_DB:-langfuse}
       DORIS_USER: ${DORIS_USER:-root}
@@ -90,7 +85,15 @@ services:
     image: selectdb/langfuse-worker:latest
     container_name: langfuse-worker
     hostname: langfuse-worker
-    depends_on: *langfuse-depends-on
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      doris:
+        condition: service_healthy
     ports:
       - "3030:3030"
     environment:
@@ -164,62 +167,37 @@ services:
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql
 
-  doris_fe:
-    image: apache/doris:fe-4.0.0
-    hostname: doris_fe
-    container_name: doris_fe
-    environment:
-      - FE_SERVERS=fe1:172.30.0.2:9010
-      - FE_ID=1
+  doris:
+    image: apache/doris:4.0.3-all-slim
+    hostname: doris
+    container_name: doris
+    restart: unless-stopped
     ports:
-      - "8030:8030"
-      - "9030:9030"
-      - "9010:9010"
-    networks:
-      doris_internal:
-        ipv4_address: 172.30.0.2
+      - "8030:8030"    # FE HTTP port (Web UI)
+      - "9030:9030"    # FE MySQL protocol port
+      - "9010:9010"    # FE thrift port
+      - "8040:8040"    # BE HTTP port
+      - "8060:8060"    # BE BE_PORT
+      - "9050:9050"    # BE thrift port
+      - "9060:9060"    # BE arrow flight port
+    environment:
+      - FE_SERVERS=doris:doris:9010
+      - BE_ADDR=doris:9050
+      - FE_ID=1
+      - SKIP_CHECK_ULIMIT=true
     volumes:
-      # Persist FE metadata
       - doris_fe_meta:/opt/apache-doris/fe/doris-meta
-      # Mount custom configuration
+      - doris_be_storage:/opt/apache-doris/be/storage
       - ./doris-config/fe_custom.conf:/opt/apache-doris/fe/conf/fe_custom.conf:ro
     healthcheck:
-      test: [ "CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -uroot -e 'SELECT 1' 2>/dev/null || exit 1" ]
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -uroot -e 'SELECT 1' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 120s
-
-  doris_be:
-    image: apache/doris:be-4.0.0
-    hostname: doris_be
-    container_name: doris_be
-    environment:
-      - FE_SERVERS=fe1:172.30.0.2:9010
-      - BE_ADDR=172.30.0.3:9050
-    depends_on:
-      doris_fe:
-        condition: service_healthy
-    ports:
-      - "8040:8040"
-      - "8060:8060"
-      - "9050:9050"
-      - "9060:9060"
     networks:
-      doris_internal:
-        ipv4_address: 172.30.0.3
-    volumes:
-      # Persist BE data storage
-      - doris_be_storage:/opt/apache-doris/be/storage
-      # Optional: mount custom configuration
-      # - ./be_custom.conf:/opt/apache-doris/be/conf/be_custom.conf:ro
-    restart: unless-stopped
-    healthcheck:
-      test: [ "CMD-SHELL", "mysql -h 172.30.0.2 -P 9030 -uroot -e 'SHOW BACKENDS\\G' | grep -A 20 'Host: 172.30.0.3' | grep -q 'Alive: true'" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 150s
+      - default
+      - doris_internal
 
 volumes:
   langfuse_postgres_data:

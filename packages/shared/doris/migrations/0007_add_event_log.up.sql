@@ -1,4 +1,4 @@
-CREATE TABLE event_log
+CREATE TABLE IF NOT EXISTS event_log
 (
     `id`          varchar(65533),
     `project_id`  varchar(65533),

@@ -1595,7 +1595,7 @@ export function WidgetForm({
               <div className="space-y-2">
                 <Label>Custom SQL Filter (Optional)</Label>
                 <textarea
-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:ring-ring flex min-h-[60px] w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
                   placeholder="e.g. type = 'TOOL' AND cast(input as text) LIKE '%curl%'"
                   value={rawSqlFilter}
                   onChange={(e) => setRawSqlFilter(e.target.value)}
@@ -1604,18 +1604,20 @@ export function WidgetForm({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    className="rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                    disabled={rawSqlFilter.trim() === appliedRawSqlFilter.trim()}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1 text-xs disabled:opacity-50"
+                    disabled={
+                      rawSqlFilter.trim() === appliedRawSqlFilter.trim()
+                    }
                     onClick={() => setAppliedRawSqlFilter(rawSqlFilter)}
                   >
                     Apply
                   </button>
                   {rawSqlFilter.trim() !== appliedRawSqlFilter.trim() && (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-muted-foreground text-xs">
                       Unapplied changes
                     </span>
                   )}
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-muted-foreground text-xs">
                     Raw SQL appended to WHERE clause. Use Doris/ClickHouse
                     syntax.
                   </p>
