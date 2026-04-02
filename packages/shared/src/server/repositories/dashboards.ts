@@ -42,13 +42,17 @@ const convertEnvFilterToClickhouseFilter = (filter: FilterState) => {
   ]);
 };
 
-const convertEnvFilterToDorisFilter = (filter: FilterState) => {
+const convertEnvFilterToDorisFilter = (
+  filter: FilterState,
+  prefix = "o",
+) => {
   return createDorisFilterFromFilterState(filter, [
     {
       clickhouseSelect: "environment",
       clickhouseTableName: "traces",
       uiTableId: "environment",
       uiTableName: "Environment",
+      queryPrefix: prefix,
     },
   ]);
 };
@@ -61,7 +65,7 @@ export const getScoreAggregate = async (
     const { envFilter, remainingFilters } =
       extractEnvironmentFilterFromFilters(filter);
     const environmentFilter = new FilterList(
-      convertEnvFilterToDorisFilter(envFilter),
+      convertEnvFilterToDorisFilter(envFilter, "s"),
     ).apply();
     const dorisFilter = new FilterList(
       createDorisFilterFromFilterState(
