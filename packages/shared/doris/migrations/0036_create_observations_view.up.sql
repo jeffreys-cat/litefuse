@@ -28,10 +28,12 @@ DROP PROCEDURE IF EXISTS safe_rename_observations;
 -- Step 2: Drop existing observations view if it exists (idempotent)
 DROP VIEW IF EXISTS observations;
 
--- Step 3: Create the observations view
+-- Step 3: Create the observations view using LEFT JOIN for input resolution
+-- This approach avoids CAST on output field which was causing escape sequence issues (\n -> n)
 CREATE VIEW observations AS
 
 -- Part 1: GENERATION type observations with ordered input reconstruction
+-- Uses LEFT JOIN subquery to resolve input hashes while preserving output field as-is
 SELECT
     o.project_id,
     o.start_time_date,
@@ -42,28 +44,19 @@ SELECT
     o.start_time,
     o.end_time,
     o.name,
-    ANY_VALUE(o.metadata) as metadata,
+    o.metadata,
     o.level,
     o.status_message,
     o.version,
-
-    -- ORDER PRESERVED JSON ARRAY - uses POSEXPLODE to get position, GROUP_CONCAT with ORDER BY to preserve order
-    CAST(CONCAT(
-        '[',
-        GROUP_CONCAT(CAST(c.content AS VARCHAR) ORDER BY t.pos),
-        ']'
-    ) AS VARIANT) as input,
-
-    -- output is Variant type, cast to VARCHAR for ANY_VALUE
-    ANY_VALUE(CAST(o.output AS VARCHAR)) as output,
-
+    t.input_resolved as input,
+    o.output,
     o.provided_model_name,
     o.internal_model_id,
     o.model_parameters,
-    ANY_VALUE(o.provided_usage_details) as provided_usage_details,
-    ANY_VALUE(o.usage_details) as usage_details,
-    ANY_VALUE(o.provided_cost_details) as provided_cost_details,
-    ANY_VALUE(o.cost_details) as cost_details,
+    o.provided_usage_details,
+    o.usage_details,
+    o.provided_cost_details,
+    o.cost_details,
     o.total_cost,
     o.completion_start_time,
     o.prompt_id,
@@ -76,28 +69,28 @@ SELECT
     o.environment,
     o.usage_pricing_tier_id,
     o.usage_pricing_tier_name,
-    ANY_VALUE(o.tool_definitions) as tool_definitions,
-    ANY_VALUE(o.tool_calls) as tool_calls,
-    ANY_VALUE(o.tool_call_names) as tool_call_names
-
+    o.tool_definitions,
+    o.tool_calls,
+    o.tool_call_names
 FROM observation_source o
-
--- POSEXPLODE: returns (position, value) pairs to preserve original array order
-LATERAL VIEW POSEXPLODE(CAST(o.input AS ARRAY<VARCHAR>)) t AS pos, hash_item
-
-LEFT JOIN content_dict c
-    ON t.hash_item = c.content_hash
-
-WHERE o.type = 'GENERATION'
-  AND o.input IS NOT NULL
-
-GROUP BY
-    o.project_id, o.start_time_date, o.id, o.type, o.trace_id, o.parent_observation_id,
-    o.start_time, o.end_time, o.name, o.level, o.status_message, o.version,
-    o.provided_model_name, o.internal_model_id, o.model_parameters,
-    o.total_cost, o.completion_start_time, o.prompt_id, o.prompt_name, o.prompt_version,
-    o.created_at, o.updated_at, o.event_ts, o.is_deleted, o.environment,
-    o.usage_pricing_tier_id, o.usage_pricing_tier_name
+LEFT JOIN (
+    SELECT
+        o_inner.id,
+        CONCAT(
+            '[',
+            GROUP_CONCAT(CAST(c.content AS VARCHAR) ORDER BY t_inner.pos),
+            ']'
+        ) as input_resolved
+    FROM observation_source o_inner
+    LATERAL VIEW POSEXPLODE(CAST(o_inner.input AS ARRAY<VARCHAR>)) t_inner AS pos, hash_item
+    LEFT JOIN content_dict c
+        ON t_inner.hash_item = c.content_hash
+    WHERE o_inner.type = 'GENERATION'
+      AND o_inner.input IS NOT NULL
+    GROUP BY o_inner.id
+) t
+ON o.id = t.id
+WHERE o.type = 'GENERATION' AND o.input IS NOT NULL
 
 UNION ALL
 

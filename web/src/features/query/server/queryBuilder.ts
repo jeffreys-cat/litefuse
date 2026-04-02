@@ -1377,6 +1377,7 @@ export class QueryBuilder {
     innerQuery: string,
     groupByClause: string,
     orderByClause: string,
+    limitClause: string,
   ) {
     return `
       SELECT
@@ -1384,7 +1385,8 @@ export class QueryBuilder {
         ${outerMetricsPart}
       FROM (${innerQuery}) AS subquery
       ${groupByClause}
-      ${orderByClause}`;
+      ${orderByClause}
+      ${limitClause}`;
   }
 
   /**
@@ -2109,6 +2111,9 @@ export class QueryBuilder {
     // Build ORDER BY clause
     const orderByClause = this.buildOrderByClause(processedOrderBy);
 
+    // Build LIMIT clause for row limiting
+    const limitClause = this.buildLimitClause();
+
     // Build final query (Doris doesn't support WITH FILL)
     let sql = this.buildOuterSelectDoris(
       outerDimensionsPart,
@@ -2116,6 +2121,7 @@ export class QueryBuilder {
       innerQuery,
       groupByClause,
       orderByClause,
+      limitClause,
     );
 
     // Replace ClickHouse-specific functions with Doris equivalents
