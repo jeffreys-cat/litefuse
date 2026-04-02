@@ -83,7 +83,9 @@ export async function partialUpdateDoris(opts: {
     const paramName = `set_${key}`;
     if (Array.isArray(value)) {
       const escaped = value.map((v: unknown) =>
-        typeof v === "string" ? `'${String(v).replace(/'/g, "''")}'` : String(v),
+        typeof v === "string"
+          ? `'${String(v).replace(/'/g, "''")}'`
+          : String(v),
       );
       setClauses.push(`\`${key}\` = [${escaped.join(", ")}]`);
     } else if (typeof value === "boolean") {
