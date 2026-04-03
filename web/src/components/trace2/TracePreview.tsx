@@ -206,32 +206,9 @@ export const TracePreview = ({
             <CopyIdsPopover idItems={[{ id: trace.id, name: "Trace ID" }]} />
           </div>
           <div className="flex h-full flex-wrap content-start items-start justify-start gap-0.5 @2xl:mr-1 @2xl:justify-end">
-            <NewDatasetItemFromExistingObject
-              traceId={trace.id}
-              projectId={trace.projectId}
-              input={trace.input}
-              output={trace.output}
-              metadata={trace.metadata}
-              key={trace.id}
-              size="sm"
-            />
             {viewType === "detailed" && (
               <>
                 <div className="flex items-start">
-                  <AnnotateDrawer
-                    key={"annotation-drawer" + trace.id}
-                    projectId={trace.projectId}
-                    scoreTarget={{
-                      type: "trace",
-                      traceId: trace.id,
-                    }}
-                    scores={scores}
-                    scoreMetadata={{
-                      projectId: trace.projectId,
-                      environment: trace.environment,
-                    }}
-                    size="sm"
-                  />
                   <CreateNewAnnotationQueueItem
                     projectId={trace.projectId}
                     objectId={trace.id}
