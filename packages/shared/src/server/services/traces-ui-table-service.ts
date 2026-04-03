@@ -1,5 +1,8 @@
 import { OrderByState } from "../../interfaces/orderBy";
-import { tracesTableUiColumnDefinitions, tracesTableUiColumnDefinitionsForDoris } from "../tableMappings";
+import {
+  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
+} from "../tableMappings";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { FilterState } from "../../types";
 import {
