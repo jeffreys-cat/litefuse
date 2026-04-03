@@ -71,7 +71,7 @@ export const getPromptsMeta = async (
     meta: { page, limit, totalPages, totalItems },
 
     // necessary for backwards compatibility as we initially released the /v2/prompts endpoint with this structure which did not match the api spec
-    // https://github.com/langfuse/langfuse/issues/2068
+    // https://github.com/selectdb/langfuse-doris/issues/2068
     pagination: { page, limit, totalPages, totalItems },
   };
 };
@@ -95,7 +95,7 @@ export type PromptsMetaResponse = {
     totalItems: number;
   };
   // necessary for backwards compatibility as we initially released the /v2/prompts endpoint with this structure which did not match the api spec
-  // https://github.com/langfuse/langfuse/issues/2068
+  // https://github.com/selectdb/langfuse-doris/issues/2068
   pagination: {
     page: number;
     limit: number;

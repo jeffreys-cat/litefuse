@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'fern/**'
+      - "fern/**"
   workflow_dispatch:
 
 concurrency:
@@ -43,7 +43,7 @@ jobs:
           GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
         run: |
           # Clone langfuse-python repository
-          git clone https://github.com/langfuse/langfuse-python.git ../langfuse-python
+          git clone https://github.com/selectdb/langfuse-doris-python.git ../langfuse-python
           cd ../langfuse-python
 
           git config user.name "langfuse-bot"
@@ -95,7 +95,7 @@ jobs:
           GH_ACCESS_TOKEN: ${{ secrets.GH_ACCESS_TOKEN }}
         run: |
           # Clone langfuse-js repository
-          git clone https://github.com/langfuse/langfuse-js.git ../langfuse-js
+          git clone https://github.com/selectdb/langfuse-doris-js.git ../langfuse-js
           cd ../langfuse-js
 
           # Configure git

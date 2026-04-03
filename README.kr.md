@@ -36,7 +36,7 @@
 </div>
 
 <p align="center">
-   <a href="https://github.com/langfuse/langfuse/blob/main/LICENSE">
+   <a href="https://github.com/selectdb/langfuse-doris/blob/main/LICENSE">
    <img src="https://img.shields.io/badge/License-MIT-E11311.svg" alt="MIT License">
    </a>
    <a href="https://www.ycombinator.com/companies/langfuse"><img src="https://img.shields.io/badge/Y%20Combinator-W23-orange" alt="Y Combinator W23"></a>
@@ -54,11 +54,11 @@
    <a href="https://www.linkedin.com/company/langfuse/" target="_blank">
    <img src="https://custom-icon-badges.demolab.com/badge/LinkedIn-0A66C2?logo=linkedin-white&logoColor=fff"
       alt="follow on LinkedIn"></a>
-   <a href="https://github.com/langfuse/langfuse/graphs/commit-activity" target="_blank">
+   <a href="https://github.com/selectdb/langfuse-doris/graphs/commit-activity" target="_blank">
    <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/langfuse/langfuse?labelColor=%20%2332b583&color=%20%2312b76a"></a>
-   <a href="https://github.com/langfuse/langfuse/" target="_blank">
+   <a href="https://github.com/selectdb/langfuse-doris/" target="_blank">
    <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3Alangfuse%2Flangfuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
-   <a href="https://github.com/langfuse/langfuse/discussions/" target="_blank">
+   <a href="https://github.com/selectdb/langfuse-doris/discussions/" target="_blank">
    <img alt="Discussion posts" src="https://img.shields.io/github/discussions/langfuse/langfuse?labelColor=%20%239b8afb&color=%20%237a5af8"></a>
 </p>
 
@@ -119,7 +119,7 @@ Langfuse 팀이 관리하는 배포 방식으로, 후한 무료 플랜(취미 �
 
   ```bash
   # 최신 Langfuse 저장소 클론
-  git clone https://github.com/langfuse/langfuse.git
+  git clone https://github.com/selectdb/langfuse-doris.git
   cd langfuse
 
   # langfuse docker compose 실행
@@ -247,7 +247,7 @@ _[Langfuse의 공개 예제 trace](https://cloud.langfuse.com/project/cloramnkj0
 
 - **GitHub Discussions의 [공개 Q&A](https://github.com/orgs/langfuse/discussions/categories/support)** 에 질문을 남겨주세요. 가능한 한 많은 세부 사항(예: 코드 스니펫, 스크린샷, 배경 정보)을 포함해 질문해 주시기 바랍니다.
 - [기능 요청](https://github.com/orgs/langfuse/discussions/categories/ideas)을 남겨주세요.
-- [버그 신고](https://github.com/langfuse/langfuse/issues)는 GitHub Issues를 통해 해주세요.
+- [버그 신고](https://github.com/selectdb/langfuse-doris/issues)는 GitHub Issues를 통해 해주세요.
 - 긴급한 문의는 앱 내 채팅 위젯을 통해 연락 바랍니다.
 
 ## 🤝 기여하기
@@ -274,7 +274,7 @@ _[Langfuse의 공개 예제 trace](https://cloud.langfuse.com/project/cloramnkj0
 
 ## ❤️ Langfuse를 사용하는 오픈 소스 프로젝트
 
-별(star) 수를 기준으로 순위가 매겨진 Langfuse를 사용하는 상위 오픈 소스 Python 프로젝트들 ([출처](https://github.com/langfuse/langfuse-docs/blob/main/components-mdx/dependents)):
+별(star) 수를 기준으로 순위가 매겨진 Langfuse를 사용하는 상위 오픈 소스 Python 프로젝트들 ([출처](https://github.com/selectdb/langfuse-doris-docs/blob/main/components-mdx/dependents)):
 
 | 저장소                                                                                                                                                                                                                                                              |    별 |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----: |

@@ -543,7 +543,7 @@ export type TraceSinkParams = {
   targetProjectId: string;
   traceId: string;
   traceName: string;
-  // NOTE: These strings must be whitelisted in the TS SDK to allow ingestion of traces by Langfuse. Please mirror edits to this string in https://github.com/langfuse/langfuse-js/blob/main/langfuse-core/src/index.ts.
+  // NOTE: These strings must be whitelisted in the TS SDK to allow ingestion of traces by Langfuse. Please mirror edits to this string in https://github.com/selectdb/langfuse-doris-js/blob/main/langfuse-core/src/index.ts.
   environment: string;
   userId?: string;
   metadata?: Record<string, unknown>;

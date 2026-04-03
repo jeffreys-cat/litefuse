@@ -166,7 +166,7 @@ export class ObservationTypeMapperRegistry {
   private readonly mappers: ObservationTypeMapper[] = [
     // Priority 0: Python SDK <= 3.3.0 override
     // If generation-like attributes are set even though observation type is span, override to 'generation'
-    // Issue: https://github.com/langfuse/langfuse/issues/8682
+    // Issue: https://github.com/selectdb/langfuse-doris/issues/8682
     // Affected SDK versions: Python SDK <= 3.3.0
     new CustomAttributeMapper(
       "PythonSDKv330Override",

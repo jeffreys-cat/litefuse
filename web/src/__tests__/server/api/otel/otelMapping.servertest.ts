@@ -5474,7 +5474,7 @@ describe("OTel Resource Span Mapping", () => {
     });
 
     it("should override the observation type if it is declared as 'span' but holds generation-like attributes for python-sdk <= 3.3.0", async () => {
-      // Issue: https://github.com/langfuse/langfuse/issues/8682
+      // Issue: https://github.com/selectdb/langfuse-doris/issues/8682
       const otelSpans = [
         {
           resource: {
