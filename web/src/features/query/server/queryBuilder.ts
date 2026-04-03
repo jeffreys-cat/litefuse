@@ -35,7 +35,7 @@ type AppliedDimensionType = {
   relationTable?: string;
   aggregationFunction?: string;
   explodeArray?: boolean;
-  pairExpand?: { valuesSql: string; valueAlias: string };
+  pairExpand?: { valuesSql?: string; valueAlias: string; mapColumn?: string };
 };
 
 type AppliedMetricType = {
@@ -982,7 +982,14 @@ export class QueryBuilder {
         // For explodeArray dimensions (like toolNames, calledToolNames), don't add table prefix
         // For function calls, don't add table prefix either
         let sqlWithPrefix: string;
-        if (dimension.explodeArray) {
+        if (dimension.pairExpand?.mapColumn) {
+          // pairExpand dimensions on Doris: the key alias comes from LATERAL VIEW,
+          // not from the table — skip table prefix and any_value wrapper
+          parts.push(
+            `${dimension.alias ?? dimension.sql} as ${dimension.alias ?? dimension.sql}`,
+          );
+          continue;
+        } else if (dimension.explodeArray) {
           // explodeArray dimensions - use as-is without any wrapper (will be handled in GROUP BY)
           sqlWithPrefix = dimension.sql;
         } else if (dimension.sql.includes(".") || isFunctionCall) {
@@ -2023,6 +2030,26 @@ export class QueryBuilder {
     const appliedDimensions = this.mapDimensions(query.dimensions, view);
     const appliedMetrics = this.mapMetrics(query.metrics, view);
 
+    // Auto-include dimensions required by pairExpand-dependent measures.
+    // e.g. usageByType.requiresDimension = "usageType": without that dimension
+    // the LATERAL VIEW is never emitted and Doris errors with "unknown column".
+    for (const metric of appliedMetrics) {
+      if (
+        metric.requiresDimension &&
+        !appliedDimensions.some((d) => d.alias === metric.requiresDimension)
+      ) {
+        const requiredDimDef = view.dimensions[metric.requiresDimension];
+        if (requiredDimDef) {
+          appliedDimensions.push({
+            ...requiredDimDef,
+            table: requiredDimDef.relationTable || view.name,
+            explodeArray: requiredDimDef.explodeArray,
+            pairExpand: requiredDimDef.pairExpand,
+          });
+        }
+      }
+    }
+
     // Create filters using Doris filter factory (not ClickHouse)
     const { whereFilters, whereRawParts } = this.mapFiltersDoris(
       query.filters,
@@ -2059,7 +2086,23 @@ export class QueryBuilder {
       fromClause += ` ${relationJoins.join(" ")}`;
     }
 
+    // Handle pairExpand dimensions using LATERAL VIEW (Doris equivalent of ARRAY JOIN)
+    const pairDims = appliedDimensions.filter((d) => d.pairExpand?.mapColumn);
+    if (pairDims.length > 0) {
+      const d = pairDims[0];
+      const mapCol = `${view.name}.${d.pairExpand!.mapColumn}`;
+      const keyAlias = d.alias ?? d.sql;
+      const valAlias = d.pairExpand!.valueAlias;
+      fromClause += `\nLATERAL VIEW posexplode(map_keys(${mapCol})) _pe_keys AS _pe_key_pos, ${keyAlias}`;
+      fromClause += `\nLATERAL VIEW posexplode(map_values(${mapCol})) _pe_vals AS _pe_val_pos, ${valAlias}`;
+    }
+
     fromClause += this.buildWhereClause(filterList, parameters);
+
+    // pairExpand position matching
+    if (pairDims.length > 0) {
+      fromClause += ` AND _pe_key_pos = _pe_val_pos AND ${view.name}.${pairDims[0].pairExpand!.mapColumn} IS NOT NULL`;
+    }
 
     // Append raw WHERE pruning parts (OR'd conditions from filterSql.where)
     for (const part of whereRawParts) {

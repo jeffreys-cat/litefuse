@@ -241,8 +241,12 @@ export async function* queryDorisStream<T>(opts: {
  * Parse Doris date format to match ClickHouse format
  */
 export function parseDorisUTCDateTimeFormat(dateString: string): Date {
-  // Doris typically returns dates in MySQL format: YYYY-MM-DD HH:MM:SS
-  // Convert to standard ISO format for parsing
+  // Handle both formats:
+  // - MySQL format from Doris: "YYYY-MM-DD HH:MM:SS"
+  // - ISO format (already converted by queryDoris): "YYYY-MM-DDTHH:MM:SS.000Z"
+  if (dateString.endsWith("Z") || dateString.includes("T")) {
+    return new Date(dateString);
+  }
   const isoFormat = dateString.replace(" ", "T") + "Z";
   return new Date(isoFormat);
 }

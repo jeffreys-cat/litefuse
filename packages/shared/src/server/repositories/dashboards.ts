@@ -423,6 +423,7 @@ export const getObservationUsageByTypeByTime = async (
   projectId: string,
   filter: FilterState,
 ) => {
+  console.log(`[usageByType] filter=${JSON.stringify(filter.map(f => ({col: f.column, op: f.operator, type: f.type, val: f.type === 'datetime' ? f.value : '...'})))}`);
   if (isDorisBackend()) {
     const { envFilter, remainingFilters } =
       extractEnvironmentFilterFromFilters(filter);
@@ -437,6 +438,7 @@ export const getObservationUsageByTypeByTime = async (
     );
 
     const appliedFilter = dorisFilter.apply();
+    console.log(`[usageByType] appliedQuery="${appliedFilter.query}"`);
 
     const tracesFilter = dorisFilter.find((f) => f.table === "traces");
     const timeFilter = tracesFilter
@@ -450,11 +452,12 @@ export const getObservationUsageByTypeByTime = async (
 
     const [orderByQuery, orderByParams, bucketSizeInSeconds] =
       orderByTimeSeriesDoris(filter, "start_time");
+    console.log(`[usageByType] orderByQuery="${orderByQuery}" bucketSize=${bucketSizeInSeconds}`);
 
     // Doris UNIQUE KEY 保证数据唯一性，无需去重
     // 使用 collect_list 模拟 ClickHouse 的 groupArray 结构
     const query = `
-      SELECT 
+      SELECT
           start_time,
           collect_list(CONCAT(usage_key, ':', CAST(usage_sum AS STRING))) AS usages
       FROM (
