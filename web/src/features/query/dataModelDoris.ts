@@ -294,7 +294,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       description:
         "Cost category key from cost_details map (e.g. 'input', 'output', 'total').",
       pairExpand: {
-        mapColumn: "cost_details",
+        valuesSql: "cost_details",
         valueAlias: "cost_value",
       },
     },
@@ -305,7 +305,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       description:
         "Token usage category key from usage_details map (e.g. 'input', 'output', 'total').",
       pairExpand: {
-        mapColumn: "usage_details",
+        valuesSql: "usage_details",
         valueAlias: "usage_value",
       },
     },

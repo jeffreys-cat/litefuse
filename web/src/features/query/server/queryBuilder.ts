@@ -35,7 +35,7 @@ type AppliedDimensionType = {
   relationTable?: string;
   aggregationFunction?: string;
   explodeArray?: boolean;
-  pairExpand?: { valuesSql?: string; valueAlias: string; mapColumn?: string };
+  pairExpand?: { valuesSql: string; valueAlias: string };
 };
 
 type AppliedMetricType = {
@@ -982,7 +982,7 @@ export class QueryBuilder {
         // For explodeArray dimensions (like toolNames, calledToolNames), don't add table prefix
         // For function calls, don't add table prefix either
         let sqlWithPrefix: string;
-        if (dimension.pairExpand?.mapColumn) {
+        if (dimension.pairExpand?.valuesSql) {
           // pairExpand dimensions on Doris: the key alias comes from LATERAL VIEW,
           // not from the table — skip table prefix and any_value wrapper
           parts.push(
@@ -2087,10 +2087,10 @@ export class QueryBuilder {
     }
 
     // Handle pairExpand dimensions using LATERAL VIEW (Doris equivalent of ARRAY JOIN)
-    const pairDims = appliedDimensions.filter((d) => d.pairExpand?.mapColumn);
+    const pairDims = appliedDimensions.filter((d) => d.pairExpand?.valuesSql);
     if (pairDims.length > 0) {
       const d = pairDims[0];
-      const mapCol = `${view.name}.${d.pairExpand!.mapColumn}`;
+      const mapCol = `${view.name}.${d.pairExpand!.valuesSql}`;
       const keyAlias = d.alias ?? d.sql;
       const valAlias = d.pairExpand!.valueAlias;
       fromClause += `\nLATERAL VIEW posexplode(map_keys(${mapCol})) _pe_keys AS _pe_key_pos, ${keyAlias}`;
@@ -2101,7 +2101,7 @@ export class QueryBuilder {
 
     // pairExpand position matching
     if (pairDims.length > 0) {
-      fromClause += ` AND _pe_key_pos = _pe_val_pos AND ${view.name}.${pairDims[0].pairExpand!.mapColumn} IS NOT NULL`;
+      fromClause += ` AND _pe_key_pos = _pe_val_pos AND ${view.name}.${pairDims[0].pairExpand!.valuesSql} IS NOT NULL`;
     }
 
     // Append raw WHERE pruning parts (OR'd conditions from filterSql.where)
