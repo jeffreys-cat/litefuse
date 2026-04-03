@@ -39,14 +39,12 @@ import { useParsedTrace } from "@/src/hooks/useParsedTrace";
 import { useTraceData } from "@/src/components/trace2/contexts/TraceDataContext";
 import { useViewPreferences } from "@/src/components/trace2/contexts/ViewPreferencesContext";
 import { useSelection } from "@/src/components/trace2/contexts/SelectionContext";
-import { useIsAuthenticatedAndProjectMember } from "@/src/features/auth/hooks";
 import { useCommentedPaths } from "@/src/features/comments/hooks/useCommentedPaths";
 
 // Extracted components
 import { TraceDetailViewHeader } from "./TraceDetailViewHeader";
 import { TraceLogView } from "../TraceLogView/TraceLogView";
 import { TRACE_VIEW_CONFIG } from "@/src/components/trace2/config/trace-view-config";
-import ScoresTable from "@/src/components/table/use-cases/scores";
 import { getMostRecentCorrection } from "@/src/features/corrections/utils/getMostRecentCorrection";
 
 export interface TraceDetailViewProps {
@@ -158,11 +156,6 @@ export function TraceDetailView({
   const commentedPathsByField = useCommentedPaths(traceComments.data);
 
   // Derived state
-  const traceScores = useMemo(
-    () => scores.filter((s) => !s.observationId),
-    [scores],
-  );
-
   const traceCorrections = useMemo(
     () => corrections.filter((c) => !c.observationId),
     [corrections],
@@ -176,10 +169,8 @@ export function TraceDetailView({
   const isLogViewVirtualized =
     observations.length >= TRACE_VIEW_CONFIG.logView.virtualizationThreshold;
 
-  // Scores tab visibility: hide for public trace viewers and in peek mode (annotation queues)
-  const isAuthenticatedAndProjectMember =
-    useIsAuthenticatedAndProjectMember(projectId);
-  const showScoresTab = isAuthenticatedAndProjectMember;
+  // Scores feature is not supported in this build
+  const showScoresTab = false;
 
   // Handle tab change
   const handleTabChange = (value: string) => {
@@ -194,7 +185,6 @@ export function TraceDetailView({
         observations={observations}
         parsedMetadata={parsedMetadata}
         projectId={projectId}
-        traceScores={traceScores}
         commentCount={comments.get(trace.id)}
         pendingSelection={pendingSelection}
         onSelectionUsed={handleSelectionUsed}

@@ -139,13 +139,14 @@ export const ROUTES: Route[] = [
     group: RouteGroup.PromptManagement,
     section: RouteSection.Main,
   },
-  {
-    title: "Scores",
-    pathname: `/project/[projectId]/scores`,
-    group: RouteGroup.Evaluation,
-    section: RouteSection.Main,
-    icon: SquarePercent,
-  },
+  // Scores feature is not supported in this build
+  // {
+  //   title: "Scores",
+  //   pathname: `/project/[projectId]/scores`,
+  //   group: RouteGroup.Evaluation,
+  //   section: RouteSection.Main,
+  //   icon: SquarePercent,
+  // },
   {
     title: "LLM-as-a-Judge",
     icon: Lightbulb,
