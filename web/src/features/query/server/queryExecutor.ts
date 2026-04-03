@@ -79,7 +79,10 @@ export async function executeQuery(
 
     // Doris doesn't support WITH FILL. Fill time gaps with zeros to match
     // ClickHouse behavior for continuous time series charts.
-    if (query.timeDimension && converted.length > 0) {
+    // Skip gap-filling when ORDER BY is specified (ClickHouse also skips
+    // WITH FILL when ORDER BY is present).
+    const hasOrderBy = query.orderBy && query.orderBy.length > 0;
+    if (query.timeDimension && converted.length > 0 && !hasOrderBy) {
       return fillTimeSeriesGaps(
         converted,
         query.timeDimension,
@@ -266,45 +269,49 @@ function fillTimeSeriesGaps(
     );
   }
 
-  // With breakdown dimensions: group rows by dimension combination, fill each group
-  const getDimKey = (row: Record<string, unknown>): string =>
-    dimensionKeys.map((k) => String(row[k] ?? "")).join("\0");
+  // With breakdown dimensions: add fill rows with empty-string dimensions
+  // and zero metrics for time buckets without any data.  This matches
+  // ClickHouse WITH FILL behavior: fill rows get default values ("" for
+  // strings, 0 for numbers).  The frontend's DashboardWidget converts
+  // empty-string dimensions to "n/a", creating a flat zero-value series
+  // that extends the X-axis to the full from/to range — identical to CK.
+  const result: Record<string, unknown>[] = [...rows];
 
-  // Collect all unique dimension combinations and index rows by (dimKey, timestamp)
-  const dimGroups = new Map<string, Record<string, unknown>>();
-  const rowIndex = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    const dk = getDimKey(row);
-    if (!dimGroups.has(dk)) {
-      // Store the dimension values as a template for zero-fill rows
-      const dimValues: Record<string, unknown> = {};
-      for (const key of dimensionKeys) {
-        dimValues[key] = row[key];
-      }
-      dimGroups.set(dk, dimValues);
-    }
-    rowIndex.set(`${dk}\0${row[timeKey] as string}`, row);
+  const existingTimestamps = new Set(rows.map((r) => r[timeKey] as string));
+
+  // Match ClickHouse WITH FILL default values per column type:
+  // - Nullable columns: WITH FILL default = null → frontend shows "n/a" series
+  // - Non-Nullable columns: WITH FILL default = "" → frontend filters it out
+  // Detect by checking if the actual data already has null values for each
+  // dimension column. If yes → column is Nullable → use null. If no → use "".
+  const fillDimValues: Record<string, unknown> = {};
+  for (const key of dimensionKeys) {
+    const hasNullInData = rows.some((r) => r[key] === null || r[key] === undefined);
+    fillDimValues[key] = hasNullInData ? null : "";
+  }
+  const nullMetrics: Record<string, unknown> = {};
+  for (const key of metricKeys) {
+    nullMetrics[key] = null;
   }
 
-  // Fill each dimension group across all time buckets
-  const result: Record<string, unknown>[] = [];
-  for (const [dk, dimValues] of dimGroups) {
-    for (const ts of allTimeBuckets) {
-      const existing = rowIndex.get(`${dk}\0${ts}`);
-      if (existing) {
-        result.push(existing);
-      } else {
-        const zeroRow: Record<string, unknown> = {
-          [timeKey]: ts,
-          ...dimValues,
-        };
-        for (const key of metricKeys) {
-          zeroRow[key] = 0;
-        }
-        result.push(zeroRow);
-      }
+  for (const ts of allTimeBuckets) {
+    if (!existingTimestamps.has(ts)) {
+      result.push({
+        [timeKey]: ts,
+        ...fillDimValues,
+        ...nullMetrics,
+      });
     }
   }
+
+  // Sort by time dimension to match CK's WITH FILL output order.
+  // Without sorting, data rows come first then fill rows appended at end,
+  // causing groupDataByTimeDimension to produce wrong X-axis order.
+  result.sort((a, b) => {
+    const ta = a[timeKey] as string;
+    const tb = b[timeKey] as string;
+    return ta < tb ? -1 : ta > tb ? 1 : 0;
+  });
 
   return result;
 }
