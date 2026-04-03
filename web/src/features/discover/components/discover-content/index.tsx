@@ -7,7 +7,7 @@ import { useRouter } from "next/router";
 import { IconButton } from "components/ui/icon-button";
 import { Pagination } from "components/ui/pagination";
 import { Tab, TabContent, TabsBar } from "components/ui/tabs";
-import JsonView from "@uiw/react-json-view";
+import { JSONView } from "@/src/components/ui/CodeJsonViewer";
 import {
   tableTotalCountAtom,
   tableDataAtom,
@@ -29,7 +29,6 @@ import { useDiscoverTheme } from "components/ui/theme";
 import { ColumnStyleWrapper, HoverStyle } from "./discover-content.style";
 import { css } from "@emotion/css";
 import { ContentTableActions } from "./content-table-actions";
-import { SELECTDB_THEME, SELECTDB_THEME_LIGHT } from "./json-viewer.theme";
 import { ContentItem } from "./content-item";
 import SurroundingLogs from "components/surrounding-logs";
 import {
@@ -273,18 +272,10 @@ export default function DiscoverContent({
           )}
           {state[1].active && (
             <div>
-              <JsonView
-                value={row.original._original}
-                className={`-mt-2 pl-11 leading-6! ${css`
-                  .w-rjv-wrap {
-                    border-left: none !important;
-                  }
-                `}`}
-                shortenTextAfterLength={0}
-                indentWidth={36}
-                displayDataTypes={false}
-                enableClipboard={false}
-                style={theme.isDark ? SELECTDB_THEME : SELECTDB_THEME_LIGHT}
+              <JSONView
+                json={row.original._original}
+                className="-mt-2 pl-11"
+                borderless
               />
             </div>
           )}
