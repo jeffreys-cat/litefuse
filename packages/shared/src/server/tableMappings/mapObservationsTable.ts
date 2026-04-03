@@ -366,21 +366,21 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokensPerSecond",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "(sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))) / (milliseconds_diff(any_value(end_time),any_value(start_time)) / 1000)",
+      "if(isNull(end_time) OR milliseconds_diff(end_time, start_time) = 0, NULL, COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0) / (milliseconds_diff(end_time, start_time) / 1000))",
   },
   {
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'input'),cost_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'output'),cost_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)",
   },
   {
     uiTableName: "Total Cost ($)",
@@ -418,7 +418,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "inputTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'input'),usage_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -426,7 +426,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "outputTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -434,7 +434,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "totalTokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'total'),usage_details['total'],0))",
+      "if(MAP_CONTAINS_KEY(usage_details,'total'), usage_details['total'], NULL)",
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
@@ -488,5 +488,29 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "promptVersion",
     clickhouseTableName: "observations",
     clickhouseSelect: "o.prompt_version",
+  },
+  {
+    uiTableName: "Available Tools",
+    uiTableId: "toolDefinitions",
+    clickhouseTableName: "observations",
+    clickhouseSelect: "map_size(o.tool_definitions)",
+  },
+  {
+    uiTableName: "Tool Calls",
+    uiTableId: "toolCalls",
+    clickhouseTableName: "observations",
+    clickhouseSelect: "array_size(o.tool_calls)",
+  },
+  {
+    uiTableName: "Tool Names",
+    uiTableId: "toolNames",
+    clickhouseTableName: "observations",
+    clickhouseSelect: "map_keys(o.tool_definitions)",
+  },
+  {
+    uiTableName: "Called Tool Names",
+    uiTableId: "calledToolNames",
+    clickhouseTableName: "observations",
+    clickhouseSelect: "o.tool_call_names",
   },
 ];
