@@ -34,7 +34,8 @@ export const viewDeclaration = z.object({
       explodeArray: z.boolean().optional(),
       pairExpand: z
         .object({
-          valuesSql: z.string(),
+          valuesSql: z.string().optional(),
+          mapColumn: z.string().optional(),
           valueAlias: z.string(),
         })
         .optional(),
