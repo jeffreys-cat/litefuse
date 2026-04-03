@@ -16,6 +16,7 @@ import {
   logger,
   getObservationCostByTypeByTime,
   getObservationUsageByTypeByTime,
+  isDorisBackend,
   DashboardService,
   DashboardDefinitionSchema,
 } from "@langfuse/shared/src/server";
@@ -307,11 +308,36 @@ async function getObservationsByTypeV2(params: {
 
   // Transform flat rows to { intervalStart, key, sum } expected by the component.
   const sumField = `sum_${metricMeasure}`;
-  return rows.map((row) => ({
-    intervalStart: new Date(row["time_dimension"] as string),
-    key: row[dimensionField] as string,
-    sum: Number(row[sumField] ?? 0),
-  })) as DatabaseRow[];
+  const result = rows
+    .filter((row) => row["time_dimension"]) // skip rows without time
+    .map((row) => ({
+      intervalStart: new Date(row["time_dimension"] as string),
+      key: (row[dimensionField] as string) || "",
+      sum: Number(row[sumField] ?? 0),
+    })) as DatabaseRow[];
+
+  // On Doris, fillTimeSeriesGaps adds fill rows with empty dimension that
+  // the frontend filters out, so the X-axis doesn't extend to the full
+  // time range.  CK's v1 path expands every time bucket (including fill)
+  // into rows for ALL unique types.  Replicate by adding boundary rows
+  // at from/to timestamps for every unique type with sum=0.
+  if (isDorisBackend() && result.length > 0) {
+    const fromDate = new Date(from.value as Date);
+    const toDate = new Date(to.value as Date);
+    const uniqueKeys = [
+      ...new Set(
+        result
+          .map((r) => (r as any).key as string)
+          .filter((k) => k && k.length > 0),
+      ),
+    ];
+    for (const key of uniqueKeys) {
+      result.unshift({ intervalStart: fromDate, key, sum: 0 } as any);
+      result.push({ intervalStart: toDate, key, sum: 0 } as any);
+    }
+  }
+
+  return result;
 }
 
 export const dashboardRouter = createTRPCRouter({

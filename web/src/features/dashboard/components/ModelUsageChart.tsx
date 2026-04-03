@@ -8,7 +8,6 @@ import {
 import { TabComponent } from "@/src/features/dashboard/components/TabsComponent";
 import { TotalMetric } from "@/src/features/dashboard/components/TotalMetric";
 import { totalCostDashboardFormatted } from "@/src/features/dashboard/lib/dashboard-utils";
-import { api } from "@/src/utils/api";
 import {
   type DashboardDateRangeAggregationOption,
   dashboardDateRangeAggregationSettings,
@@ -122,46 +121,41 @@ export const ModelUsageChart = ({
     },
   );
 
-  const queryCostByType = api.dashboard.chart.useQuery(
+  // "by type" queries: use the same useScheduledDashboardExecuteQuery path
+  // as "by model" so that Doris fillTimeSeriesGaps + fillMissingValuesAndTransform
+  // produce a continuous X-axis over the full time range.
+  const costByTypeQuery: QueryType = {
+    view: "observations",
+    dimensions: [{ field: "costType" }],
+    metrics: [{ measure: "costByType", aggregation: "sum" }],
+    filters: [
+      ...mapLegacyUiTableFilterToView("observations", userAndEnvFilterState),
+      {
+        column: "type",
+        operator: "any of",
+        value: getGenerationLikeTypes(),
+        type: "stringOptions",
+      },
+      {
+        column: "providedModelName",
+        operator: "any of",
+        value: selectedModels,
+        type: "stringOptions",
+      },
+    ],
+    timeDimension: {
+      granularity:
+        dashboardDateRangeAggregationSettings[agg].dateTrunc ?? "day",
+    },
+    fromTimestamp: fromTimestamp.toISOString(),
+    toTimestamp: toTimestamp.toISOString(),
+    orderBy: null,
+  };
+
+  const queryCostByType = useScheduledDashboardExecuteQuery(
     {
       projectId,
-      from: "traces_observations",
-      select: [
-        { column: "totalTokens", agg: "SUM" },
-        { column: "calculatedTotalCost", agg: "SUM" },
-        { column: "model" },
-      ],
-      filter: [
-        ...globalFilterState,
-        {
-          type: "stringOptions",
-          column: "type",
-          operator: "any of",
-          value: getGenerationLikeTypes(),
-        },
-        {
-          type: "stringOptions",
-          column: "model",
-          operator: "any of",
-          value: selectedModels,
-        } as const,
-      ],
-      groupBy: [
-        {
-          type: "datetime",
-          column: "startTime",
-          temporalUnit:
-            dashboardDateRangeAggregationSettings[agg].dateTrunc ?? "day",
-        },
-        {
-          type: "string",
-          column: "model",
-        },
-      ],
-      orderBy: [
-        { column: "calculatedTotalCost", direction: "DESC", agg: "SUM" },
-      ],
-      queryName: "observations-cost-by-type-timeseries",
+      query: costByTypeQuery,
       version: metricsVersion,
     },
     {
@@ -171,47 +165,43 @@ export const ModelUsageChart = ({
           skipBatch: true,
         },
       },
+      queryId: `${schedulerId ?? "home:model-usage"}:cost-by-type`,
+      priority: 1002,
     },
   );
 
-  const queryUsageByType = api.dashboard.chart.useQuery(
+  const usageByTypeQuery: QueryType = {
+    view: "observations",
+    dimensions: [{ field: "usageType" }],
+    metrics: [{ measure: "usageByType", aggregation: "sum" }],
+    filters: [
+      ...mapLegacyUiTableFilterToView("observations", userAndEnvFilterState),
+      {
+        column: "type",
+        operator: "any of",
+        value: getGenerationLikeTypes(),
+        type: "stringOptions",
+      },
+      {
+        column: "providedModelName",
+        operator: "any of",
+        value: selectedModels,
+        type: "stringOptions",
+      },
+    ],
+    timeDimension: {
+      granularity:
+        dashboardDateRangeAggregationSettings[agg].dateTrunc ?? "day",
+    },
+    fromTimestamp: fromTimestamp.toISOString(),
+    toTimestamp: toTimestamp.toISOString(),
+    orderBy: null,
+  };
+
+  const queryUsageByType = useScheduledDashboardExecuteQuery(
     {
       projectId,
-      from: "traces_observations",
-      select: [
-        { column: "totalTokens", agg: "SUM" },
-        { column: "calculatedTotalCost", agg: "SUM" },
-        { column: "model" },
-      ],
-      filter: [
-        ...globalFilterState,
-        {
-          type: "stringOptions",
-          column: "type",
-          operator: "any of",
-          value: getGenerationLikeTypes(),
-        },
-        {
-          type: "stringOptions",
-          column: "model",
-          operator: "any of",
-          value: selectedModels,
-        } as const,
-      ],
-      groupBy: [
-        {
-          type: "datetime",
-          column: "startTime",
-          temporalUnit:
-            dashboardDateRangeAggregationSettings[agg].dateTrunc ?? "day",
-        },
-        {
-          type: "string",
-          column: "model",
-        },
-      ],
-      orderBy: [{ column: "totalTokens", direction: "DESC", agg: "SUM" }],
-      queryName: "observations-usage-by-type-timeseries",
+      query: usageByTypeQuery,
       version: metricsVersion,
     },
     {
@@ -221,32 +211,63 @@ export const ModelUsageChart = ({
           skipBatch: true,
         },
       },
+      queryId: `${schedulerId ?? "home:model-usage"}:usage-by-type`,
+      priority: 1003,
     },
   );
+
+  // Extract unique cost/usage type keys from the data for fillMissingValuesAndTransform
+  const costTypeKeys = queryCostByType.data
+    ? [
+        ...new Set(
+          (queryCostByType.data as DatabaseRow[])
+            .map((r) => r.costType as string)
+            .filter((k) => k != null && k !== ""),
+        ),
+      ]
+    : [];
+
+  const usageTypeKeys = queryUsageByType.data
+    ? [
+        ...new Set(
+          (queryUsageByType.data as DatabaseRow[])
+            .map((r) => r.usageType as string)
+            .filter((k) => k != null && k !== ""),
+        ),
+      ]
+    : [];
 
   const costByType =
     queryCostByType.data && allModels.length > 0
       ? fillMissingValuesAndTransform(
-          extractTimeSeriesData(queryCostByType.data, "intervalStart", [
-            {
-              uniqueIdentifierColumns: [{ accessor: "key" }],
-              valueColumn: "sum",
-            },
-          ]),
-          [],
+          extractTimeSeriesData(
+            queryCostByType.data as DatabaseRow[],
+            "time_dimension",
+            [
+              {
+                uniqueIdentifierColumns: [{ accessor: "costType" }],
+                valueColumn: "sum_costByType",
+              },
+            ],
+          ),
+          costTypeKeys,
         )
       : [];
 
   const unitsByType =
     queryUsageByType.data && allModels.length > 0
       ? fillMissingValuesAndTransform(
-          extractTimeSeriesData(queryUsageByType.data, "intervalStart", [
-            {
-              uniqueIdentifierColumns: [{ accessor: "key" }],
-              valueColumn: "sum",
-            },
-          ]),
-          [],
+          extractTimeSeriesData(
+            queryUsageByType.data as DatabaseRow[],
+            "time_dimension",
+            [
+              {
+                uniqueIdentifierColumns: [{ accessor: "usageType" }],
+                valueColumn: "sum_usageByType",
+              },
+            ],
+          ),
+          usageTypeKeys,
         )
       : [];
 
