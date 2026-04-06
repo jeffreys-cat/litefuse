@@ -89,12 +89,12 @@ const handleGetSessionById = async (input: {
     });
   }
 
-  const clickhouseTraces = await getTracesIdentifierForSession(
+  const traces = await getTracesIdentifierForSession(
     input.projectId,
     input.sessionId,
   );
 
-  const chunks = chunk(clickhouseTraces, 500);
+  const chunks = chunk(traces, 500);
 
   // in the below queries, take the lowest timestamp as a filter condition
   // to improve performance
@@ -133,18 +133,14 @@ const handleGetSessionById = async (input: {
 
   return {
     ...postgresSession,
-    traces: clickhouseTraces.map((t) => ({
+    traces: traces.map((t) => ({
       ...t,
       scores: toDomainArrayWithStringifiedMetadata(
         validatedScores.filter((s) => s.traceId === t.id),
       ),
     })),
     totalCost: costData ?? 0,
-    users: [
-      ...new Set(
-        clickhouseTraces.map((t) => t.userId).filter((t) => t !== null),
-      ),
-    ],
+    users: [...new Set(traces.map((t) => t.userId).filter((t) => t !== null))],
   };
 };
 
@@ -518,8 +514,8 @@ export const sessionRouter = createTRPCRouter({
         {
           uiTableName: "Created At",
           uiTableId: "createdAt",
-          clickhouseTableName: "traces",
-          clickhouseSelect: "timestamp",
+          tableName: "traces",
+          select: "timestamp",
         },
       ];
       const filter: FilterState = [

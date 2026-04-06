@@ -16,7 +16,7 @@ import {
   StorageServiceFactory,
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
-import { processClickhouseTraceDelete } from "../features/traces/processClickhouseTraceDelete";
+import { processDorisTraceDelete } from "../features/traces/processDorisTraceDelete";
 import { env } from "../env";
 import { prisma } from "@langfuse/shared/src/db";
 
@@ -54,7 +54,7 @@ describe("trace deletion", () => {
     await createScoresCh([createTraceScore({ trace_id: traceId })]);
 
     // When
-    await processClickhouseTraceDelete("projectId", [traceId]);
+    await processDorisTraceDelete("projectId", [traceId]);
 
     // Then
     const traces = await getTracesByIds([traceId], projectId);
@@ -154,7 +154,7 @@ describe("trace deletion", () => {
     });
 
     // When
-    await processClickhouseTraceDelete(projectId, [traceId]);
+    await processDorisTraceDelete(projectId, [traceId]);
 
     // Then
     const files = await mediaStorageService.listFiles(projectId);
@@ -225,7 +225,7 @@ describe("trace deletion", () => {
     });
 
     // When
-    await processClickhouseTraceDelete(projectId, [traceId1]);
+    await processDorisTraceDelete(projectId, [traceId1]);
 
     // Then
     const files = await mediaStorageService.listFiles(projectId);
@@ -332,7 +332,7 @@ describe("trace deletion", () => {
     });
 
     // When
-    await processClickhouseTraceDelete(projectId, [traceId]);
+    await processDorisTraceDelete(projectId, [traceId]);
 
     // Then
     const eventLog = getBlobStorageByProjectId(projectId);

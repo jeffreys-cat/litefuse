@@ -1,4 +1,3 @@
-import { parseClickhouseUTCDateTimeFormat } from "./clickhouse";
 import {
   ObservationRecordReadType,
   EventsObservationRecordReadType,
@@ -20,18 +19,18 @@ import {
 } from "../utils/rendering";
 import { logger } from "../logger";
 import type { Model, Price } from "@prisma/client";
-import { isDorisBackend } from "./analytics";
+import { parseDorisUTCDateTimeFormat } from "./doris";
 
 // Helper function to parse timestamps from different backends
 const parseTimestamp = (timestamp: string | Date): Date => {
   // Only apply special handling for Doris backend
-  if (isDorisBackend() && timestamp instanceof Date) {
+  if (timestamp instanceof Date) {
     return timestamp;
   }
 
   // Default ClickHouse behavior - always expect string
   if (typeof timestamp === "string") {
-    return parseClickhouseUTCDateTimeFormat(timestamp);
+    return parseDorisUTCDateTimeFormat(timestamp);
   }
 
   throw new Error(`Invalid timestamp format: ${typeof timestamp}`);

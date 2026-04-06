@@ -11,7 +11,8 @@ export type IngestionEntityTypes =
   | "trace"
   | "observation"
   | "score"
-  | "sdk_log";
+  | "sdk_log"
+  | "dataset_run_item";
 
 export const getDorisEntityType = (eventType: string): IngestionEntityTypes => {
   switch (eventType) {

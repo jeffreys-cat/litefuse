@@ -117,7 +117,7 @@ describe("StringFilter with emptyEqualsNull", () => {
     },
   ])("$desc", ({ operator, value, expectedQuery, paramValues }) => {
     const { query, params } = new StringFilter({
-      clickhouseTable: "",
+      dorisTable: "",
       field: C,
       operator,
       value,
@@ -167,7 +167,7 @@ describe("StringOptionsFilter with emptyEqualsNull", () => {
     },
   ])("$desc", ({ operator, values, expectedQuery, paramValues }) => {
     const { query, params } = new StringOptionsFilter({
-      clickhouseTable: "",
+      dorisTable: "",
       field: C,
       operator,
       values,
@@ -197,7 +197,7 @@ describe("NullFilter with emptyEqualsNull", () => {
     },
   ])("$desc", ({ operator, expectedQuery }) => {
     const { query, params } = new NullFilter({
-      clickhouseTable: "",
+      dorisTable: "",
       field: C,
       operator,
       emptyEqualsNull: true,

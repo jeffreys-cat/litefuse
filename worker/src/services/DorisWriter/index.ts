@@ -10,6 +10,7 @@ import {
   recordIncrement,
   ScoreRecordInsertType,
   TraceRecordInsertType,
+  DatasetRunItemRecordInsertType,
 } from "@langfuse/shared/src/server";
 
 import { env } from "../../env";
@@ -40,6 +41,7 @@ export class DorisWriter {
       [TableName.Scores]: [],
       [TableName.Observations]: [],
       [TableName.BlobStorageFileLog]: [],
+      [TableName.DatasetRunItems]: [],
     };
 
     this.start();
@@ -242,6 +244,7 @@ export enum TableName {
   Scores = "scores",
   Observations = "observation_source",
   BlobStorageFileLog = "blob_storage_file_log",
+  DatasetRunItems = "dataset_run_items_rmt",
 }
 
 type RecordInsertType<T extends TableName> = T extends TableName.Scores
@@ -252,7 +255,9 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
       ? TraceRecordInsertType
       : T extends TableName.BlobStorageFileLog
         ? BlobStorageFileLogInsertType
-        : never;
+        : T extends TableName.DatasetRunItems
+          ? DatasetRunItemRecordInsertType
+          : never;
 
 type DorisQueue = {
   [T in TableName]: DorisWriterQueueItem<T>[];

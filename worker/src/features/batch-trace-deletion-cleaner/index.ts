@@ -6,7 +6,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { PeriodicExclusiveRunner } from "../../utils/PeriodicExclusiveRunner";
-import { processClickhouseTraceDelete } from "../traces/processClickhouseTraceDelete";
+import { processDorisTraceDelete } from "../traces/processDorisTraceDelete";
 import { processPostgresTraceDelete } from "../traces/processPostgresTraceDelete";
 
 const METRIC_PREFIX = "langfuse.batch_trace_deletion_cleaner";
@@ -151,10 +151,10 @@ export class BatchTraceDeletionCleaner extends PeriodicExclusiveRunner {
       count: traceIdsToDelete.length,
     });
 
-    // Delete from both Postgres and ClickHouse in parallel
+    // Delete from both Postgres and Doris in parallel
     await Promise.all([
       processPostgresTraceDelete(projectId, traceIdsToDelete),
-      processClickhouseTraceDelete(projectId, traceIdsToDelete),
+      processDorisTraceDelete(projectId, traceIdsToDelete),
     ]);
 
     // Mark traces as deleted

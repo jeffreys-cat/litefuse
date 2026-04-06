@@ -1,25 +1,21 @@
-import { ClickHouseClientConfigOptions } from "@clickhouse/client";
 import { OrderByState } from "../../interfaces/orderBy";
 import { FilterState } from "../../types";
-import { convertDateToClickhouseDateTime } from "../clickhouse/client";
-import { measureAndReturn } from "../clickhouse/measureAndReturn";
+import { sessionColsForDoris } from "../tableMappings/mapSessionTable";
+import { parseDorisUTCDateTimeFormat } from "../repositories/doris";
+import { convertDateToAnalyticsDateTime } from "../repositories/analytics";
+
+// Doris imports
+import { queryDoris } from "../repositories";
 import {
-  CTEQueryBuilder,
-  DateTimeFilter,
-  FilterList,
-  StringOptionsFilter,
-  orderByToClickhouseSql,
-} from "../queries";
-import { createFilterFromFilterState } from "../queries/clickhouse-sql/factory";
+  createDorisFilterFromFilterState,
+  getDorisProjectIdDefaultFilter,
+} from "../queries/doris-sql/factory";
+import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import {
-  eventsSessionsAggregation,
-  eventsSessionScoresAggregation,
-  eventsTracesAggregation,
-} from "../queries/clickhouse-sql/query-fragments";
-import { queryClickhouse } from "../repositories";
-import { sessionCols } from "../tableMappings/mapSessionTable";
-import { sessionsViewCols } from "../../tableDefinitions/sessionsView";
-import { parseClickhouseUTCDateTimeFormat } from "../repositories/clickhouse";
+  StringFilter as DorisStringFilter,
+  StringOptionsFilter as DorisStringOptionsFilter,
+  DateTimeFilter as DorisDateTimeFilter,
+} from "../queries/doris-sql/doris-filter";
 
 type SessionEventsBaseReturnType = {
   session_id: string;
@@ -52,56 +48,44 @@ export const getSessionTracesFromEvents = async (props: {
   projectId: string;
   sessionId: string;
 }) => {
-  const tracesBuilder = eventsTracesAggregation({
-    projectId: props.projectId,
-  })
-    .whereRaw("e.session_id = {sessionId: String}", {
-      sessionId: props.sessionId,
-    })
-    .whereRaw("e.is_deleted = 0")
-    .orderByColumns([{ column: "timestamp", direction: "ASC" }]);
-
-  const tracesCte = tracesBuilder.buildWithParams();
-
+  // Doris version - direct query on traces table
   const query = `
-    ${tracesCte.query}
+    SELECT
+      id,
+      name,
+      timestamp,
+      environment,
+      user_id
+    FROM traces t
+    WHERE t.session_id = {sessionId: String}
+      AND t.project_id = {projectId: String}
+      AND t.is_deleted = 0
+    ORDER BY timestamp ASC
   `;
 
-  const rows = await measureAndReturn({
-    operationName: "getSessionTracesFromEvents",
-    projectId: props.projectId,
-    input: {
-      params: {
-        ...tracesCte.params,
-        projectId: props.projectId,
-        sessionId: props.sessionId,
-      },
-      tags: {
-        feature: "tracing",
-        type: "sessions-traces",
-        projectId: props.projectId,
-        operation_name: "getSessionTracesFromEvents",
-      },
+  const rows = await queryDoris<{
+    id: string;
+    name: string | null;
+    timestamp: string;
+    environment: string | null;
+    user_id: string | null;
+  }>({
+    query,
+    params: {
+      projectId: props.projectId,
+      sessionId: props.sessionId,
     },
-    fn: async (input) => {
-      return queryClickhouse<{
-        id: string;
-        name: string | null;
-        timestamp: string;
-        environment: string | null;
-        user_id: string | null;
-      }>({
-        query,
-        params: input.params,
-        tags: input.tags,
-      });
+    tags: {
+      feature: "tracing",
+      type: "sessions-traces",
+      projectId: props.projectId,
     },
   });
 
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
-    timestamp: parseClickhouseUTCDateTimeFormat(row.timestamp),
+    timestamp: parseDorisUTCDateTimeFormat(row.timestamp),
     environment: row.environment,
     userId: row.user_id,
   }));
@@ -160,148 +144,93 @@ export type FetchSessionsTableFromEventsProps = {
   limit?: number;
   page?: number;
   tags?: Record<string, string>;
-  clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 };
 
 const getSessionsTableFromEventsGeneric = async <T>(
   props: FetchSessionsTableFromEventsProps,
 ) => {
-  const { select, projectId, filter, orderBy, limit, page, clickhouseConfigs } =
-    props;
+  const { select, projectId, filter, orderBy, limit, page } = props;
 
-  const sessionFilters = new FilterList(
-    createFilterFromFilterState(filter, sessionCols, sessionsViewCols),
+  const { tracesFilter } = getDorisProjectIdDefaultFilter(projectId, {
+    tracesPrefix: "t",
+  });
+
+  tracesFilter.push(
+    ...createDorisFilterFromFilterState(filter, sessionColsForDoris),
   );
+
+  const sessionFilters = tracesFilter;
   const sessionsFilterRes = sessionFilters.apply();
 
   const traceTimestampFilter = sessionFilters.find(
     (f) =>
       f.field === "min_timestamp" &&
       (f.operator === ">=" || f.operator === ">"),
-  ) as DateTimeFilter | undefined;
+  ) as DorisDateTimeFilter | undefined;
 
   const sessionIdFilter = sessionFilters.find(
-    (f) => f instanceof StringOptionsFilter && f.field === "session_id",
-  ) as StringOptionsFilter | undefined;
+    (f) => f instanceof DorisStringOptionsFilter && f.field === "session_id",
+  ) as DorisStringOptionsFilter | undefined;
 
-  const requiresScoresJoin =
-    sessionFilters.some((f) => f.table === "scores") ||
-    sessionCols.find(
-      (c) =>
-        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
-    )?.clickhouseTableName === "scores";
-
-  // Build session_data CTE
-  const sessionsBuilder = eventsSessionsAggregation({
-    projectId,
-    sessionIds: sessionIdFilter?.values,
-    startTimeFrom: traceTimestampFilter
-      ? convertDateToClickhouseDateTime(traceTimestampFilter.value)
-      : null,
-  });
-
-  // Compose query using CTEQueryBuilder
-  let queryBuilder = new CTEQueryBuilder()
-    .withCTEFromBuilder("session_data", sessionsBuilder)
-    .from("session_data", "s");
-
-  // Conditionally add scores CTE
-  if (select === "metrics" || requiresScoresJoin) {
-    queryBuilder = queryBuilder
-      .withCTE("scores_agg", eventsSessionScoresAggregation({ projectId }))
-      .leftJoin(
-        "scores_agg",
-        "sc",
-        "ON sc.project_id = {projectId: String} AND sc.score_session_id = s.session_id",
-      );
-  }
-
-  // Select fields based on query type
+  // Build the base query with Doris-compatible SQL
+  // Doris uses a simpler approach than ClickHouse's distributed CTEs
+  let sqlSelect: string;
   switch (select) {
     case "count":
-      queryBuilder.select("count(s.session_id) as count");
+      sqlSelect = "count(DISTINCT t.session_id) as count";
       break;
     case "rows":
-      queryBuilder.selectColumns(
-        "s.session_id",
-        "s.max_timestamp",
-        "s.min_timestamp",
-        "s.trace_ids",
-        "s.user_ids",
-        "s.trace_count",
-        "s.trace_tags",
-        "s.environment",
-      );
+      sqlSelect = `
+        t.session_id,
+        max(t.timestamp) as max_timestamp,
+        min(t.timestamp) as min_timestamp,
+        collect_set(t.id) AS trace_ids,
+        collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
+        count(DISTINCT t.id) as trace_count,
+        collect_set(t.tags) AS trace_tags,
+        any_value(t.environment) as environment
+      `;
       break;
-    case "metrics":
-      queryBuilder
-        .selectColumns(
-          "s.session_id",
-          "s.max_timestamp",
-          "s.min_timestamp",
-          "s.trace_ids",
-          "s.user_ids",
-          "s.trace_count",
-          "s.trace_tags",
-          "s.environment",
-          "s.total_observations",
-          "s.duration",
-          "s.session_usage_details",
-          "s.session_cost_details",
-          "s.session_input_cost",
-          "s.session_output_cost",
-          "s.session_total_cost",
-          "s.session_input_usage",
-          "s.session_output_usage",
-          "s.session_total_usage",
-        )
-        .select("sc.scores_avg", "sc.score_categories");
-      break;
-    default: {
-      const exhaustiveCheckDefault: never = select;
-      throw new Error(`Unknown select type: ${exhaustiveCheckDefault}`);
-    }
+    default:
+      throw new Error(`Unknown select type: ${select}`);
   }
 
-  // Apply filters, ordering, and pagination
-  if (sessionsFilterRes.query) {
-    queryBuilder.whereRaw(sessionsFilterRes.query, sessionsFilterRes.params);
-  }
+  const traceTimestampFilterClause = traceTimestampFilter
+    ? `AND t.timestamp >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)`
+    : "";
 
-  const orderBySql = orderByToClickhouseSql(orderBy ?? null, sessionCols);
-  if (orderBySql) {
-    queryBuilder.orderBy(orderBySql);
-  }
+  const traceTimestampValue = traceTimestampFilter
+    ? convertDateToAnalyticsDateTime(traceTimestampFilter.value)
+    : null;
 
-  if (limit !== undefined && page !== undefined) {
-    queryBuilder.limit(limit, limit * page);
-  }
+  const query = `
+    SELECT ${sqlSelect}
+    FROM traces t
+    WHERE t.project_id = {projectId: String}
+      AND t.session_id IS NOT NULL
+      ${traceTimestampFilterClause}
+      ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}
+    GROUP BY t.session_id
+    ${orderByToDorisSQL(orderBy ? [orderBy] : null, sessionColsForDoris)}
+    ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+  `;
 
-  const { query, params } = queryBuilder.buildWithParams();
-
-  return measureAndReturn({
-    operationName: "getSessionsTableFromEventsGeneric",
-    projectId,
-    input: {
-      params: {
-        ...params,
-        projectId,
-      },
-      tags: {
-        ...(props.tags ?? {}),
-        feature: "tracing",
-        type: "sessions-table",
-        projectId,
-        operation_name: `getSessionsTableFromEventsGeneric-${select}`,
-      },
+  const res = await queryDoris<T>({
+    query,
+    params: {
+      projectId,
+      limit: limit,
+      offset: limit && page ? limit * page : 0,
+      ...(traceTimestampValue ? { traceTimestamp: traceTimestampValue } : {}),
+      ...sessionsFilterRes.params,
     },
-    fn: async (input) => {
-      return queryClickhouse<T>({
-        query,
-        params: input.params,
-        tags: input.tags,
-        clickhouseConfigs,
-      });
+    tags: {
+      ...(props.tags ?? {}),
+      feature: "tracing",
+      type: "sessions-table",
+      projectId,
     },
   });
+
+  return res;
 };

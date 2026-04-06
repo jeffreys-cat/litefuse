@@ -80,18 +80,6 @@ const EnvSchema = z.object({
     .positive()
     .default(5),
   LANGFUSE_SECONDARY_INGESTION_QUEUE_ENABLED_PROJECT_IDS: z.string().optional(),
-  LANGFUSE_INGESTION_CLICKHOUSE_WRITE_BATCH_SIZE: z.coerce
-    .number()
-    .positive()
-    .default(1000),
-  LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: z.coerce
-    .number()
-    .positive()
-    .default(1000),
-  LANGFUSE_INGESTION_CLICKHOUSE_MAX_ATTEMPTS: z.coerce
-    .number()
-    .positive()
-    .default(3),
 
   LANGFUSE_USE_AZURE_BLOB: z.enum(["true", "false"]).default("false"),
 
@@ -110,16 +98,9 @@ const EnvSchema = z.object({
     .default(3),
 
   // Analytics backend selection
-  LANGFUSE_ANALYTICS_BACKEND: z
-    .enum(["clickhouse", "doris"])
-    .default("clickhouse"),
+  LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 
-  CLICKHOUSE_URL: z.string().url(),
-  CLICKHOUSE_USER: z.string(),
-  CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
-  CLICKHOUSE_DB: z.string().default("default"),
-  CLICKHOUSE_PASSWORD: z.string(),
-  CLICKHOUSE_CLUSTER_ENABLED: z.enum(["true", "false"]).default("true"),
+  // Doris configuration
   LANGFUSE_EVAL_CREATOR_LIMITER_DURATION: z.coerce
     .number()
     .positive()
@@ -163,13 +144,13 @@ const EnvSchema = z.object({
     .positive()
     .default(5),
 
-  // Skip the read from ClickHouse within the Ingestion pipeline for the given
+  // Skip the read from Doris within the Ingestion pipeline for the given
   // project ids. Applicable for projects that were created after the S3 write
   // was activated and which don't rely on historic updates.
-  LANGFUSE_SKIP_INGESTION_CLICKHOUSE_READ_PROJECT_IDS: z.string().default(""),
+  LANGFUSE_SKIP_INGESTION_DORIS_READ_PROJECT_IDS: z.string().default(""),
   // Set a date after which S3 was active. Projects created after this date do
-  // perform a ClickHouse read as part of the ingestion pipeline.
-  LANGFUSE_SKIP_INGESTION_CLICKHOUSE_READ_MIN_PROJECT_CREATE_DATE: z
+  // not perform a Doris read as part of the ingestion pipeline.
+  LANGFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE: z
     .string()
     .date()
     .optional(),
@@ -333,15 +314,15 @@ const EnvSchema = z.object({
     .default("false"),
 
   LANGFUSE_S3_CONCURRENT_READS: z.coerce.number().positive().default(50),
-  LANGFUSE_CLICKHOUSE_PROJECT_DELETION_CONCURRENCY_DURATION_MS: z.coerce
+  LANGFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS: z.coerce
     .number()
     .positive()
     .default(600_000), // 10 minutes
-  LANGFUSE_CLICKHOUSE_TRACE_DELETION_CONCURRENCY_DURATION_MS: z.coerce
+  LANGFUSE_DORIS_TRACE_DELETION_CONCURRENCY_DURATION_MS: z.coerce
     .number()
     .positive()
     .default(120_000), // 2 minutes
-  LANGFUSE_CLICKHOUSE_DATASET_DELETION_CONCURRENCY_DURATION_MS: z.coerce
+  LANGFUSE_DORIS_DATASET_DELETION_CONCURRENCY_DURATION_MS: z.coerce
     .number()
     .positive()
     .default(120_000), // 2 minutes
@@ -373,7 +354,7 @@ const EnvSchema = z.object({
     .positive()
     .default(5000), // Media items per chunk
 
-  // Batch Data Retention Cleaner configuration (ClickHouse)
+  // Batch Data Retention Cleaner configuration (Doris)
   LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: z
     .enum(["true", "false"])
     .default("false"),
@@ -392,7 +373,7 @@ const EnvSchema = z.object({
   LANGFUSE_BATCH_DATA_RETENTION_CLEANER_CHUNK_SIZE: z.coerce
     .number()
     .positive()
-    .default(100), // Chunk size for counting projects in ClickHouse
+    .default(100), // Chunk size for counting projects in Doris
   LANGFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS: z.coerce
     .number()
     .positive()

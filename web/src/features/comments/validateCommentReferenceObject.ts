@@ -19,23 +19,23 @@ export const validateCommentReferenceObject = async ({
   const { objectId, objectType, projectId } = input;
 
   if (isObservationOrTrace(objectType)) {
-    let clickhouseObject;
+    let dorisObject;
     if (objectType === CommentObjectType.OBSERVATION) {
-      clickhouseObject = await getObservationById({
+      dorisObject = await getObservationById({
         id: objectId,
         projectId,
       });
     } else {
-      clickhouseObject = await getTraceById({
+      dorisObject = await getTraceById({
         traceId: objectId,
         projectId,
       });
     }
 
-    return !!clickhouseObject
+    return !!dorisObject
       ? {}
       : {
-          errorMessage: `Reference object, ${objectType}: ${objectId} not found in Clickhouse. Skipping creating comment.`,
+          errorMessage: `Reference object, ${objectType}: ${objectId} not found in Doris. Skipping creating comment.`,
         };
   } else {
     const prismaModel =

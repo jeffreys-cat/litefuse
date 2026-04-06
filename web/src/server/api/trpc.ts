@@ -90,7 +90,6 @@ import {
   logger,
   addUserToSpan,
   contextWithLangfuseProps,
-  ClickHouseResourceError,
 } from "@langfuse/shared/src/server";
 
 import { AdminApiAuthService } from "@/src/ee/features/admin-api/server/adminApiAuth";
@@ -160,33 +159,23 @@ const withErrorHandling = t.middleware(async ({ ctx, next }) => {
   const res = await next({ ctx }); // pass the context to the next middleware
 
   if (!res.ok) {
-    if (res.error.cause instanceof ClickHouseResourceError) {
-      // Surface ClickHouse errors using an advice message
-      // which is supposed to provide a bit of guidance to the user.
-      logErrorByCode("UNPROCESSABLE_CONTENT", res.error);
-      res.error = new TRPCError({
-        code: "UNPROCESSABLE_CONTENT",
-        message: ClickHouseResourceError.ERROR_ADVICE_MESSAGE,
-      });
-    } else {
-      // Throw a new TRPC error with:
-      // - The same error code as the original error
-      // - Either the original error message OR "Internal error" if it's a 5xx error
-      const { code, httpStatus } = resolveError(res.error);
-      const isSafeToExpose = httpStatus >= 400 && httpStatus < 500;
-      const errorMessage = isLangfuseCloud
-        ? "We have been notified and are working on it."
-        : "Please check error logs in your self-hosted deployment.";
+    // Throw a new TRPC error with:
+    // - The same error code as the original error
+    // - Either the original error message OR "Internal error" if it's a 5xx error
+    const { code, httpStatus } = resolveError(res.error);
+    const isSafeToExpose = httpStatus >= 400 && httpStatus < 500;
+    const errorMessage = isLangfuseCloud
+      ? "We have been notified and are working on it."
+      : "Please check error logs in your self-hosted deployment.";
 
-      logErrorByCode(code, res.error);
-      res.error = new TRPCError({
-        code,
-        cause: null, // do not expose stack traces
-        message: isSafeToExpose
-          ? res.error.message
-          : "Internal error. " + errorMessage,
-      });
-    }
+    logErrorByCode(code, res.error);
+    res.error = new TRPCError({
+      code,
+      cause: null, // do not expose stack traces
+      message: isSafeToExpose
+        ? res.error.message
+        : "Internal error. " + errorMessage,
+    });
   }
 
   return res;
@@ -448,7 +437,7 @@ const enforceTraceAccess = t.middleware(async (opts) => {
   const fromTimestamp = result.data.fromTimestamp;
   const verbosity = result.data.verbosity;
 
-  const clickhouseTrace = await getTraceById({
+  const dorisTrace = await getTraceById({
     traceId,
     projectId,
     timestamp: timestamp ?? undefined,
@@ -457,10 +446,9 @@ const enforceTraceAccess = t.middleware(async (opts) => {
       truncated: verbosity === "truncated",
       shouldJsonParse: false, // we do not want to parse the input/output for tRPC
     },
-    clickhouseFeatureTag: "tracing-trpc",
   });
 
-  if (!clickhouseTrace) {
+  if (!dorisTrace) {
     logger.error(`Trace with id ${traceId} not found for project ${projectId}`);
     throw new TRPCError({
       code: "NOT_FOUND",
@@ -469,9 +457,9 @@ const enforceTraceAccess = t.middleware(async (opts) => {
   }
 
   const trace = {
-    ...clickhouseTrace,
-    input: parseIO(clickhouseTrace.input, verbosity),
-    output: parseIO(clickhouseTrace.output, verbosity),
+    ...dorisTrace,
+    input: parseIO(dorisTrace.input, verbosity),
+    output: parseIO(dorisTrace.output, verbosity),
   };
 
   const sessionProject = ctx.session?.user?.organizations
@@ -554,7 +542,7 @@ const enforceSessionAccess = t.middleware(async (opts) => {
 
   const { sessionId, projectId } = result.data;
 
-  // trace sessions are stored in postgres. No need to check for clickhouse eligibility.
+  // trace sessions are stored in postgres. No need to check for Doris eligibility.
   const session = await ctx.prisma.traceSession.findFirst({
     where: {
       id: sessionId,

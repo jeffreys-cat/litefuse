@@ -15,7 +15,7 @@ import {
 describe("StringFilter", () => {
   it("should generate = query", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "=",
       value: "my-trace",
@@ -27,7 +27,7 @@ describe("StringFilter", () => {
 
   it("should generate contains query using INSTR", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "contains",
       value: "test",
@@ -37,7 +37,7 @@ describe("StringFilter", () => {
 
   it("should generate does not contain query", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "does not contain",
       value: "bad",
@@ -47,7 +47,7 @@ describe("StringFilter", () => {
 
   it("should generate starts with query", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "starts with",
       value: "pre",
@@ -57,7 +57,7 @@ describe("StringFilter", () => {
 
   it("should generate ends with query", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "ends with",
       value: "fix",
@@ -67,7 +67,7 @@ describe("StringFilter", () => {
 
   it("should escape single quotes in values", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "=",
       value: "it's",
@@ -77,7 +77,7 @@ describe("StringFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "=",
       value: "test",
@@ -88,7 +88,7 @@ describe("StringFilter", () => {
 
   it("should apply table prefix to contains", () => {
     const filter = new StringFilter({
-      dorisTable: "traces",
+      table: "traces",
       field: "name",
       operator: "contains",
       value: "test",
@@ -101,7 +101,7 @@ describe("StringFilter", () => {
 describe("NumberFilter", () => {
   it("should generate > query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: ">",
       value: 0.5,
@@ -111,7 +111,7 @@ describe("NumberFilter", () => {
 
   it("should generate < query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: "<",
       value: 100,
@@ -121,7 +121,7 @@ describe("NumberFilter", () => {
 
   it("should generate = query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: "=",
       value: 42,
@@ -131,7 +131,7 @@ describe("NumberFilter", () => {
 
   it("should generate != query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: "!=",
       value: 0,
@@ -141,7 +141,7 @@ describe("NumberFilter", () => {
 
   it("should generate >= query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: ">=",
       value: 10,
@@ -151,7 +151,7 @@ describe("NumberFilter", () => {
 
   it("should generate <= query", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: "<=",
       value: 99,
@@ -161,7 +161,7 @@ describe("NumberFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: ">",
       value: 5,
@@ -172,7 +172,7 @@ describe("NumberFilter", () => {
 
   it("should handle zero value", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: "=",
       value: 0,
@@ -182,7 +182,7 @@ describe("NumberFilter", () => {
 
   it("should handle negative value", () => {
     const filter = new NumberFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "value",
       operator: ">",
       value: -1,
@@ -254,7 +254,7 @@ describe("DateTimeFilter", () => {
 describe("StringOptionsFilter", () => {
   it("should generate any of (IN) query", () => {
     const filter = new StringOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "any of",
       values: ["trace-a", "trace-b"],
@@ -264,7 +264,7 @@ describe("StringOptionsFilter", () => {
 
   it("should generate none of (NOT IN) query", () => {
     const filter = new StringOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "none of",
       values: ["bad-trace"],
@@ -274,7 +274,7 @@ describe("StringOptionsFilter", () => {
 
   it("should escape single quotes in values", () => {
     const filter = new StringOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "any of",
       values: ["it's", "they're"],
@@ -284,7 +284,7 @@ describe("StringOptionsFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new StringOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "any of",
       values: ["a"],
@@ -297,7 +297,7 @@ describe("StringOptionsFilter", () => {
 describe("BooleanFilter", () => {
   it("should generate = TRUE query", () => {
     const filter = new BooleanFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "public",
       operator: "=",
       value: true,
@@ -307,7 +307,7 @@ describe("BooleanFilter", () => {
 
   it("should generate = FALSE query", () => {
     const filter = new BooleanFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "public",
       operator: "=",
       value: false,
@@ -317,7 +317,7 @@ describe("BooleanFilter", () => {
 
   it("should generate <> TRUE query", () => {
     const filter = new BooleanFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "public",
       operator: "<>",
       value: true,
@@ -327,7 +327,7 @@ describe("BooleanFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new BooleanFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "public",
       operator: "=",
       value: true,
@@ -340,7 +340,7 @@ describe("BooleanFilter", () => {
 describe("NullFilter", () => {
   it("should generate IS NULL query", () => {
     const filter = new NullFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "is null",
     });
@@ -349,7 +349,7 @@ describe("NullFilter", () => {
 
   it("should generate IS NOT NULL query", () => {
     const filter = new NullFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "is not null",
     });
@@ -358,7 +358,7 @@ describe("NullFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new NullFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "name",
       operator: "is null",
       tablePrefix: "t",
@@ -370,7 +370,7 @@ describe("NullFilter", () => {
 describe("ArrayOptionsFilter", () => {
   it("should generate any of query using ARRAY_OVERLAP", () => {
     const filter = new ArrayOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "tags",
       operator: "any of",
       values: ["tag1", "tag2"],
@@ -382,7 +382,7 @@ describe("ArrayOptionsFilter", () => {
 
   it("should generate none of query", () => {
     const filter = new ArrayOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "tags",
       operator: "none of",
       values: ["bad"],
@@ -392,7 +392,7 @@ describe("ArrayOptionsFilter", () => {
 
   it("should generate all of query using ARRAY_CONTAINS", () => {
     const filter = new ArrayOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "tags",
       operator: "all of",
       values: ["tag1", "tag2"],
@@ -404,7 +404,7 @@ describe("ArrayOptionsFilter", () => {
 
   it("should escape single quotes in array values", () => {
     const filter = new ArrayOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "tags",
       operator: "any of",
       values: ["it's"],
@@ -414,7 +414,7 @@ describe("ArrayOptionsFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new ArrayOptionsFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "tags",
       operator: "any of",
       values: ["a"],
@@ -427,7 +427,7 @@ describe("ArrayOptionsFilter", () => {
 describe("CategoryOptionsFilter", () => {
   it("should flatten key:value and generate any of query", () => {
     const filter = new CategoryOptionsFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "score_categories",
       operator: "any of",
       key: "sentiment",
@@ -440,7 +440,7 @@ describe("CategoryOptionsFilter", () => {
 
   it("should generate none of query", () => {
     const filter = new CategoryOptionsFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "score_categories",
       operator: "none of",
       key: "quality",
@@ -453,7 +453,7 @@ describe("CategoryOptionsFilter", () => {
 
   it("should escape single quotes in key:value", () => {
     const filter = new CategoryOptionsFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "score_categories",
       operator: "any of",
       key: "user's",
@@ -466,7 +466,7 @@ describe("CategoryOptionsFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new CategoryOptionsFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "score_categories",
       operator: "any of",
       key: "k",
@@ -482,7 +482,7 @@ describe("CategoryOptionsFilter", () => {
 describe("StringObjectFilter", () => {
   it("should generate = query with MAP access", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "=",
       key: "env",
@@ -493,7 +493,7 @@ describe("StringObjectFilter", () => {
 
   it("should generate contains query with MAP access", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "contains",
       key: "env",
@@ -504,7 +504,7 @@ describe("StringObjectFilter", () => {
 
   it("should generate does not contain query", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "does not contain",
       key: "env",
@@ -515,7 +515,7 @@ describe("StringObjectFilter", () => {
 
   it("should generate starts with query", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "starts with",
       key: "env",
@@ -526,7 +526,7 @@ describe("StringObjectFilter", () => {
 
   it("should generate ends with query", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "ends with",
       key: "env",
@@ -537,7 +537,7 @@ describe("StringObjectFilter", () => {
 
   it("should escape single quotes in key and value", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "=",
       key: "user's",
@@ -548,7 +548,7 @@ describe("StringObjectFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new StringObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "=",
       key: "env",
@@ -562,7 +562,7 @@ describe("StringObjectFilter", () => {
 describe("NumberObjectFilter", () => {
   it("should generate = query with CAST to DECIMAL", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "=",
       key: "score",
@@ -575,7 +575,7 @@ describe("NumberObjectFilter", () => {
 
   it("should generate > query", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: ">",
       key: "score",
@@ -588,7 +588,7 @@ describe("NumberObjectFilter", () => {
 
   it("should generate < query", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "<",
       key: "count",
@@ -601,7 +601,7 @@ describe("NumberObjectFilter", () => {
 
   it("should generate != query", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "!=",
       key: "version",
@@ -614,7 +614,7 @@ describe("NumberObjectFilter", () => {
 
   it("should escape single quotes in key", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: "=",
       key: "user's score",
@@ -627,7 +627,7 @@ describe("NumberObjectFilter", () => {
 
   it("should apply table prefix", () => {
     const filter = new NumberObjectFilter({
-      clickhouseTable: "traces",
+      table: "traces",
       field: "metadata",
       operator: ">",
       key: "score",

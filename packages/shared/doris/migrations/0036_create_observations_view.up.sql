@@ -48,7 +48,7 @@ SELECT
     o.level,
     o.status_message,
     o.version,
-    t.input_resolved as input,
+    CAST(t.input_resolved AS VARIANT) as input,
     o.output,
     o.provided_model_name,
     o.internal_model_id,

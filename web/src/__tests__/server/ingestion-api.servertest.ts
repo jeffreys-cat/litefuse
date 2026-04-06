@@ -111,8 +111,8 @@ describe("/api/public/ingestion API Endpoint", () => {
     },
   );
 
-  // Disabled within test sequence as we're using a clickhouse version which doesn't support this
-  // it("should replace bad escape sequences on clickhouse", async () => {
+  // Disabled within test sequence as we're using a Doris version which doesn't support this
+  // it("should replace bad escape sequences on Doris", async () => {
   //   const entity = {
   //     id: randomUUID(),
   //     type: "trace-create",

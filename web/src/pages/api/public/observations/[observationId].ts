@@ -26,7 +26,7 @@ export default withMiddlewares({
           ? query.useEventsTable === true
           : env.LANGFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS;
 
-      const clickhouseObservation = useEventsTable
+      const dorisObservation = useEventsTable
         ? await getObservationByIdFromEventsTable({
             id: query.observationId,
             projectId: auth.scope.projectId,
@@ -36,21 +36,20 @@ export default withMiddlewares({
             id: query.observationId,
             projectId: auth.scope.projectId,
             fetchWithInputOutput: true,
-            preferredClickhouseService: "ReadOnly",
           });
 
-      if (!clickhouseObservation) {
+      if (!dorisObservation) {
         throw new LangfuseNotFoundError(
           "Observation not found within authorized project",
         );
       }
 
-      const model = clickhouseObservation.internalModelId
+      const model = dorisObservation.internalModelId
         ? await prisma.model.findFirst({
             where: {
               AND: [
                 {
-                  id: clickhouseObservation.internalModelId,
+                  id: dorisObservation.internalModelId,
                 },
                 {
                   OR: [
@@ -77,7 +76,7 @@ export default withMiddlewares({
         : undefined;
 
       const observation = {
-        ...clickhouseObservation,
+        ...dorisObservation,
         ...enrichObservationWithModelData(model),
       };
 

@@ -16,7 +16,6 @@ import {
   logger,
   getObservationCostByTypeByTime,
   getObservationUsageByTypeByTime,
-  isDorisBackend,
   DashboardService,
   DashboardDefinitionSchema,
 } from "@langfuse/shared/src/server";
@@ -137,9 +136,7 @@ function prepareScoresNumericV2Params(filter: FilterState) {
  * The result column is named "histogram_value" by QueryBuilder
  * (pattern: `${aggregation}_${alias}`).
  */
-function clickhouseHistogramToChartData(
-  result: Array<Record<string, unknown>>,
-): {
+function dorisHistogramToChartData(result: Array<Record<string, unknown>>): {
   chartData: Array<{ binLabel: string; count: number }>;
   chartLabels: string[];
 } {
@@ -321,7 +318,7 @@ async function getObservationsByTypeV2(params: {
   // time range.  CK's v1 path expands every time bucket (including fill)
   // into rows for ALL unique types.  Replicate by adding boundary rows
   // at from/to timestamps for every unique type with sum=0.
-  if (isDorisBackend() && result.length > 0) {
+  if (result.length > 0) {
     const fromDate = new Date(from.value as Date);
     const toDate = new Date(to.value as Date);
     const uniqueKeys = [
@@ -452,7 +449,7 @@ export const dashboardRouter = createTRPCRouter({
           histogramQuery,
           "v2",
         );
-        return clickhouseHistogramToChartData(result);
+        return dorisHistogramToChartData(result);
       }
 
       const data = await getNumericScoreHistogram(

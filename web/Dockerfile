@@ -138,7 +138,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/web/.next/static ./web/.next/stat
 COPY --from=builder --chown=nextjs:nodejs /app/web/public ./web/public
 
 COPY --from=builder --chown=nextjs:nodejs /app/packages/shared/prisma ./packages/shared/prisma
-COPY --from=builder --chown=nextjs:nodejs /app/packages/shared/clickhouse ./packages/shared/clickhouse
 COPY --from=builder --chown=nextjs:nodejs /app/packages/shared/doris ./packages/shared/doris
 
 COPY --chown=nextjs:nodejs ./web/entrypoint.sh ./web/entrypoint.sh

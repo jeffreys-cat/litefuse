@@ -6,7 +6,7 @@ import {
   logger,
   recordGauge,
   recordIncrement,
-  removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject,
+  removeIngestionEventsFromS3AndDeleteDorisRefsForProject,
   traceException,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
@@ -160,9 +160,9 @@ export class MediaRetentionCleaner extends PeriodicExclusiveRunner {
       await this.deleteExpiredMedia(workload);
     }
 
-    // Delete blob storage entries (S3 + ClickHouse soft delete)
+    // Delete blob storage entries (S3 + Doris soft delete)
     if (env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true") {
-      await removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject(
+      await removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
         workload.projectId,
         workload.cutoffDate,
       );

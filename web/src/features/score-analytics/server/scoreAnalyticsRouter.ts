@@ -6,8 +6,8 @@ import {
 } from "@/src/server/api/trpc";
 import {
   getScoresGroupedByNameSourceType,
-  queryClickhouse,
-  convertDateToClickhouseDateTime,
+  queryDoris,
+  convertDateToAnalyticsDateTime,
 } from "@langfuse/shared/src/server";
 import { buildEstimateQuery } from "./buildEstimateQuery";
 import { buildScoreComparisonQuery } from "./buildScoreComparisonQuery";
@@ -326,7 +326,7 @@ export const scoreAnalyticsRouter = createTRPCRouter({
       });
 
       // Execute query
-      const results = await queryClickhouse<{
+      const results = await queryDoris<{
         result_type: string;
         col1: number | null;
         col2: number | null;
@@ -350,8 +350,8 @@ export const scoreAnalyticsRouter = createTRPCRouter({
           score2Source: score2.source,
           dataType1: score1.dataType,
           dataType2: score2.dataType,
-          fromTimestamp: convertDateToClickhouseDateTime(fromTimestamp),
-          toTimestamp: convertDateToClickhouseDateTime(toTimestamp),
+          fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp),
+          toTimestamp: convertDateToAnalyticsDateTime(toTimestamp),
           nBins,
         },
         tags: {
@@ -359,11 +359,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
           type: "analytics",
           kind: "comparison",
           projectId,
-        },
-        clickhouseSettings: {
-          // Enable short-circuit evaluation to prevent correlation errors
-          // This ensures if() conditions are evaluated before function calls
-          short_circuit_function_evaluation: "enable",
         },
       });
 

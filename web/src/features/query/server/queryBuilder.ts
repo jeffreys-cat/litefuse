@@ -1,8 +1,5 @@
 import { type z } from "zod/v4";
-import {
-  convertDateToClickhouseDateTime,
-  shouldSkipObservationsFinal,
-} from "@langfuse/shared/src/server";
+import { convertDateToAnalyticsDateTime } from "@langfuse/shared/src/server";
 import type {
   QueryType,
   ViewDeclarationType,
@@ -19,13 +16,11 @@ import { getViewDeclaration } from "@/src/features/query/dataModel";
 import { viewDeclarationsDoris } from "@/src/features/query/dataModelDoris";
 import {
   FilterList,
-  createFilterFromFilterState,
   createDorisFilterFromFilterState,
+  createFilterFromFilterState,
   type Filter,
-  isDorisBackend,
 } from "@langfuse/shared/src/server";
 import { InvalidRequestError } from "@langfuse/shared";
-import { env } from "@/src/env.mjs";
 import { NULL_IF_EMPTY_RE } from "./nullIfEmptyFilter";
 
 type AppliedDimensionType = {
@@ -278,8 +273,9 @@ export class QueryBuilder {
     // e.g., "events_core events_traces" -> "events_traces"
     //       "traces FINAL"              -> "traces"  (FINAL is a modifier, not an alias)
     const parts = view.baseCte.split(/\s+/);
-    const clickhouseModifiers = new Set(["FINAL", "SAMPLE", "PREWHERE"]);
-    if (parts.length >= 2 && !clickhouseModifiers.has(parts[1].toUpperCase())) {
+    // FINAL, SAMPLE, PREWHERE are ClickHouse-specific modifiers that should be ignored when extracting alias
+    const dorisModifiers = new Set(["FINAL", "SAMPLE", "PREWHERE"]);
+    if (parts.length >= 2 && !dorisModifiers.has(parts[1].toUpperCase())) {
       return parts[1];
     }
     return parts[0];
@@ -306,7 +302,7 @@ export class QueryBuilder {
    * Builds a WHERE condition for a filterSql dimension:
    *   (col1 OP X OR col2 OP X) AND dimensionSql OP X
    *
-   * The OR'd part is pruning-friendly (helps ClickHouse skip blocks).
+   * The OR'd part is pruning-friendly (helps skip data blocks).
    * The exact part uses the dimension's row-level sql expression for correctness.
    * Both delegate to createFilterFromFilterState for full operator/type support.
    */
@@ -318,12 +314,12 @@ export class QueryBuilder {
   }): RawSqlPart {
     const { filter, whereCols, dimensionSql, tableName } = params;
 
-    const syntheticMapping = (clickhouseSelect: string) => [
+    const syntheticMapping = (select: string) => [
       {
         uiTableName: filter.column,
         uiTableId: filter.column,
-        clickhouseTableName: tableName,
-        clickhouseSelect,
+        tableName: tableName,
+        select: select,
         queryPrefix: "",
       },
     ];
@@ -374,8 +370,8 @@ export class QueryBuilder {
     const normalMappings: Array<{
       uiTableName: string;
       uiTableId: string;
-      clickhouseTableName: string;
-      clickhouseSelect: string;
+      tableName: string;
+      select: string;
       queryPrefix: string;
       type: string;
       emptyEqualsNull?: boolean;
@@ -398,9 +394,9 @@ export class QueryBuilder {
       }
 
       // Normal dimension or special-case filter: build column mapping
-      let clickhouseSelect: string;
+      let select: string;
       let queryPrefix: string = "";
-      let clickhouseTableName: string = actualTableName;
+      let tableName: string = actualTableName;
       let type: string;
       let emptyEqualsNull: boolean | undefined;
 
@@ -409,37 +405,37 @@ export class QueryBuilder {
         // flag for index-friendly filtering while preserving '' ≡ NULL semantic.
         const nullIfMatch = NULL_IF_EMPTY_RE.exec(dimension.sql);
         if (nullIfMatch) {
-          clickhouseSelect = nullIfMatch[1];
+          select = nullIfMatch[1];
           emptyEqualsNull = true;
         } else {
-          clickhouseSelect = dimension.sql;
+          select = dimension.sql;
         }
         type = "string";
         if (dimension.relationTable) {
-          clickhouseTableName = dimension.relationTable;
+          tableName = dimension.relationTable;
         }
         // Filters on measures are underdefined and not allowed in the initial version
         // } else if (filter.column in view.measures) {
         //   const measure = view.measures[filter.column];
-        //   clickhouseSelect = measure.sql;
+        //   select = measure.sql;
         //   type = measure.type;
         //   if (measure.relationTable) {
-        //     clickhouseTableName = measure.relationTable;
+        //     tableName = measure.relationTable;
         //   }
       } else if (filter.column === view.timeDimension) {
-        clickhouseSelect = view.timeDimension;
-        queryPrefix = clickhouseTableName;
+        select = view.timeDimension;
+        queryPrefix = tableName;
         type = "datetime";
       } else if (filter.column === "metadata") {
-        clickhouseSelect = "metadata";
-        queryPrefix = clickhouseTableName;
+        select = "metadata";
+        queryPrefix = tableName;
         type = "stringObject";
       } else if (filter.column.endsWith("Name")) {
         // Sometimes, the filter does not update correctly and sends us scoreName instead of name for scores, etc.
         // If this happens, none of the conditions above apply, and we use this fallback to avoid raising an error.
         // As this is hard to catch, we include this workaround. (LFE-4838).
-        clickhouseSelect = "name";
-        queryPrefix = clickhouseTableName;
+        select = "name";
+        queryPrefix = tableName;
         type = "string";
       } else {
         throw new InvalidRequestError(
@@ -451,8 +447,8 @@ export class QueryBuilder {
       normalMappings.push({
         uiTableName: filter.column,
         uiTableId: filter.column,
-        clickhouseTableName,
-        clickhouseSelect,
+        tableName,
+        select,
         queryPrefix,
         type,
         emptyEqualsNull,
@@ -480,8 +476,8 @@ export class QueryBuilder {
     const projectIdMapping = {
       uiTableName: "project_id",
       uiTableId: "project_id",
-      clickhouseTableName: actualTableName,
-      clickhouseSelect: "project_id",
+      tableName: actualTableName,
+      select: "project_id",
       queryPrefix: actualTableName,
       type: "string",
     };
@@ -489,8 +485,8 @@ export class QueryBuilder {
     const timeDimensionMapping = {
       uiTableName: view.timeDimension,
       uiTableId: view.timeDimension,
-      clickhouseTableName: actualTableName,
-      clickhouseSelect: view.timeDimension,
+      tableName: actualTableName,
+      select: view.timeDimension,
       queryPrefix: actualTableName,
       type: "datetime",
     };
@@ -543,8 +539,8 @@ export class QueryBuilder {
       const segmentsMappings = view.segments.map((segment) => ({
         uiTableName: segment.column,
         uiTableId: segment.column,
-        clickhouseTableName: view.name,
-        clickhouseSelect: segment.column,
+        tableName: view.name,
+        select: segment.column,
         queryPrefix: view.name,
         type: segment.type,
       }));
@@ -655,8 +651,8 @@ export class QueryBuilder {
       const relationTimeDimensionMapping = {
         uiTableName: relation.timeDimension,
         uiTableId: relation.timeDimension,
-        clickhouseTableName: relation.name,
-        clickhouseSelect: relation.timeDimension,
+        tableName: relation.name,
+        select: relation.timeDimension,
         queryPrefix: relationTableName,
         type: "datetime",
       };
@@ -700,7 +696,7 @@ export class QueryBuilder {
     const pairs = appliedDimensions.filter((d) => d.pairExpand);
     if (pairs.length === 0) return "";
     // Multiple pairExpand dimensions would produce separate ARRAY JOIN clauses
-    // which ClickHouse executes as a cartesian product — almost certainly wrong.
+    // which would execute as a cartesian product — almost certainly wrong.
     if (pairs.length > 1) {
       throw new InvalidRequestError(
         `Only one pairExpand dimension is supported per query. Found: ${pairs.map((d) => d.alias ?? d.sql).join(", ")}`,
@@ -731,14 +727,14 @@ export class QueryBuilder {
       const relationTimeDimensionMapping = {
         uiTableName: relation.timeDimension,
         uiTableId: relation.timeDimension,
-        clickhouseTableName: relation.name,
-        clickhouseSelect: relation.timeDimension,
+        tableName: relation.name,
+        select: relation.timeDimension,
         queryPrefix: relation.name,
         type: "datetime",
       };
 
       // Add relation-specific timestamp filters
-      const fromFilter = createFilterFromFilterState(
+      const fromFilter = createDorisFilterFromFilterState(
         [
           {
             column: relation.timeDimension,
@@ -750,7 +746,7 @@ export class QueryBuilder {
         [relationTimeDimensionMapping],
       );
 
-      const toFilter = createFilterFromFilterState(
+      const toFilter = createDorisFilterFromFilterState(
         [
           {
             column: relation.timeDimension,
@@ -813,31 +809,7 @@ export class QueryBuilder {
     sql: string,
     granularity: z.infer<typeof granularities>,
   ): string {
-    if (isDorisBackend()) {
-      return this.getTimeDimensionSqlDoris(sql, granularity);
-    }
-    switch (granularity) {
-      case "minute":
-        return `toStartOfMinute(${sql})`;
-      case "hour":
-        return `toStartOfHour(${sql})`;
-      case "day":
-        return `toDate(${sql})`;
-      case "week":
-        return `toMonday(${sql})`;
-      case "month":
-        return `toStartOfMonth(${sql})`;
-      case "auto":
-        throw new Error(
-          `Granularity 'auto' is not supported for getTimeDimensionSql`,
-        );
-      default:
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const exhaustiveCheck: never = granularity;
-        throw new InvalidRequestError(
-          `Invalid time granularity: ${granularity}. Must be one of minute, hour, day, week, month`,
-        );
-    }
+    return this.getTimeDimensionSqlDoris(sql, granularity);
   }
 
   private buildTimeDimensionSql(
@@ -924,7 +896,7 @@ export class QueryBuilder {
         // pairExpand key columns (e.g. costType) are added to the inner GROUP BY in
         // buildInnerSelect, so they are already deterministic grouping keys here.
         // Unlike regular dimensions (which are not in GROUP BY and need any() to satisfy
-        // ClickHouse's aggregation rules), wrapping in any() would be wrong: it implies
+        // aggregation rules), wrapping in any() would be wrong: it implies
         // the value is non-deterministic within the group when it's actually the axis
         // being grouped on. Use a bare reference instead.
         // Note: the paired value column (e.g. cost_value) is NOT in GROUP BY and IS
@@ -1039,7 +1011,7 @@ export class QueryBuilder {
 
         // pairExpand value-alias measures (e.g. costByType, usageByType) reference a raw
         // column brought into scope by the ARRAY JOIN clause. That column is not in the
-        // inner GROUP BY, so wrap it in any() to satisfy ClickHouse. The outer query then
+        // inner GROUP BY, so wrap it in any(). The outer query then
         // applies the real aggregation. We scope this to requiresDimension metrics only —
         // other measures use @@AGGN@@ templates that resolve to function calls, so they
         // never need this treatment.
@@ -1115,7 +1087,7 @@ export class QueryBuilder {
     const groupByParts = [projectIdSql, idSql];
     for (const dim of appliedDimensions) {
       if (dim.pairExpand) {
-        // pairExpand is for ClickHouse only
+        // pairExpand is a legacy feature
         groupByParts.push(dim.alias ?? dim.sql);
       }
       // Skip explodeArray for Doris - ARRAY types can't be in GROUP BY
@@ -1248,10 +1220,10 @@ export class QueryBuilder {
         step = "INTERVAL 1 DAY"; // Default to day if granularity is unknown
     }
 
-    parameters["fillFromDate"] = convertDateToClickhouseDateTime(
+    parameters["fillFromDate"] = convertDateToAnalyticsDateTime(
       new Date(fromTimestamp),
     );
-    parameters["fillToDate"] = convertDateToClickhouseDateTime(
+    parameters["fillToDate"] = convertDateToAnalyticsDateTime(
       new Date(toTimestamp),
     );
 
@@ -1488,19 +1460,18 @@ export class QueryBuilder {
   }
 
   /**
-   * Convert ClickHouse-specific SQL functions to Doris equivalents
+   * Convert SQL functions to Doris equivalents
    */
-  private convertClickHouseFunctionsToDoris(sql: string): string {
+  private convertSqlFunctionsToDoris(sql: string): string {
     // Replace position() function with INSTR() function for string operations
-    // ClickHouse: position(field, 'value') = 0
-    // Doris: INSTR(field, 'value') = 0
+    // position(field, 'value') = 0 -> INSTR(field, 'value') = 0
     sql = sql.replace(/position\s*\(/g, "INSTR(");
 
     return sql;
   }
 
   /**
-   * We want to build a ClickHouse query based on the query provided and the viewDeclaration that was selected.
+   * We want to build a Doris query based on the query provided and the viewDeclaration that was selected.
    *
    * When enableSingleLevelOptimization is false (default), the query follows a two-level pattern:
    * ```
@@ -1553,243 +1524,11 @@ export class QueryBuilder {
     }
 
     // Check if we should use Doris backend
-    if (isDorisBackend()) {
-      return this.buildDoris(query, projectId);
-    }
-
-    // Initialize parameters object
-    const parameters: Record<string, unknown> = {};
-
-    // Check if we should skip FINAL modifier for observations (OTEL optimization)
-    const skipObservationsFinal = await shouldSkipObservationsFinal(projectId);
-    let view = this.getViewDeclaration(query.view);
-
-    // Events table never needs FINAL modifier (already deduplicated)
-    if (view.name === "events-observations") {
-      // baseCte already set to "events_core" in view definition (no FINAL)
-      // No changes needed, just using as-is
-    }
-    // Skip FINAL on observations base table if OTEL project
-    else if (view.name === "observations" && skipObservationsFinal) {
-      view = {
-        ...view,
-        baseCte: "observations", // Remove FINAL (was "observations FINAL")
-      };
-    }
-
-    // Map dimensions and metrics
-    const appliedDimensions = this.mapDimensions(query.dimensions, view);
-    const appliedMetrics = this.mapMetrics(query.metrics, view);
-
-    // Auto-include dimensions required by pairExpand-dependent measures.
-    // e.g. costByType.requiresDimension = "costType": without that dimension the
-    // ARRAY JOIN is never emitted and ClickHouse errors with "unknown column cost_value".
-    for (const metric of appliedMetrics) {
-      if (
-        metric.requiresDimension &&
-        !appliedDimensions.some((d) => d.alias === metric.requiresDimension)
-      ) {
-        const requiredDimDef = view.dimensions[metric.requiresDimension];
-        if (requiredDimDef) {
-          appliedDimensions.push({
-            ...requiredDimDef,
-            table: requiredDimDef.relationTable || view.name,
-            pairExpand: requiredDimDef.pairExpand,
-          });
-        }
-      }
-    }
-
-    // Create filters: normal WHERE filters + raw WHERE parts (filterSql pruning + exact match)
-    const { whereFilters, whereRawParts } = this.mapFilters(
-      query.filters,
-      view,
-    );
-    let filterList = new FilterList(whereFilters);
-
-    // Add standard filters (project_id, timestamps)
-    filterList = this.addStandardFilters(
-      filterList,
-      view,
-      projectId,
-      query.fromTimestamp,
-      query.toTimestamp,
-    );
-
-    // Build the FROM clause with necessary JOINs
-    let fromClause = `FROM ${view.baseCte}`;
-
-    // Handle relation tables
-    const relationTables = this.collectRelationTables(
-      view,
-      appliedDimensions,
-      appliedMetrics,
-      filterList,
-    );
-    if (relationTables.size > 0) {
-      const relationJoins = this.buildJoins(
-        relationTables,
-        view,
-        filterList,
-        query,
-        skipObservationsFinal,
-      );
-      fromClause += ` ${relationJoins.join(" ")}`;
-    }
-
-    // ARRAY JOIN must appear after regular JOINs and before WHERE
-    const arrayJoinClause = this.buildArrayJoinClause(appliedDimensions);
-    if (arrayJoinClause) {
-      fromClause += `\n${arrayJoinClause}`;
-    }
-
-    // Build WHERE clause with parameters
-    fromClause += this.buildWhereClause(filterList, parameters);
-
-    // Append raw WHERE pruning parts (OR'd conditions from filterSql.where)
-    for (const part of whereRawParts) {
-      fromClause += ` AND ${part.query}`;
-      Object.assign(parameters, part.params);
-    }
-
-    // Append raw SQL filter if provided
-    if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
-      fromClause += ` AND (${query.rawSqlFilter.trim()})`;
-    }
-
-    // When rootEventCondition is set, add a subquery filter to restrict rows
-    // to traces whose root event has timeDimension in the query window.
-    // The existing start_time filter above is kept for ClickHouse partition pruning.
-    // For wide time windows (default >7 days), the subquery is skipped as the
-    // root-event check has diminishing returns and hurts performance.
-    // Set LANGFUSE_ROOT_EVENT_CONDITION_MAX_WINDOW_HOURS=0 to always apply the filter.
-    if (view.rootEventCondition) {
-      const windowMs =
-        new Date(query.toTimestamp).getTime() -
-        new Date(query.fromTimestamp).getTime();
-      const windowHours = windowMs / (1000 * 60 * 60);
-      const thresholdHours = env.LANGFUSE_ROOT_EVENT_CONDITION_MAX_WINDOW_HOURS;
-
-      if (thresholdHours === 0 || windowHours <= thresholdHours) {
-        // Falls back gracefully: if no root events exist in the window at all
-        // (e.g. parent_span_id is never populated), the filter is skipped via NOT EXISTS.
-        const uid = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-        const fromP = `subFrom${uid}`;
-        const toP = `subTo${uid}`;
-        const projP = `subProj${uid}`;
-        const baseTable = this.actualTableName(view);
-        const { column, condition } = view.rootEventCondition;
-        const subquery =
-          `SELECT ${column} FROM ${baseTable} ` +
-          `WHERE project_id = {${projP}: String} ` +
-          `AND ${condition} ` +
-          `AND ${view.timeDimension} >= {${fromP}: DateTime64(3)} ` +
-          `AND ${view.timeDimension} <= {${toP}: DateTime64(3)}`;
-        fromClause +=
-          ` AND (${baseTable}.${column} IN (${subquery})` +
-          ` OR NOT EXISTS (${subquery} LIMIT 1))`;
-        parameters[fromP] = new Date(query.fromTimestamp).getTime();
-        parameters[toP] = new Date(query.toTimestamp).getTime();
-        parameters[projP] = projectId;
-      }
-    }
-
-    // Check if single-level optimization is applicable
-    // Note: Relation tables are OK as long as measures have aggs configuration
-    const canOptimize =
-      enableSingleLevelOptimization &&
-      this.canUseSingleLevelQuery(appliedDimensions, appliedMetrics);
-
-    // Build GROUP BY clause (used by both single-level and two-level queries)
-    const groupByClause = this.buildGroupByClause(
-      appliedDimensions,
-      !!query.timeDimension,
-    );
-
-    // Process and validate orderBy fields
-    const processedOrderBy = this.validateAndProcessOrderBy(
-      query.orderBy,
-      appliedDimensions,
-      appliedMetrics,
-      !!query.timeDimension,
-    );
-
-    // Build ORDER BY clause
-    const orderByClause = this.buildOrderByClause(processedOrderBy);
-
-    // Build WITH FILL clause for time dimension to fill gaps in timeseries
-    const withFillClause = this.buildWithFillClause(
-      query.timeDimension,
-      query.fromTimestamp,
-      query.toTimestamp,
-      query.orderBy,
-      parameters,
-    );
-
-    // Build LIMIT clause for row limiting
-    const limitClause = this.buildLimitClause();
-
-    // Build final query - branch based on optimization
-    let sql: string;
-    if (canOptimize) {
-      // Single-level query: Skip inner SELECT
-      sql = this.buildSingleLevelSelect(
-        view,
-        appliedDimensions,
-        appliedMetrics,
-        query,
-        fromClause,
-        groupByClause,
-        orderByClause,
-        withFillClause,
-        limitClause,
-      );
-    } else {
-      // Two-level query: Original approach
-      // Build inner SELECT parts
-      const innerDimensionsPart = this.buildInnerDimensionsPart(
-        appliedDimensions,
-        query,
-        view,
-      );
-      const innerMetricsPart = this.buildInnerMetricsPart(appliedMetrics);
-
-      // Build inner SELECT
-      const innerQuery = this.buildInnerSelect(
-        view,
-        innerDimensionsPart,
-        innerMetricsPart,
-        fromClause,
-        appliedDimensions,
-      );
-
-      // Build outer SELECT parts
-      const outerDimensionsPart = this.buildOuterDimensionsPart(
-        appliedDimensions,
-        !!query.timeDimension,
-      );
-      const outerMetricsPart = this.buildOuterMetricsPart(appliedMetrics);
-
-      sql = this.buildOuterSelect(
-        outerDimensionsPart,
-        outerMetricsPart,
-        innerQuery,
-        groupByClause,
-        orderByClause,
-        withFillClause,
-        limitClause,
-      );
-    }
-
-    return {
-      query: sql,
-      parameters,
-    };
+    return this.buildDoris(query, projectId);
   }
 
   /**
-   * Build Doris-compatible filters using the Doris filter factory
-   * instead of the ClickHouse filter factory (which generates DateTime64(3) syntax).
+   * Build Doris-compatible filters using the Doris filter factory.
    */
   private mapFiltersDoris(
     filters: z.infer<typeof queryModel>["filters"],
@@ -1808,8 +1547,8 @@ export class QueryBuilder {
     const normalMappings: Array<{
       uiTableName: string;
       uiTableId: string;
-      clickhouseTableName: string;
-      clickhouseSelect: string;
+      tableName: string;
+      select: string;
       queryPrefix: string;
       type: string;
       emptyEqualsNull?: boolean;
@@ -1830,36 +1569,36 @@ export class QueryBuilder {
         continue;
       }
 
-      let clickhouseSelect: string;
+      let select: string;
       let queryPrefix: string = this.tableAlias(view);
-      let clickhouseTableName: string = actualTableName;
+      let tableName: string = actualTableName;
       let type: string;
       let emptyEqualsNull: boolean | undefined;
 
       if (dimension) {
         const nullIfMatch = NULL_IF_EMPTY_RE.exec(dimension.sql);
         if (nullIfMatch) {
-          clickhouseSelect = nullIfMatch[1];
+          select = nullIfMatch[1];
           emptyEqualsNull = true;
         } else {
-          clickhouseSelect = dimension.sql;
+          select = dimension.sql;
         }
         type = "string";
         if (dimension.relationTable) {
-          clickhouseTableName = dimension.relationTable;
+          tableName = dimension.relationTable;
           queryPrefix = dimension.relationTable;
         }
       } else if (filter.column === view.timeDimension) {
-        clickhouseSelect = view.timeDimension;
-        queryPrefix = clickhouseTableName;
+        select = view.timeDimension;
+        queryPrefix = tableName;
         type = "datetime";
       } else if (filter.column === "metadata") {
-        clickhouseSelect = "metadata";
-        queryPrefix = clickhouseTableName;
+        select = "metadata";
+        queryPrefix = tableName;
         type = "stringObject";
       } else if (filter.column.endsWith("Name")) {
-        clickhouseSelect = "name";
-        queryPrefix = clickhouseTableName;
+        select = "name";
+        queryPrefix = tableName;
         type = "string";
       } else {
         throw new InvalidRequestError(
@@ -1871,15 +1610,15 @@ export class QueryBuilder {
       normalMappings.push({
         uiTableName: filter.column,
         uiTableId: filter.column,
-        clickhouseTableName,
-        clickhouseSelect,
+        tableName,
+        select,
         queryPrefix,
         type,
         emptyEqualsNull,
       });
     }
 
-    // Use Doris filter factory instead of ClickHouse filter factory
+    // Use Doris filter factory
     result.whereFilters = createDorisFilterFromFilterState(
       normalFilters,
       normalMappings,
@@ -1902,8 +1641,8 @@ export class QueryBuilder {
     const projectIdMapping = {
       uiTableName: "project_id",
       uiTableId: "project_id",
-      clickhouseTableName: alias,
-      clickhouseSelect: "project_id",
+      tableName: alias,
+      select: "project_id",
       queryPrefix: alias,
       type: "string",
     };
@@ -1911,8 +1650,8 @@ export class QueryBuilder {
     const timeDimensionMapping = {
       uiTableName: view.timeDimension,
       uiTableId: view.timeDimension,
-      clickhouseTableName: alias,
-      clickhouseSelect: view.timeDimension,
+      tableName: alias,
+      select: view.timeDimension,
       queryPrefix: alias,
       type: "datetime",
     };
@@ -1980,8 +1719,8 @@ export class QueryBuilder {
       const relationTimeDimensionMapping = {
         uiTableName: relation.timeDimension,
         uiTableId: relation.timeDimension,
-        clickhouseTableName: relation.name,
-        clickhouseSelect: relation.timeDimension,
+        tableName: relation.name,
+        select: relation.timeDimension,
         queryPrefix: relation.name,
         type: "datetime",
       };
@@ -2050,7 +1789,27 @@ export class QueryBuilder {
       }
     }
 
-    // Create filters using Doris filter factory (not ClickHouse)
+    // Auto-include dimensions required by pairExpand-dependent measures.
+    // e.g. usageByType.requiresDimension = "usageType": without that dimension
+    // the LATERAL VIEW is never emitted and Doris errors with "unknown column".
+    for (const metric of appliedMetrics) {
+      if (
+        metric.requiresDimension &&
+        !appliedDimensions.some((d) => d.alias === metric.requiresDimension)
+      ) {
+        const requiredDimDef = view.dimensions[metric.requiresDimension];
+        if (requiredDimDef) {
+          appliedDimensions.push({
+            ...requiredDimDef,
+            table: requiredDimDef.relationTable || view.name,
+            explodeArray: requiredDimDef.explodeArray,
+            pairExpand: requiredDimDef.pairExpand,
+          });
+        }
+      }
+    }
+
+    // Create filters using Doris filter factory
     const { whereFilters, whereRawParts } = this.mapFiltersDoris(
       query.filters,
       view,
@@ -2168,8 +1927,8 @@ export class QueryBuilder {
       limitClause,
     );
 
-    // Replace ClickHouse-specific functions with Doris equivalents
-    sql = this.convertClickHouseFunctionsToDoris(sql);
+    // Replace SQL functions with Doris equivalents
+    sql = this.convertSqlFunctionsToDoris(sql);
 
     return {
       query: sql,

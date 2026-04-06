@@ -1,13 +1,13 @@
 import {
   logger,
-  queryClickhouse,
+  queryDoris,
   redis,
-  convertDateToClickhouseDateTime,
-  clickhouseClient,
+  convertDateToAnalyticsDateTime,
   flattenJsonToPathArrays,
+  dorisClient,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
-import { ClickhouseWriter } from "../../services/ClickhouseWriter";
+import { DorisWriter } from "../../services/DorisWriter";
 import { IngestionService } from "../../services/IngestionService";
 import { prisma } from "@langfuse/shared/src/db";
 import { chunk } from "lodash";
@@ -149,17 +149,16 @@ export async function getDatasetRunItemsSinceLastRun(
     LIMIT 1 BY dri.project_id, dri.trace_id, coalesce(dri.observation_id, '')
   `;
 
-  const rows = await queryClickhouse<DatasetRunItem>({
+  const rows = await queryDoris<DatasetRunItem>({
     query,
     params: {
-      lastRun: convertDateToClickhouseDateTime(lastRun),
-      upperBound: convertDateToClickhouseDateTime(upperBound),
+      lastRun: convertDateToAnalyticsDateTime(lastRun),
+      upperBound: convertDateToAnalyticsDateTime(upperBound),
     },
     tags: {
       feature: "experiment-backfill",
       operation_name: "getDatasetRunItemsSinceLastRun",
     },
-    allowLegacyEventsRead: true,
   });
 
   logger.info(
@@ -234,12 +233,12 @@ export async function getRelevantObservations(
     LIMIT 1 BY o.project_id, o.id
   `;
 
-  return queryClickhouse<SpanRecord>({
+  return queryDoris<SpanRecord>({
     query,
     params: {
       projectIds,
       traceIds,
-      minTime: convertDateToClickhouseDateTime(minTime),
+      minTime: convertDateToAnalyticsDateTime(minTime),
     },
     tags: {
       feature: "experiment-backfill",
@@ -308,12 +307,12 @@ export async function getRelevantTraces(
     LIMIT 1 BY t.project_id, t.id
   `;
 
-  return queryClickhouse<SpanRecord>({
+  return queryDoris<SpanRecord>({
     query,
     params: {
       projectIds,
       traceIds,
-      minTime: convertDateToClickhouseDateTime(minTime),
+      minTime: convertDateToAnalyticsDateTime(minTime),
     },
     tags: {
       feature: "experiment-backfill",
@@ -491,10 +490,8 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
   const ingestionService = new IngestionService(
     redis,
     prisma,
-    ClickhouseWriter.getInstance(),
-    clickhouseClient(),
-    null,
-    null,
+    DorisWriter.getInstance(),
+    dorisClient(),
   );
 
   for (const span of spans) {

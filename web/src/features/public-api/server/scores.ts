@@ -1,15 +1,12 @@
 import {
-  convertApiProvidedFilterToClickhouseFilter,
+  convertApiProvidedFilterToDorisFilter,
   deriveFilters,
-  convertClickhouseScoreToDomain,
+  convertDorisScoreToDomain,
   StringFilter,
   StringOptionsFilter,
   type ScoreRecordReadType,
-  queryClickhouse,
-  measureAndReturn,
   scoresTableUiColumnDefinitions,
   queryDoris,
-  isDorisBackend,
   dq,
 } from "@langfuse/shared/src/server";
 import {
@@ -93,9 +90,8 @@ export const _handleGenerateScoresForPublicApi = async ({
     tracesFilter.length(),
   );
 
-  if (isDorisBackend()) {
-    // Doris uses UNIQUE KEY model, so no deduplication needed (no LIMIT 1 BY / ROW_NUMBER)
-    const query = `
+  // Doris uses UNIQUE KEY model, so no deduplication needed (no LIMIT 1 BY / ROW_NUMBER)
+  const query = `
         SELECT
             t.user_id as user_id,
             t.tags as tags,
@@ -131,153 +127,39 @@ export const _handleGenerateScoresForPublicApi = async ({
         ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
         `;
 
-    const records = await queryDoris<
-      ScoreRecordReadType & {
-        tags: string[];
-        user_id: string;
-        trace_environment: string;
-      }
-    >({
-      query,
-      params: {
-        ...appliedScoresFilter.params,
-        ...appliedTracesFilter.params,
-        projectId: props.projectId,
-        ...(props.limit !== undefined ? { limit: props.limit } : {}),
-        ...(props.page !== undefined
-          ? { offset: (props.page - 1) * props.limit }
-          : {}),
-      },
-    });
-
-    return records.map((record) => {
-      const domainScore = convertClickhouseScoreToDomain(record);
-      const apiScore = convertScoreToPublicApi(domainScore);
-      return {
-        ...apiScore,
-        trace:
-          record.trace_id !== null
-            ? {
-                userId: record.user_id,
-                tags: record.tags,
-                environment: record.trace_environment,
-              }
-            : null,
-      };
-    });
-  }
-
-  const query = `
-      SELECT
-          ${needsTraceJoin ? "t.user_id as user_id, t.tags as tags, t.environment as trace_environment, t.session_id as trace_session_id," : ""}
-          s.id as id,
-          s.project_id as project_id,
-          s.timestamp as timestamp,
-          s.environment as environment,
-          s.name as name,
-          s.value as value,
-          s.string_value as string_value,
-          s.long_string_value as long_string_value,
-          s.author_user_id as author_user_id,
-          s.created_at as created_at,
-          s.updated_at as updated_at,
-          s.source as source,
-          s.comment as comment,
-          s.metadata as metadata,
-          s.data_type as data_type,
-          s.config_id as config_id,
-          s.queue_id as queue_id,
-          s.execution_trace_id as execution_trace_id,
-          s.trace_id as trace_id,
-          s.observation_id as observation_id,
-          s.session_id as session_id,
-          s.dataset_run_id as dataset_run_id
-      FROM
-          scores s
-          ${needsTraceJoin ? "LEFT JOIN __TRACE_TABLE__ t ON s.trace_id = t.id AND s.project_id = t.project_id" : ""}
-      WHERE
-          s.project_id = {projectId: String}
-          AND (
-            ${scoreScope === "traces_only" ? "" : "s.trace_id IS NULL OR "}
-            (s.trace_id IS NOT NULL AND (${needsTraceJoin ? "t.id, t.project_id" : "s.trace_id, s.project_id"}) IN (
-              SELECT
-                ${needsTraceJoin ? "trace_id, project_id" : "s.trace_id, s.project_id"}
-              FROM
-                scores s
-              WHERE
-                s.project_id = {projectId: String}
-                ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-                ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-              ORDER BY
-                s.timestamp desc
-              LIMIT
-                1 BY s.id, s.project_id
-                ))
-          )
-          ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
-          ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-          ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
-      ORDER BY
-          s.timestamp desc, s.event_ts desc
-      LIMIT
-          1 BY s.id, s.project_id
-      ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
-      `;
-
-  return measureAndReturn({
-    operationName: "_handleGenerateScoresForPublicApi",
-    projectId: props.projectId,
-    input: {
-      params: {
-        ...appliedScoresFilter.params,
-        ...appliedTracesFilter.params,
-        projectId: props.projectId,
-        ...(props.limit !== undefined ? { limit: props.limit } : {}),
-        ...(props.page !== undefined
-          ? { offset: (props.page - 1) * props.limit }
-          : {}),
-      },
-      tags: {
-        feature: "scoring",
-        type: "score",
-        projectId: props.projectId,
-        scoreScope,
-        operation_name: "_handleGenerateScoresForPublicApi",
-        includeTrace: includeTrace.toString(),
-      },
+  const records = await queryDoris<
+    ScoreRecordReadType & {
+      tags: string[];
+      user_id: string;
+      trace_environment: string;
+    }
+  >({
+    query,
+    params: {
+      ...appliedScoresFilter.params,
+      ...appliedTracesFilter.params,
+      projectId: props.projectId,
+      ...(props.limit !== undefined ? { limit: props.limit } : {}),
+      ...(props.page !== undefined
+        ? { offset: (props.page - 1) * props.limit }
+        : {}),
     },
-    fn: async (input) => {
-      const records = await queryClickhouse<
-        ScoreRecordReadType & {
-          tags?: string[];
-          user_id?: string;
-          trace_environment?: string;
-          trace_session_id?: string | null;
-        }
-      >({
-        query: query.replace("__TRACE_TABLE__", "traces"),
-        params: input.params,
-        tags: input.tags,
-        preferredClickhouseService: "ReadOnly",
-      });
+  });
 
-      return records.map((record) => {
-        const domainScore = convertClickhouseScoreToDomain(record);
-        const apiScore = convertScoreToPublicApi(domainScore);
-        return {
-          ...apiScore,
-          trace:
-            includeTrace && record.trace_id !== null
-              ? {
-                  userId: record.user_id,
-                  tags: record.tags,
-                  environment: record.trace_environment,
-                  sessionId: record.trace_session_id,
-                }
-              : null,
-        };
-      });
-    },
+  return records.map((record) => {
+    const domainScore = convertDorisScoreToDomain(record);
+    const apiScore = convertScoreToPublicApi(domainScore);
+    return {
+      ...apiScore,
+      trace:
+        record.trace_id !== null
+          ? {
+              userId: record.user_id,
+              tags: record.tags,
+              environment: record.trace_environment,
+            }
+          : null,
+    };
   });
 };
 
@@ -308,9 +190,8 @@ export const _handleGetScoresCountForPublicApi = async ({
     tracesFilter.length(),
   );
 
-  if (isDorisBackend()) {
-    // Doris uses UNIQUE KEY model, no deduplication needed
-    const query = `
+  // Doris uses UNIQUE KEY model, no deduplication needed
+  const query = `
         SELECT
           count(*) as count
         FROM
@@ -323,194 +204,134 @@ export const _handleGetScoresCountForPublicApi = async ({
         ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
         `;
 
-    const records = await queryDoris<{ count: string }>({
-      query,
-      params: {
-        ...appliedScoresFilter.params,
-        ...appliedTracesFilter.params,
-        projectId: props.projectId,
-      },
-    });
-    return records.map((record) => Number(record.count)).shift();
-  }
-
-  // for this query, we only need the traces join if we have a filter on traces
-  const query = `
-      SELECT
-        count() as count
-      FROM
-        scores s
-          ${needsTraceJoin ? "LEFT JOIN __TRACE_TABLE__ t ON s.trace_id = t.id AND s.project_id = t.project_id" : ""}
-      WHERE
-        s.project_id = {projectId: String}
-      AND (
-        ${scoreScope === "traces_only" ? "" : "s.trace_id IS NULL OR "}
-        (s.trace_id IS NOT NULL AND (${needsTraceJoin ? "t.id, t.project_id" : "s.trace_id, s.project_id"}) IN (
-          SELECT
-            ${needsTraceJoin ? "trace_id, project_id" : "s.trace_id, s.project_id"}
-          FROM
-            scores s
-          WHERE
-            s.project_id = {projectId: String}
-            ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-            ${scoreScope === "traces_only" ? "AND s.session_id IS NULL" : ""}
-          ORDER BY
-            s.timestamp desc
-          LIMIT
-            1 BY s.id, s.project_id
-        ))
-      )
-      ${appliedScoresFilter.query ? `AND ${appliedScoresFilter.query}` : ""}
-      ${tracesFilter.length() > 0 ? `AND ${appliedTracesFilter.query}` : ""}
-      `;
-
-  return measureAndReturn({
-    operationName: "_handleGetScoresCountForPublicApi",
-    projectId: props.projectId,
-    input: {
-      params: {
-        ...appliedScoresFilter.params,
-        ...appliedTracesFilter.params,
-        projectId: props.projectId,
-      },
-      tags: {
-        feature: "scoring",
-        type: "score",
-        projectId: props.projectId,
-        scoreScope,
-        operation_name: "_handleGetScoresCountForPublicApi",
-        includeTrace: includeTrace.toString(),
-      },
-    },
-    fn: async (input) => {
-      const records = await queryClickhouse<{ count: string }>({
-        query: query.replace("__TRACE_TABLE__", "traces"),
-        params: input.params,
-        tags: input.tags,
-        preferredClickhouseService: "ReadOnly",
-      });
-      return records.map((record) => Number(record.count)).shift();
+  const records = await queryDoris<{ count: string }>({
+    query,
+    params: {
+      ...appliedScoresFilter.params,
+      ...appliedTracesFilter.params,
+      projectId: props.projectId,
     },
   });
+  return records.map((record) => Number(record.count)).shift();
 };
 
 const secureScoreFilterOptions = [
   {
     id: "traceId",
-    clickhouseSelect: "trace_id",
-    clickhouseTable: "scores",
+    dorisSelect: "trace_id",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "observationId",
-    clickhouseSelect: "observation_id",
-    clickhouseTable: "scores",
+    dorisSelect: "observation_id",
+    dorisTable: "scores",
     filterType: "StringOptionsFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "name",
-    clickhouseSelect: "name",
-    clickhouseTable: "scores",
+    dorisSelect: "name",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "source",
-    clickhouseSelect: "source",
-    clickhouseTable: "scores",
+    dorisSelect: "source",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "fromTimestamp",
-    clickhouseSelect: "timestamp",
+    dorisSelect: "timestamp",
     operator: ">=" as const,
-    clickhouseTable: "scores",
+    dorisTable: "scores",
     filterType: "DateTimeFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "toTimestamp",
-    clickhouseSelect: "timestamp",
+    dorisSelect: "timestamp",
     operator: "<" as const,
-    clickhouseTable: "scores",
+    dorisTable: "scores",
     filterType: "DateTimeFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "value",
-    clickhouseSelect: "value",
-    clickhouseTable: "scores",
+    dorisSelect: "value",
+    dorisTable: "scores",
     filterType: "NumberFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "scoreIds",
-    clickhouseSelect: "id",
-    clickhouseTable: "scores",
+    dorisSelect: "id",
+    dorisTable: "scores",
     filterType: "StringOptionsFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "configId",
-    clickhouseSelect: "config_id",
-    clickhouseTable: "scores",
+    dorisSelect: "config_id",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "sessionId",
-    clickhouseSelect: "session_id",
-    clickhouseTable: "scores",
+    dorisSelect: "session_id",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "datasetRunId",
-    clickhouseSelect: "dataset_run_id",
-    clickhouseTable: "scores",
+    dorisSelect: "dataset_run_id",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "queueId",
-    clickhouseSelect: "queue_id",
-    clickhouseTable: "scores",
+    dorisSelect: "queue_id",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "environment",
-    clickhouseSelect: "environment",
-    clickhouseTable: "scores",
+    dorisSelect: "environment",
+    dorisTable: "scores",
     filterType: "StringOptionsFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
   {
     id: "dataType",
-    clickhouseSelect: "data_type",
-    clickhouseTable: "scores",
+    dorisSelect: "data_type",
+    dorisTable: "scores",
     filterType: "StringFilter",
-    clickhousePrefix: "s",
+    dorisPrefix: "s",
   },
 ];
 
 const secureTraceFilterOptions = [
   {
     id: "traceTags",
-    clickhouseSelect: "tags",
-    clickhouseTable: "traces",
+    dorisSelect: "tags",
+    dorisTable: "traces",
     filterType: "ArrayOptionsFilter",
-    clickhousePrefix: "t",
+    dorisPrefix: "t",
   },
   {
     id: "userId",
-    clickhouseSelect: "user_id",
-    clickhouseTable: "traces",
+    dorisSelect: "user_id",
+    dorisTable: "traces",
     filterType: "StringFilter",
-    clickhousePrefix: "t",
+    dorisPrefix: "t",
   },
 ];
 
@@ -541,7 +362,7 @@ const generateScoreFilter = (
   );
   scoresFilter.push(
     new StringFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "project_id",
       operator: "=",
       value: filter.projectId,
@@ -554,7 +375,7 @@ const generateScoreFilter = (
   if (scoreDataTypes) {
     scoresFilter.push(
       new StringOptionsFilter({
-        clickhouseTable: "scores",
+        table: "scores",
         field: "data_type",
         operator: "any of",
         values: [...scoreDataTypes],
@@ -563,7 +384,7 @@ const generateScoreFilter = (
     );
   }
 
-  const tracesFilter = convertApiProvidedFilterToClickhouseFilter(
+  const tracesFilter = convertApiProvidedFilterToDorisFilter(
     filter,
     secureTraceFilterOptions,
   );
@@ -579,7 +400,7 @@ const generateScoreFilter = (
       : [filter.environment];
     tracesFilter.push(
       new StringOptionsFilter({
-        clickhouseTable: "traces",
+        table: "traces",
         field: "environment",
         operator: "any of",
         values: envValues,

@@ -1,9 +1,4 @@
-import {
-  queryClickhouse,
-  measureAndReturn,
-  isDorisBackend,
-  queryDoris,
-} from "@langfuse/shared/src/server";
+import { queryDoris } from "@langfuse/shared/src/server";
 import { QueryBuilder } from "@/src/features/query/server/queryBuilder";
 import { type QueryType, type ViewVersion } from "@/src/features/query/types";
 import { getViewDeclaration } from "@/src/features/query/dataModel";
@@ -52,112 +47,45 @@ export async function executeQuery(
   };
 
   // Route to Doris backend when configured
-  if (isDorisBackend()) {
-    const rows = await queryDoris<Record<string, unknown>>({
-      query: compiledQuery,
-      params: parameters,
-      tags,
-    });
-
-    // Doris mysql2 driver returns Decimal/BigInt as strings and timestamps
-    // as Date objects. Convert to match ClickHouse output format for frontend.
-    const converted = rows.map((row) => {
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(row)) {
-        if (value instanceof Date) {
-          // Output ISO 8601 format with timezone indicator so frontend
-          // correctly interprets as UTC (matching ClickHouse iso output)
-          out[key] = value.toISOString();
-        } else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
-          out[key] = Number(value);
-        } else {
-          out[key] = value;
-        }
-      }
-      return out;
-    });
-
-    // Doris doesn't support WITH FILL. Fill time gaps with zeros to match
-    // ClickHouse behavior for continuous time series charts.
-    // Skip gap-filling when ORDER BY is specified (ClickHouse also skips
-    // WITH FILL when ORDER BY is present).
-    const hasOrderBy = query.orderBy && query.orderBy.length > 0;
-    if (query.timeDimension && converted.length > 0 && !hasOrderBy) {
-      return fillTimeSeriesGaps(
-        converted,
-        query.timeDimension,
-        query.fromTimestamp,
-        query.toTimestamp,
-      );
-    }
-
-    return converted;
-  }
-
-  // Check if the query contains trace table references
-  const usesTraceTable = compiledQuery.includes("traces");
-
-  // Route events_core queries to the dedicated events read replica.
-  // Checked via the view declaration's baseCte rather than scanning the compiled SQL.
-  const view = getViewDeclaration(query.view, version);
-  const preferredClickhouseService = view.baseCte.includes("events_")
-    ? ("EventsReadOnly" as const)
-    : undefined;
-
-  if (!usesTraceTable) {
-    // No trace table placeholders, execute normally
-    return queryClickhouse<Record<string, unknown>>({
-      query: compiledQuery,
-      params: parameters,
-      clickhouseConfigs: {
-        clickhouse_settings: {
-          date_time_output_format: "iso",
-          ...(env.CLICKHOUSE_USE_QUERY_CONDITION_CACHE === "true"
-            ? { use_query_condition_cache: "true" }
-            : {}),
-          max_bytes_before_external_group_by: String(
-            env.CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY,
-          ),
-        },
-      },
-      tags,
-      preferredClickhouseService,
-    });
-  }
-
-  // Use measureAndReturn for trace table queries
-  return measureAndReturn({
-    operationName: "executeQuery",
-    projectId,
-    input: {
-      query: compiledQuery,
-      params: parameters,
-      fromTimestamp: query.fromTimestamp,
-      tags: {
-        ...tags,
-        operation_name: "executeQuery",
-      },
-    },
-    fn: async (input) => {
-      return queryClickhouse<Record<string, unknown>>({
-        query: input.query,
-        params: input.params,
-        clickhouseConfigs: {
-          clickhouse_settings: {
-            date_time_output_format: "iso",
-            ...(env.CLICKHOUSE_USE_QUERY_CONDITION_CACHE === "true"
-              ? { use_query_condition_cache: "true" }
-              : {}),
-            max_bytes_before_external_group_by: String(
-              env.CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY,
-            ),
-          },
-        },
-        tags: input.tags,
-        preferredClickhouseService,
-      });
-    },
+  const rows = await queryDoris<Record<string, unknown>>({
+    query: compiledQuery,
+    params: parameters,
+    tags,
   });
+
+  // Doris mysql2 driver returns Decimal/BigInt as strings and timestamps
+  // as Date objects. Convert to match ClickHouse output format for frontend.
+  const converted = rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (value instanceof Date) {
+        // Output ISO 8601 format with timezone indicator so frontend
+        // correctly interprets as UTC (matching ClickHouse iso output)
+        out[key] = value.toISOString();
+      } else if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) {
+        out[key] = Number(value);
+      } else {
+        out[key] = value;
+      }
+    }
+    return out;
+  });
+
+  // Doris doesn't support WITH FILL. Fill time gaps with zeros to match
+  // ClickHouse behavior for continuous time series charts.
+  // Skip gap-filling when ORDER BY is specified (ClickHouse also skips
+  // WITH FILL when ORDER BY is present).
+  const hasOrderBy = query.orderBy && query.orderBy.length > 0;
+  if (query.timeDimension && converted.length > 0 && !hasOrderBy) {
+    return fillTimeSeriesGaps(
+      converted,
+      query.timeDimension,
+      query.fromTimestamp,
+      query.toTimestamp,
+    );
+  }
+
+  return converted;
 }
 
 /**
@@ -286,7 +214,9 @@ function fillTimeSeriesGaps(
   // dimension column. If yes → column is Nullable → use null. If no → use "".
   const fillDimValues: Record<string, unknown> = {};
   for (const key of dimensionKeys) {
-    const hasNullInData = rows.some((r) => r[key] === null || r[key] === undefined);
+    const hasNullInData = rows.some(
+      (r) => r[key] === null || r[key] === undefined,
+    );
     fillDimValues[key] = hasNullInData ? null : "";
   }
   const nullMetrics: Record<string, unknown> = {};

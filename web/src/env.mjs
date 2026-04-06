@@ -154,16 +154,16 @@ export const env = createEnv({
     AUTH_AUTH0_ALLOW_ACCOUNT_LINKING: z.enum(["true", "false"]).optional(),
     AUTH_AUTH0_CLIENT_AUTH_METHOD: zAuthMethod,
     AUTH_AUTH0_CHECKS: zAuthChecks,
-    // Langfuse Cloud only: "Sign in with ClickHouse Cloud" (Auth0 under the hood).
+    // Langfuse Cloud only: "Sign in with Doris Cloud" (Auth0 under the hood).
     // NOT intended for self-hosted Langfuse — use AUTH_AUTH0_* instead.
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_ID: z.string().optional(),
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET: z.string().optional(),
-    AUTH_CLICKHOUSE_CLOUD_ISSUER: z.string().url().optional(),
-    AUTH_CLICKHOUSE_CLOUD_ALLOW_ACCOUNT_LINKING: z
+    AUTH_DORIS_CLOUD_CLIENT_ID: z.string().optional(),
+    AUTH_DORIS_CLOUD_CLIENT_SECRET: z.string().optional(),
+    AUTH_DORIS_CLOUD_ISSUER: z.string().url().optional(),
+    AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING: z
       .enum(["true", "false"])
       .optional(),
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_AUTH_METHOD: zAuthMethod,
-    AUTH_CLICKHOUSE_CLOUD_CHECKS: zAuthChecks,
+    AUTH_DORIS_CLOUD_CLIENT_AUTH_METHOD: zAuthMethod,
+    AUTH_DORIS_CLOUD_CHECKS: zAuthChecks,
     AUTH_COGNITO_CLIENT_ID: z.string().optional(),
     AUTH_COGNITO_CLIENT_SECRET: z.string().optional(),
     AUTH_COGNITO_ISSUER: z.string().url().optional(),
@@ -241,19 +241,6 @@ export const env = createEnv({
         s ? s.split(",").map((h) => h.toLowerCase().trim()) : [],
       ),
 
-    // clickhouse - optional when LANGFUSE_ANALYTICS_BACKEND=doris
-    CLICKHOUSE_URL: z.string().url().optional(),
-    CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
-    CLICKHOUSE_DB: z.string().default("default"),
-    CLICKHOUSE_USER: z.string().optional(),
-    CLICKHOUSE_PASSWORD: z.string().optional(),
-    CLICKHOUSE_CLUSTER_ENABLED: z.enum(["true", "false"]).default("true"),
-    CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY: z.coerce
-      .number()
-      .default(32_000_000_000), // ~32GB
-    CLICKHOUSE_USE_QUERY_CONDITION_CACHE: z
-      .enum(["true", "false"])
-      .default("false"),
     LANGFUSE_ROOT_EVENT_CONDITION_MAX_WINDOW_HOURS: z.coerce
       .number()
       .int()
@@ -261,7 +248,7 @@ export const env = createEnv({
       .default(168), // 7 days
 
     // Analytics backend selection
-    LANGFUSE_ANALYTICS_BACKEND: z.enum(["clickhouse", "doris"]).default("clickhouse"),
+    LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 
     // doris
     DORIS_URL: z.string().optional().optional(),
@@ -385,15 +372,9 @@ export const env = createEnv({
     LANGFUSE_AI_FEATURES_PROJECT_ID: z.string().optional(),
 
     // API Performance Flags
-    // Enable Redis-based tracking of projects using OTEL API to optimize ClickHouse queries.
+    // Enable Redis-based tracking of projects using OTEL API to optimize Doris queries.
     // When enabled, projects ingesting via OTEL API skip the FINAL modifier on some observations queries for better performance.
     LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS: z
-      .enum(["true", "false"])
-      .default("false"),
-    // Whether to propagate the toTimestamp restriction (including a server-side offset)
-    // onto the observations CTE in GET /api/public/traces. Can be used to improve performance
-    // for self-hosters that have a trace known trace duration of less than multiple hours.
-    LANGFUSE_API_CLICKHOUSE_PROPAGATE_OBSERVATIONS_TIME_BOUNDS: z
       .enum(["true", "false"])
       .default("false"),
 
@@ -575,16 +556,16 @@ export const env = createEnv({
       process.env.AUTH_AUTH0_ALLOW_ACCOUNT_LINKING,
     AUTH_AUTH0_CLIENT_AUTH_METHOD: process.env.AUTH_AUTH0_CLIENT_AUTH_METHOD,
     AUTH_AUTH0_CHECKS: process.env.AUTH_AUTH0_CHECKS,
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_ID:
-      process.env.AUTH_CLICKHOUSE_CLOUD_CLIENT_ID,
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET:
-      process.env.AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET,
-    AUTH_CLICKHOUSE_CLOUD_ISSUER: process.env.AUTH_CLICKHOUSE_CLOUD_ISSUER,
-    AUTH_CLICKHOUSE_CLOUD_ALLOW_ACCOUNT_LINKING:
-      process.env.AUTH_CLICKHOUSE_CLOUD_ALLOW_ACCOUNT_LINKING,
-    AUTH_CLICKHOUSE_CLOUD_CLIENT_AUTH_METHOD:
-      process.env.AUTH_CLICKHOUSE_CLOUD_CLIENT_AUTH_METHOD,
-    AUTH_CLICKHOUSE_CLOUD_CHECKS: process.env.AUTH_CLICKHOUSE_CLOUD_CHECKS,
+    AUTH_DORIS_CLOUD_CLIENT_ID:
+      process.env.AUTH_DORIS_CLOUD_CLIENT_ID,
+    AUTH_DORIS_CLOUD_CLIENT_SECRET:
+      process.env.AUTH_DORIS_CLOUD_CLIENT_SECRET,
+    AUTH_DORIS_CLOUD_ISSUER: process.env.AUTH_DORIS_CLOUD_ISSUER,
+    AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING:
+      process.env.AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING,
+    AUTH_DORIS_CLOUD_CLIENT_AUTH_METHOD:
+      process.env.AUTH_DORIS_CLOUD_CLIENT_AUTH_METHOD,
+    AUTH_DORIS_CLOUD_CHECKS: process.env.AUTH_DORIS_CLOUD_CHECKS,
     AUTH_COGNITO_CLIENT_ID: process.env.AUTH_COGNITO_CLIENT_ID,
     AUTH_COGNITO_CLIENT_SECRET: process.env.AUTH_COGNITO_CLIENT_SECRET,
     AUTH_COGNITO_ISSUER: process.env.AUTH_COGNITO_ISSUER,
@@ -686,17 +667,6 @@ export const env = createEnv({
     PLAIN_AUTHENTICATION_SECRET: process.env.PLAIN_AUTHENTICATION_SECRET,
     PLAIN_API_KEY: process.env.PLAIN_API_KEY,
     PLAIN_CARDS_API_TOKEN: process.env.PLAIN_CARDS_API_TOKEN,
-    // clickhouse
-    CLICKHOUSE_URL: process.env.CLICKHOUSE_URL,
-    CLICKHOUSE_CLUSTER_NAME: process.env.CLICKHOUSE_CLUSTER_NAME,
-    CLICKHOUSE_DB: process.env.CLICKHOUSE_DB,
-    CLICKHOUSE_USER: process.env.CLICKHOUSE_USER,
-    CLICKHOUSE_PASSWORD: process.env.CLICKHOUSE_PASSWORD,
-    CLICKHOUSE_CLUSTER_ENABLED: process.env.CLICKHOUSE_CLUSTER_ENABLED,
-    CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY:
-      process.env.CLICKHOUSE_MAX_BYTES_BEFORE_EXTERNAL_GROUP_BY,
-    CLICKHOUSE_USE_QUERY_CONDITION_CACHE:
-      process.env.CLICKHOUSE_USE_QUERY_CONDITION_CACHE,
     LANGFUSE_ROOT_EVENT_CONDITION_MAX_WINDOW_HOURS:
       process.env.LANGFUSE_ROOT_EVENT_CONDITION_MAX_WINDOW_HOURS,
     // Analytics backend
@@ -779,8 +749,6 @@ export const env = createEnv({
     LANGFUSE_AI_FEATURES_HOST: process.env.LANGFUSE_AI_FEATURES_HOST,
 
     // Api Performance Flags
-    LANGFUSE_API_CLICKHOUSE_PROPAGATE_OBSERVATIONS_TIME_BOUNDS:
-      process.env.LANGFUSE_API_CLICKHOUSE_PROPAGATE_OBSERVATIONS_TIME_BOUNDS,
     LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS:
       process.env.LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS,
 

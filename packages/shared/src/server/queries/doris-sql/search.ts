@@ -14,7 +14,7 @@ export interface DorisSearchContext {
 
 /**
  * Generate Doris-compatible search conditions
- * Equivalent to clickhouseSearchCondition but adapted for Doris syntax
+ * Adapted for Doris syntax
  * @param query - Search query string
  * @param searchType - Types of search to perform
  * @param context - Context information for determining correct table prefixes

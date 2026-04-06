@@ -165,34 +165,32 @@ async function posthogTelemetry({
     });
 
     // Count traces
-    const countTracesClickhouse =
-      await getTraceCountsByProjectInCreationInterval({
-        start: startTimeframe ?? new Date(0),
-        end: endTimeframe,
-      });
-    const countTraces = countTracesClickhouse.reduce(
+    const countTracesDoris = await getTraceCountsByProjectInCreationInterval({
+      start: startTimeframe ?? new Date(0),
+      end: endTimeframe,
+    });
+    const countTraces = countTracesDoris.reduce(
       (acc, curr) => acc + curr.count,
       0,
     );
 
     // Count scores
-    const countScoresClickhouse =
-      await getScoreCountsByProjectInCreationInterval({
-        start: startTimeframe ?? new Date(0),
-        end: endTimeframe,
-      });
-    const countScores = countScoresClickhouse.reduce(
+    const countScoresDoris = await getScoreCountsByProjectInCreationInterval({
+      start: startTimeframe ?? new Date(0),
+      end: endTimeframe,
+    });
+    const countScores = countScoresDoris.reduce(
       (acc, curr) => acc + curr.count,
       0,
     );
 
     // Count observations
-    const countObservationsClickhouse =
+    const countObservationsDoris =
       await getObservationCountsByProjectInCreationInterval({
         start: startTimeframe ?? new Date(0),
         end: endTimeframe,
       });
-    const countObservations = countObservationsClickhouse.reduce(
+    const countObservations = countObservationsDoris.reduce(
       (acc, curr) => acc + curr.count,
       0,
     );
@@ -227,12 +225,12 @@ async function posthogTelemetry({
       },
     });
 
-    const countDatasetRunItemsClickhouse =
+    const countDatasetRunItemsDoris =
       await getDatasetRunItemCountsByProjectInCreationInterval({
         start: startTimeframe ?? new Date(0),
         end: endTimeframe,
       });
-    const countDatasetRunItems = countDatasetRunItemsClickhouse.reduce(
+    const countDatasetRunItems = countDatasetRunItemsDoris.reduce(
       (acc, curr) => acc + curr.count,
       0,
     );

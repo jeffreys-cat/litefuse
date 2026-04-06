@@ -16,12 +16,9 @@ import {
 import { ModelUsageUnit, paginationZod, Prisma } from "@langfuse/shared";
 import {
   clearModelCacheForProject,
-  queryClickhouse,
   findModel,
   matchPricingTier,
   queryDoris,
-  isDorisBackend,
-  convertDateToAnalyticsDateTime,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 
@@ -217,7 +214,7 @@ export const modelRouter = createTRPCRouter({
         GROUP BY internal_model_id
       `;
 
-      const queryFn = isDorisBackend() ? queryDoris : queryClickhouse;
+      const queryFn = queryDoris;
       const result = ModelLastUsedQueryResult.safeParse(
         await queryFn({
           query: lastUsedQuery,

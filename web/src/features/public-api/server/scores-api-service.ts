@@ -34,7 +34,6 @@ export class ScoresApiService {
       scoreScope: this.apiVersion === "v1" ? "traces_only" : "all",
       scoreDataTypes:
         this.apiVersion === "v1" ? AGGREGATABLE_SCORE_TYPES : undefined,
-      preferredClickhouseService: "ReadOnly",
     });
 
     if (!score) {

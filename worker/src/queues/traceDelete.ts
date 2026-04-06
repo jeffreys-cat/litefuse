@@ -8,7 +8,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 
-import { processClickhouseTraceDelete } from "../features/traces/processClickhouseTraceDelete";
+import { processDorisTraceDelete } from "../features/traces/processDorisTraceDelete";
 import { processPostgresTraceDelete } from "../features/traces/processPostgresTraceDelete";
 import { env } from "../env";
 
@@ -95,10 +95,10 @@ export const traceDeleteProcessor: Processor = async (
       return;
     }
 
-    // Delete from both Postgres and ClickHouse
+    // Delete from both Postgres and Doris
     await Promise.all([
       processPostgresTraceDelete(projectId, traceIdsToDelete),
-      processClickhouseTraceDelete(projectId, traceIdsToDelete),
+      processDorisTraceDelete(projectId, traceIdsToDelete),
     ]);
 
     // Mark only the pending traces as deleted (not the ones from the event, as they might be legacy)

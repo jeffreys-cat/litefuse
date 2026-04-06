@@ -145,7 +145,6 @@ export class DorisClient {
         connectTimeout: this.config.timeout,
         timezone: "+00:00", // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
       };
-
       // Only add database to config if it's not empty
       if (this.config.database && this.config.database.trim() !== "") {
         poolConfig.database = this.config.database;

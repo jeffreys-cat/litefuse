@@ -6,23 +6,23 @@ import {
   CategoryOptionsFilter,
   StringFilter,
   NumberFilter,
-} from "./clickhouse-sql/clickhouse-filter";
-import { FilterList, type DbOperator as ClickhouseOperator } from "./filter";
+} from "./doris-sql/doris-filter";
+import { FilterList, type DbOperator as DorisOperator } from "./filter";
 import { z } from "zod/v4";
 import type { FilterState } from "../../types";
 import type {
   UiColumnMappings,
   ColumnDefinition,
 } from "../../tableDefinitions";
-import { createFilterFromFilterState } from "./clickhouse-sql/factory";
+import { createDorisFilterFromFilterState } from "./doris-sql/factory";
 
 export type ApiColumnMapping = {
   id: string;
-  clickhouseSelect: string;
-  clickhouseTable: string;
+  dorisSelect: string;
+  dorisTable: string;
   filterType: string;
-  operator?: ClickhouseOperator;
-  clickhousePrefix?: string;
+  operator?: DorisOperator;
+  dorisPrefix?: string;
 };
 
 /**
@@ -96,29 +96,29 @@ export function createPublicApiTracesColumnMapping(
       simpleFilters.push(
         {
           id: "fromTimestamp",
-          clickhouseSelect: timestampColumn,
+          dorisSelect: timestampColumn,
           operator: ">=" as const,
           filterType: def.filterType,
-          clickhouseTable: tableName,
-          clickhousePrefix: tablePrefix,
+          dorisTable: tableName,
+          dorisPrefix: tablePrefix,
         },
         {
           id: "toTimestamp",
-          clickhouseSelect: timestampColumn,
+          dorisSelect: timestampColumn,
           operator: "<" as const,
           filterType: def.filterType,
-          clickhouseTable: tableName,
-          clickhousePrefix: tablePrefix,
+          dorisTable: tableName,
+          dorisPrefix: tablePrefix,
         },
       );
     } else {
       // Regular column mapping for simple filters
       simpleFilters.push({
         id: def.id,
-        clickhouseSelect: def.column,
+        dorisSelect: def.column,
         filterType: def.filterType,
-        clickhouseTable: tableName,
-        clickhousePrefix: tablePrefix,
+        dorisTable: tableName,
+        dorisPrefix: tablePrefix,
       });
     }
   }
@@ -137,75 +137,75 @@ export function createPublicApiObservationsColumnMapping(
   return [
     {
       id: "userId",
-      clickhouseSelect: "user_id",
+      dorisSelect: "user_id",
       filterType: "StringFilter",
-      clickhouseTable: "traces",
-      clickhousePrefix: "t",
+      dorisTable: "traces",
+      dorisPrefix: "t",
     },
     {
       id: "traceId",
-      clickhouseSelect: "trace_id",
+      dorisSelect: "trace_id",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "name",
-      clickhouseSelect: "name",
+      dorisSelect: "name",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "level",
-      clickhouseSelect: "level",
+      dorisSelect: "level",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "type",
-      clickhouseSelect: "type",
+      dorisSelect: "type",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "parentObservationId",
-      clickhouseSelect: parentFieldName,
+      dorisSelect: parentFieldName,
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "fromStartTime",
-      clickhouseSelect: "start_time",
+      dorisSelect: "start_time",
       operator: ">=",
       filterType: "DateTimeFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "toStartTime",
-      clickhouseSelect: "start_time",
+      dorisSelect: "start_time",
       operator: "<",
       filterType: "DateTimeFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "version",
-      clickhouseSelect: "version",
+      dorisSelect: "version",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
     {
       id: "environment",
-      clickhouseSelect: "environment",
+      dorisSelect: "environment",
       filterType: "StringFilter",
-      clickhouseTable: tableName,
-      clickhousePrefix: tablePrefix,
+      dorisTable: tableName,
+      dorisPrefix: tablePrefix,
     },
   ];
 }
@@ -216,7 +216,7 @@ type BaseQueryType = {
   projectId: string;
 } & Record<string, unknown>;
 
-export function convertApiProvidedFilterToClickhouseFilter(
+export function convertApiProvidedFilterToDorisFilter(
   filter: BaseQueryType,
   columnMapping: ApiColumnMapping[],
 ) {
@@ -243,11 +243,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
           typeof value === "string" &&
           ["<", "<=", ">", ">="].includes(finalOperator)
             ? (filterInstance = new DateTimeFilter({
-                clickhouseTable: columnMapping.clickhouseTable,
-                field: columnMapping.clickhouseSelect,
+                table: columnMapping.dorisTable,
+                field: columnMapping.dorisSelect,
                 operator: finalOperator as "<" | "<=" | ">" | ">=",
                 value: new Date(value),
-                tablePrefix: columnMapping.clickhousePrefix,
+                tablePrefix: columnMapping.dorisPrefix,
               }))
             : undefined;
 
@@ -256,22 +256,22 @@ export function convertApiProvidedFilterToClickhouseFilter(
         case "ArrayOptionsFilter":
           if (Array.isArray(value) || typeof value === "string") {
             filterInstance = new ArrayOptionsFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "all of",
               values: Array.isArray(value) ? value : value.split(","),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
         case "StringOptionsFilter":
           if (Array.isArray(value) || typeof value === "string") {
             filterInstance = new StringOptionsFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "any of",
               values: Array.isArray(value) ? value : value.split(","),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
@@ -289,12 +289,12 @@ export function convertApiProvidedFilterToClickhouseFilter(
               typeof filter.key === "string"
             ) {
               filterInstance = new CategoryOptionsFilter({
-                clickhouseTable: columnMapping.clickhouseTable,
-                field: columnMapping.clickhouseSelect,
+                table: columnMapping.dorisTable,
+                field: columnMapping.dorisSelect,
                 key: filter.key,
                 operator: parsedOperatorCategory.data,
                 values: value,
-                tablePrefix: columnMapping.clickhousePrefix,
+                tablePrefix: columnMapping.dorisPrefix,
               });
             }
           }
@@ -303,11 +303,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
         case "StringFilter":
           if (typeof value === "string") {
             filterInstance = new StringFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "=",
               value: value,
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
@@ -322,11 +322,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
 
           if (parsedOperatorNum.success) {
             filterInstance = new NumberFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: parsedOperatorNum.data,
               value: Number(value),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
@@ -355,19 +355,18 @@ export function deriveFilters<T extends BaseQueryType>(
   filterParamsMapping: ApiColumnMapping[],
   advancedFilters: FilterState | undefined,
   uiColumnDefinitions: UiColumnMappings,
-  columnDefinitions?: ColumnDefinition[],
+  _columnDefinitions?: ColumnDefinition[],
 ): FilterList {
   // Start with advanced filters converted to FilterList
   const filterList = new FilterList(
-    createFilterFromFilterState(
+    createDorisFilterFromFilterState(
       advancedFilters ?? [],
       uiColumnDefinitions,
-      columnDefinitions,
     ),
   );
 
   // Convert simple parameters to filters
-  const simpleFilters = convertApiProvidedFilterToClickhouseFilter(
+  const simpleFilters = convertApiProvidedFilterToDorisFilter(
     simpleFilterProps,
     filterParamsMapping,
   );

@@ -122,18 +122,18 @@ export const queueItemRouter = createTRPCRouter({
       };
 
       if (item.objectType === AnnotationQueueObjectType.OBSERVATION) {
-        const clickhouseObservation = await getObservationById({
+        const dorisObservation = await getObservationById({
           id: item.objectId,
           projectId: input.projectId,
         });
 
-        if (!clickhouseObservation) {
+        if (!dorisObservation) {
           throw new LangfuseNotFoundError("Observation not found");
         }
 
         return {
           ...inflatedItem,
-          parentTraceId: clickhouseObservation?.traceId,
+          parentTraceId: dorisObservation?.traceId,
         };
       }
 

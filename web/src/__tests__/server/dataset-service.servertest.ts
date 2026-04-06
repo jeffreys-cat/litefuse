@@ -1560,7 +1560,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1617,7 +1617,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1672,7 +1672,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1716,7 +1716,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1760,7 +1760,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1800,7 +1800,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -1844,7 +1844,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2242,7 +2242,7 @@ describe("Fetch datasets for UI presentation", () => {
           offset: 0,
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2336,7 +2336,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2397,7 +2397,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2454,7 +2454,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2515,7 +2515,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItemsFirstPage =
           await getDatasetRunItemsWithoutIOByItemIds({
@@ -2525,7 +2525,7 @@ describe("Fetch datasets for UI presentation", () => {
             datasetItemIds: firstPageDatasetItemIds,
           });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItemsSecondPage =
           await getDatasetRunItemsWithoutIOByItemIds({
@@ -2572,7 +2572,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2637,7 +2637,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2709,7 +2709,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2785,7 +2785,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2832,7 +2832,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2886,7 +2886,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2926,7 +2926,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -2958,7 +2958,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,
@@ -3030,7 +3030,7 @@ describe("Fetch datasets for UI presentation", () => {
           ],
         });
 
-        // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+        // Step 2: Given dataset item ids, lookup dataset run items in Doris
         // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
         const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
           projectId: projectId,

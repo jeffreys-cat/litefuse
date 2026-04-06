@@ -1,12 +1,11 @@
 import { Job, Processor } from "bullmq";
 import {
-  clickhouseClient,
-  getClickhouseEntityType,
   getCurrentSpan,
   getQueue,
   getS3EventStorageClient,
   hasS3SlowdownFlag,
   IngestionEventType,
+  getDorisEntityType,
   isS3SlowDownError,
   logger,
   markProjectS3Slowdown,
@@ -23,7 +22,6 @@ import { prisma } from "@langfuse/shared/src/db";
 
 import { env } from "../env";
 import { IngestionService } from "../services/IngestionService";
-import { ClickhouseWriter, TableName } from "../services/ClickhouseWriter";
 import {
   DorisWriter,
   TableName as DorisTableName,
@@ -61,16 +59,8 @@ export const ingestionQueueProcessorBuilder = (
         );
       }
 
-      // 根据配置初始化相应的writer
-      const analyticsBackend = env.LANGFUSE_ANALYTICS_BACKEND;
-      let clickhouseWriter: ClickhouseWriter | null = null;
-      let dorisWriter: DorisWriter | null = null;
-
-      if (analyticsBackend === "clickhouse") {
-        clickhouseWriter = ClickhouseWriter.getInstance();
-      } else if (analyticsBackend === "doris") {
-        dorisWriter = DorisWriter.getInstance();
-      }
+      // Initialize Doris writer
+      const dorisWriter = DorisWriter.getInstance();
 
       // We write the new file into the analytics backend event log to keep track for retention and deletions
       if (
@@ -82,29 +72,22 @@ export const ingestionQueueProcessorBuilder = (
         const blobStorageRecord = {
           id: randomUUID(),
           project_id: job.data.payload.authCheck.scope.projectId,
-          entity_type: getClickhouseEntityType(job.data.payload.data.type),
+          entity_type: getDorisEntityType(job.data.payload.data.type),
           entity_id: job.data.payload.data.eventBodyId,
           event_id: job.data.payload.data.fileKey,
           bucket_name: env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET,
-          bucket_path: `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${getClickhouseEntityType(job.data.payload.data.type)}/${job.data.payload.data.eventBodyId}/${fileName}`,
+          bucket_path: `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${getDorisEntityType(job.data.payload.data.type)}/${job.data.payload.data.eventBodyId}/${fileName}`,
           created_at: new Date().getTime(),
           updated_at: new Date().getTime(),
           event_ts: new Date().getTime(),
           is_deleted: 0,
         };
 
-        // 写入到配置的后端
-        if (clickhouseWriter) {
-          clickhouseWriter.addToQueue(
-            TableName.BlobStorageFileLog,
-            blobStorageRecord,
-          );
-        } else if (dorisWriter) {
-          dorisWriter.addToQueue(
-            DorisTableName.BlobStorageFileLog,
-            blobStorageRecord,
-          );
-        }
+        // Write to Doris
+        dorisWriter.addToQueue(
+          DorisTableName.BlobStorageFileLog,
+          blobStorageRecord,
+        );
       }
 
       // If fileKey was processed within the last minutes, i.e. has a match in redis, we skip processing.
@@ -167,14 +150,12 @@ export const ingestionQueueProcessorBuilder = (
         {
           projectId: job.data.payload.authCheck.scope.projectId,
           payload: job.data.payload.data,
-          analyticsBackend: analyticsBackend,
+          analyticsBackend: "doris",
         },
       );
 
       // Download all events from folder into a local array
-      const clickhouseEntityType = getClickhouseEntityType(
-        job.data.payload.data.type,
-      );
+      const dorisEntityType = getDorisEntityType(job.data.payload.data.type);
 
       let eventFiles: { file: string; createdAt: Date }[] = [];
       const events: IngestionEventType[] = [];
@@ -183,7 +164,7 @@ export const ingestionQueueProcessorBuilder = (
       const shouldSkipS3List =
         // The producer sets skipS3List to true if it's an OTel observation
         job.data.payload.data.skipS3List && job.data.payload.data.fileKey;
-      const s3Prefix = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${clickhouseEntityType}/${job.data.payload.data.eventBodyId}/`;
+      const s3Prefix = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${dorisEntityType}/${job.data.payload.data.eventBodyId}/`;
 
       let totalS3DownloadSizeBytes = 0;
 
@@ -234,14 +215,14 @@ export const ingestionQueueProcessorBuilder = (
         "langfuse.ingestion.count_files_distribution",
         eventFiles.length,
         {
-          kind: clickhouseEntityType,
+          kind: dorisEntityType,
         },
       );
       span?.setAttribute(
         "langfuse.ingestion.event.count_files",
         eventFiles.length,
       );
-      span?.setAttribute("langfuse.ingestion.event.kind", clickhouseEntityType);
+      span?.setAttribute("langfuse.ingestion.event.kind", dorisEntityType);
       span?.setAttribute(
         "langfuse.ingestion.s3_all_files_size_bytes",
         totalS3DownloadSizeBytes,
@@ -295,21 +276,14 @@ export const ingestionQueueProcessorBuilder = (
         job.data.payload.data.forwardToEventsTable ??
         env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
-      // 根据配置传递相应的client和writer
-      const clickhouseClientInstance =
-        analyticsBackend === "clickhouse" ? clickhouseClient() : null;
-      const dorisClientInstance =
-        analyticsBackend === "doris" ? dorisClient() : null;
-
+      // Use Doris only
       await new IngestionService(
         redis,
         prisma,
-        clickhouseWriter,
-        clickhouseClientInstance,
         dorisWriter,
-        dorisClientInstance,
+        dorisClient(),
       ).mergeAndWrite(
-        getClickhouseEntityType(events[0].type),
+        getDorisEntityType(events[0].type),
         job.data.payload.authCheck.scope.projectId,
         job.data.payload.data.eventBodyId,
         firstS3WriteTime,
