@@ -97,8 +97,8 @@ export function FilterContent() {
         >{t`Type`}</div>
         <Select
           value={fieldType as any}
-          onChange={(value) => {
-            setFieldType(value as any);
+          onChange={(option) => {
+            setFieldType(option.value as any);
           }}
           options={[
             {
