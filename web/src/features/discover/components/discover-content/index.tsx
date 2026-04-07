@@ -252,13 +252,14 @@ export default function DiscoverContent({
                         className={css`
                           height: 32px;
                           font-size: 12px;
-                          white-space: normal;
+                          white-space: pre-wrap;
                         `}
                       >
                         <div
                           className={css`
                             width: 100%;
                             word-break: break-all;
+                            white-space: pre-wrap;
                           `}
                         >
                           {fieldValue || "-"}
@@ -518,6 +519,7 @@ export default function DiscoverContent({
                         <span
                           className={css`
                             font-size: 12px;
+                            white-space: pre-wrap;
                           `}
                         >
                           {fieldValue}

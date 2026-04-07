@@ -359,8 +359,8 @@ export default function SurroundingLogs() {
                         </div>
                       </td>
                       <td className="h-8 text-xs">{fieldName || "-"}</td>
-                      <td className="h-8 text-xs whitespace-normal">
-                        <div className="w-full break-all">
+                      <td className="h-8 text-xs whitespace-pre-wrap">
+                        <div className="w-full break-all whitespace-pre-wrap">
                           {fieldValue || "-"}
                         </div>
                       </td>
@@ -567,7 +567,9 @@ export default function SurroundingLogs() {
                       {field.value === "trace_id" ? (
                         <Button>{fieldValue}</Button>
                       ) : (
-                        <span className="text-xs">{fieldValue}</span>
+                        <span className="text-xs whitespace-pre-wrap">
+                          {fieldValue}
+                        </span>
                       )}
                     </div>
                   </div>
