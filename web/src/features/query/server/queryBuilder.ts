@@ -2069,7 +2069,19 @@ export class QueryBuilder {
     // Build the FROM clause with necessary JOINs
     let fromClause = `FROM ${view.baseCte}`;
 
-    // Handle relation tables
+    // Handle pairExpand dimensions using LATERAL VIEW (Doris equivalent of ARRAY JOIN)
+    // LATERAL VIEW must come right after FROM table, before any JOINs
+    const pairDims = appliedDimensions.filter((d) => d.pairExpand?.valuesSql);
+    if (pairDims.length > 0) {
+      const d = pairDims[0];
+      const mapCol = `${view.name}.${d.pairExpand!.valuesSql}`;
+      const keyAlias = d.alias ?? d.sql;
+      const valAlias = d.pairExpand!.valueAlias;
+      fromClause += `\nLATERAL VIEW posexplode(map_keys(${mapCol})) _pe_keys AS _pe_key_pos, ${keyAlias}`;
+      fromClause += `\nLATERAL VIEW posexplode(map_values(${mapCol})) _pe_vals AS _pe_val_pos, ${valAlias}`;
+    }
+
+    // Handle relation tables (JOINs come after LATERAL VIEW)
     const relationTables = this.collectRelationTables(
       view,
       appliedDimensions,
@@ -2084,17 +2096,6 @@ export class QueryBuilder {
         query,
       );
       fromClause += ` ${relationJoins.join(" ")}`;
-    }
-
-    // Handle pairExpand dimensions using LATERAL VIEW (Doris equivalent of ARRAY JOIN)
-    const pairDims = appliedDimensions.filter((d) => d.pairExpand?.valuesSql);
-    if (pairDims.length > 0) {
-      const d = pairDims[0];
-      const mapCol = `${view.name}.${d.pairExpand!.valuesSql}`;
-      const keyAlias = d.alias ?? d.sql;
-      const valAlias = d.pairExpand!.valueAlias;
-      fromClause += `\nLATERAL VIEW posexplode(map_keys(${mapCol})) _pe_keys AS _pe_key_pos, ${keyAlias}`;
-      fromClause += `\nLATERAL VIEW posexplode(map_values(${mapCol})) _pe_vals AS _pe_val_pos, ${valAlias}`;
     }
 
     fromClause += this.buildWhereClause(filterList, parameters);
