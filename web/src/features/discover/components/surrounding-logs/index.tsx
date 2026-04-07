@@ -1,6 +1,7 @@
 // @ts-nocheck
 "use client";
 
+import { showErrorToast } from "@/src/features/notifications/showErrorToast";
 import type { Row, ColumnDef } from "@tanstack/react-table";
 import JsonView from "@uiw/react-json-view";
 import React, { useEffect, useMemo, useState } from "react";
@@ -125,6 +126,9 @@ export default function SurroundingLogs() {
           setSurroundingTableData(data);
         }
       },
+      onError: (err) => {
+        showErrorToast("Query failed", err?.message ?? String(err));
+      },
     },
   );
 
@@ -178,6 +182,9 @@ export default function SurroundingLogs() {
           setBeforeTime(result[0]._original[currentTimeField]);
           setSurroundingTableData(data);
         }
+      },
+      onError: (err) => {
+        showErrorToast("Query failed", err?.message ?? String(err));
       },
     },
   );
@@ -236,6 +243,7 @@ export default function SurroundingLogs() {
       },
       onError: (err) => {
         console.log(err);
+        showErrorToast("Query failed", err?.message ?? String(err));
       },
     },
   );
