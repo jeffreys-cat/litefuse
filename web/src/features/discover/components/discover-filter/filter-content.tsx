@@ -340,6 +340,12 @@ function getFilterValue(formValues: FilterFormValues): Array<string | number> {
       .map(toTypedValue);
   }
 
+  if (formValues.operator === "like" || formValues.operator === "not like") {
+    const v = formValues.valueText;
+    const wrapped = v.includes("%") ? v : `%${v}%`;
+    return [wrapped];
+  }
+
   return [toTypedValue(formValues.valueText)];
 }
 

@@ -86,7 +86,15 @@ export function FilterContent(props: FilterContentProps) {
         newValue = [getValue(minValue), getValue(maxValue)];
       }
     } else if (value || typeof value === "number") {
-      newValue = [value];
+      if (
+        (operator.value === "like" || operator.value === "not like") &&
+        typeof value === "string" &&
+        !value.includes("%")
+      ) {
+        newValue = [`%${value}%`];
+      } else {
+        newValue = [value];
+      }
     }
 
     const newItem = {
