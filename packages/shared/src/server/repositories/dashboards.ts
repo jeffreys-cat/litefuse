@@ -42,10 +42,7 @@ const convertEnvFilterToClickhouseFilter = (filter: FilterState) => {
   ]);
 };
 
-const convertEnvFilterToDorisFilter = (
-  filter: FilterState,
-  prefix = "o",
-) => {
+const convertEnvFilterToDorisFilter = (filter: FilterState, prefix = "o") => {
   return createDorisFilterFromFilterState(filter, [
     {
       clickhouseSelect: "environment",

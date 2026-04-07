@@ -7,19 +7,19 @@ export const dashboardColumnDefinitions: UiColumnMappings = [
     uiTableName: "Trace Name",
     uiTableId: "traceName",
     clickhouseTableName: "traces",
-    clickhouseSelect: 't.`name`',
+    clickhouseSelect: "t.`name`",
   },
   {
     uiTableName: "Tags",
     uiTableId: "traceTags",
     clickhouseTableName: "traces",
-    clickhouseSelect: 't.`tags`',
+    clickhouseSelect: "t.`tags`",
   },
   {
     uiTableName: "Timestamp",
     uiTableId: "timestamp",
     clickhouseTableName: "traces",
-    clickhouseSelect: 't.`timestamp`',
+    clickhouseSelect: "t.`timestamp`",
   },
   {
     clickhouseTableName: "scores",
