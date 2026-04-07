@@ -84,9 +84,9 @@ export default function UserPage() {
               Dashboard
             </ActionButton>
             <DetailPageNav
-              currentId={encodeURIComponent(userId)}
+              currentId={userId}
               path={(entry) =>
-                `/project/${projectId}/users/${encodeURIComponent(entry.id)}`
+                `/project/${projectId}/users/${entry.id}`
               }
               listKey="users"
             />
