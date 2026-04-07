@@ -32,7 +32,7 @@ const notifications: SidebarNotification[] = [
     title: "Star Langfuse",
     description:
       "See the latest releases and help grow the community on GitHub",
-    link: "https://github.com/langfuse/langfuse",
+    link: "https://github.com/selectdb/langfuse-doris",
     linkContent: (
       // eslint-disable-next-line @next/next/no-img-element
       <img

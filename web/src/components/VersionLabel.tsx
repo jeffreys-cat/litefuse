@@ -129,7 +129,7 @@ export const VersionLabel = ({ className }: { className?: string }) => {
         )}
         <DropdownMenuItem asChild>
           <Link
-            href="https://github.com/langfuse/langfuse/releases"
+            href="https://github.com/selectdb/langfuse-doris/releases"
             target="_blank"
           >
             <Github size={16} className="mr-2" />

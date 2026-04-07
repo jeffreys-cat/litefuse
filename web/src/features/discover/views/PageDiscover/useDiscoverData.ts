@@ -469,7 +469,7 @@ export function useDiscoverData() {
   useEffect(() => {
     refreshData({ skipPageReset: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentDate, currentTimeField, dataFilter, interval]);
+  }, [currentDate, currentTimeField, dataFilter, interval, currentTable]);
 
   return {
     loading,

@@ -1296,7 +1296,7 @@ describe("/api/public/v2/prompts API Endpoint", () => {
       expect(body.meta.totalItems).toBe(3);
 
       // Validate pagination backwards compatibility
-      // https://github.com/langfuse/langfuse/issues/2068
+      // https://github.com/selectdb/langfuse-doris/issues/2068
       expect(body.pagination?.page).toBe(1);
       expect(body.pagination?.limit).toBe(10);
       expect(body.pagination?.totalPages).toBe(1);

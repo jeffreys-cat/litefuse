@@ -797,7 +797,10 @@ export function convertRowsToTableData(
     const out: Record<string, any> = {};
     for (const [key, value] of Object.entries(row)) {
       if (value instanceof Date) {
-        out[key] = formatTimestampToDateTime(value);
+        // Store as UTC string to match what Doris stores, so SQL comparisons
+        // (e.g. surrounding logs WHERE timeField > '...') work correctly.
+        // Display code calls formatTimestampToDateTime() separately which converts UTC→local.
+        out[key] = dayjs.utc(value).format("YYYY-MM-DD HH:mm:ss.SSS");
       } else if (
         typeof value === "string" &&
         shouldParseVariantJsonString(value)

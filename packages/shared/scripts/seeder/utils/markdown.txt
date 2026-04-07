@@ -263,4 +263,4 @@ With proper implementation of Langfuse tracing, you can:
 ### Next Steps
 1. Review the [official documentation](https://langfuse.com/docs)
 2. Join our [Discord community](https://discord.gg/langfuse)
-3. Check out [example projects](https://github.com/langfuse/langfuse)
+3. Check out [example projects](https://github.com/selectdb/langfuse-doris)

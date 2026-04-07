@@ -267,7 +267,6 @@ export function ObservationDetailView({
         projectId={projectId}
         traceId={traceId}
         latencySeconds={latencySeconds}
-        observationScores={observationScores}
         commentCount={comments.get(observation.id)}
         pendingSelection={pendingSelection}
         onSelectionUsed={handleSelectionUsed}
