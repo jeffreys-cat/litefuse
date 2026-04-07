@@ -45,6 +45,7 @@ import { useCommentedPaths } from "@/src/features/comments/hooks/useCommentedPat
 import { TraceDetailViewHeader } from "./TraceDetailViewHeader";
 import { TraceLogView } from "../TraceLogView/TraceLogView";
 import { TRACE_VIEW_CONFIG } from "@/src/components/trace2/config/trace-view-config";
+import ScoresTable from "@/src/components/table/use-cases/scores";
 import { getMostRecentCorrection } from "@/src/features/corrections/utils/getMostRecentCorrection";
 
 export interface TraceDetailViewProps {
