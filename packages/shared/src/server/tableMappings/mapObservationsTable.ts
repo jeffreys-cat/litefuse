@@ -366,21 +366,21 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokensPerSecond",
     tableName: "observations",
     select:
-      "(sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))) / (milliseconds_diff(any_value(end_time),any_value(start_time)) / 1000)",
+      "if(isNull(end_time) OR milliseconds_diff(end_time, start_time) = 0, NULL, COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0) / (milliseconds_diff(end_time, start_time) / 1000))",
   },
   {
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     tableName: "observations",
     select:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'input'),cost_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     tableName: "observations",
     select:
-      "sum(if(MAP_CONTAINS_KEY(cost_details,'output'),cost_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)",
   },
   {
     uiTableName: "Total Cost ($)",
@@ -418,7 +418,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "inputTokens",
     tableName: "observations",
     select:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'input'),usage_details['input'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -426,7 +426,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "outputTokens",
     tableName: "observations",
     select:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'output'),usage_details['output'],0))",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -434,7 +434,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "totalTokens",
     tableName: "observations",
     select:
-      "sum(if(MAP_CONTAINS_KEY(usage_details,'total'),usage_details['total'],0))",
+      "if(MAP_CONTAINS_KEY(usage_details,'total'), usage_details['total'], NULL)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -461,13 +461,13 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
   },
   {
     uiTableName: "Scores (numeric)",
-    uiTableId: "scores",
+    uiTableId: "scores_avg",
     tableName: "scores",
     select: "s.scores_avg",
   },
   {
     uiTableName: "Scores (categorical)",
-    uiTableId: "scores",
+    uiTableId: "score_categories",
     tableName: "scores",
     select: "s.score_categories",
   },
@@ -488,5 +488,29 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "promptVersion",
     tableName: "observations",
     select: "o.prompt_version",
+  },
+  {
+    uiTableName: "Available Tools",
+    uiTableId: "toolDefinitions",
+    tableName: "observations",
+    select: "map_size(o.tool_definitions)",
+  },
+  {
+    uiTableName: "Tool Calls",
+    uiTableId: "toolCalls",
+    tableName: "observations",
+    select: "array_size(o.tool_calls)",
+  },
+  {
+    uiTableName: "Tool Names",
+    uiTableId: "toolNames",
+    tableName: "observations",
+    select: "map_keys(o.tool_definitions)",
+  },
+  {
+    uiTableName: "Called Tool Names",
+    uiTableId: "calledToolNames",
+    tableName: "observations",
+    select: "o.tool_call_names",
   },
 ];
