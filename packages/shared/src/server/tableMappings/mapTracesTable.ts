@@ -379,13 +379,13 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
   },
   {
     uiTableName: "Scores (numeric)",
-    uiTableId: "scores",
+    uiTableId: "scores_avg",
     tableName: "scores",
     select: "s.scores_avg",
   },
   {
     uiTableName: "Scores (categorical)",
-    uiTableId: "scores",
+    uiTableId: "score_categories",
     tableName: "scores",
     select: "s.score_categories",
   },
