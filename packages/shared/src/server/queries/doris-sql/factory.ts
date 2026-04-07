@@ -1,7 +1,7 @@
 import z from "zod/v4";
 import { singleFilter } from "../../../interfaces/filters";
 import { FilterCondition } from "../../../types";
-import { isValidTableName } from "../../clickhouse/schemaUtils";
+import { isValidTableName } from "../../doris/schemaUtils";
 import { logger } from "../../logger";
 import { UiColumnMappings } from "../../../tableDefinitions";
 import {
@@ -44,32 +44,32 @@ export const createDorisFilterFromFilterState = (
       switch (frontEndFilter.type) {
         case "string":
           return new StringFilter({
-            dorisTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             value: frontEndFilter.value,
             tablePrefix: column.queryPrefix,
           });
         case "datetime":
           return new DateTimeFilter({
-            table: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             value: frontEndFilter.value,
             tablePrefix: column.queryPrefix,
           });
         case "stringOptions":
           return new StringOptionsFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             values: frontEndFilter.value,
             tablePrefix: column.queryPrefix,
           });
         case "categoryOptions":
           return new CategoryOptionsFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             key: frontEndFilter.key,
             values: frontEndFilter.value,
@@ -77,33 +77,33 @@ export const createDorisFilterFromFilterState = (
           });
         case "number":
           return new NumberFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             value: frontEndFilter.value,
             tablePrefix: column.queryPrefix,
-            clickhouseTypeOverwrite: column.clickhouseTypeOverwrite,
+            typeOverwrite: column.typeOverwrite,
           });
         case "arrayOptions":
           return new ArrayOptionsFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             values: frontEndFilter.value,
             tablePrefix: column.queryPrefix,
           });
         case "boolean":
           return new BooleanFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             value: frontEndFilter.value,
             operator: frontEndFilter.operator,
             tablePrefix: column.queryPrefix,
           });
         case "numberObject":
           return new NumberObjectFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             key: frontEndFilter.key,
             operator: frontEndFilter.operator,
             value: frontEndFilter.value,
@@ -111,8 +111,8 @@ export const createDorisFilterFromFilterState = (
           });
         case "stringObject":
           return new StringObjectFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             key: frontEndFilter.key,
             value: frontEndFilter.value,
@@ -120,8 +120,8 @@ export const createDorisFilterFromFilterState = (
           });
         case "null":
           return new NullFilter({
-            clickhouseTable: column.clickhouseTableName,
-            field: column.clickhouseSelect,
+            table: column.tableName,
+            field: column.select,
             operator: frontEndFilter.operator,
             tablePrefix: column.queryPrefix,
           });
@@ -153,9 +153,9 @@ const matchAndVerifyTracesUiColumn = (
     );
   }
 
-  if (!isValidTableName(uiTable.clickhouseTableName)) {
+  if (!isValidTableName(uiTable.tableName)) {
     throw new QueryBuilderError(
-      `Invalid doris table name: ${uiTable.clickhouseTableName}`,
+      `Invalid doris table name: ${uiTable.tableName}`,
     );
   }
 
@@ -173,7 +173,7 @@ export function getDorisProjectIdDefaultFilter(
   return {
     tracesFilter: new FilterList([
       new StringFilter({
-        dorisTable: "traces",
+        table: "traces",
         field: "project_id",
         operator: "=",
         value: projectId,
@@ -182,7 +182,7 @@ export function getDorisProjectIdDefaultFilter(
     ]),
     scoresFilter: new FilterList([
       new StringFilter({
-        dorisTable: "scores",
+        table: "scores",
         field: "project_id",
         operator: "=",
         value: projectId,
@@ -191,7 +191,7 @@ export function getDorisProjectIdDefaultFilter(
     ]),
     observationsFilter: new FilterList([
       new StringFilter({
-        dorisTable: "observations",
+        table: "observations",
         field: "project_id",
         operator: "=",
         value: projectId,

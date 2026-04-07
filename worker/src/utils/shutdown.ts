@@ -1,7 +1,7 @@
-import { ClickHouseClientManager, logger } from "@langfuse/shared/src/server";
+import { DorisClientManager, logger } from "@langfuse/shared/src/server";
 import { redis } from "@langfuse/shared/src/server";
 
-import { ClickhouseWriter } from "../services/ClickhouseWriter";
+import { DorisWriter } from "../services/DorisWriter";
 import { setSigtermReceived } from "../features/health";
 import { server } from "../index";
 import { freeAllTokenizers } from "../features/tokenisation/usage";
@@ -54,9 +54,9 @@ export const onShutdown: NodeJS.SignalsListener = async (signal) => {
   // Shutdown background migrations
   await BackgroundMigrationManager.close();
 
-  // Flush all pending writes to Clickhouse AFTER closing ingestion queue worker that is writing to it
-  await ClickhouseWriter.getInstance().shutdown();
-  logger.info("Clickhouse writer has been shut down.");
+  // Flush all pending writes to Doris AFTER closing ingestion queue worker that is writing to it
+  await DorisWriter.getInstance().shutdown();
+  logger.info("Doris writer has been shut down.");
 
   redis?.disconnect();
   logger.info("Redis connection has been closed.");
@@ -64,8 +64,8 @@ export const onShutdown: NodeJS.SignalsListener = async (signal) => {
   await prisma.$disconnect();
   logger.info("Prisma connection has been closed.");
 
-  // Shutdown clickhouse connections
-  await ClickHouseClientManager.getInstance().closeAllConnections();
+  // Shutdown Doris connections
+  await DorisClientManager.getInstance().closeAllConnections();
 
   // Shutdown tokenization worker threads
   try {

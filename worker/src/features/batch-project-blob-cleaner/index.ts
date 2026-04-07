@@ -1,9 +1,9 @@
 import {
   getDeletedProjects,
   logger,
-  queryClickhouse,
+  queryDoris,
   recordIncrement,
-  removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject,
+  removeIngestionEventsFromS3AndDeleteDorisRefsForProject,
   traceException,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
@@ -18,8 +18,8 @@ const METRIC_PREFIX = "langfuse.batch_project_blob_cleaner";
  * ingestion events often have their monolithic job killed mid-flight (deploys, OOM,
  * timeouts). This cleaner picks the soft-deleted project with the most remaining
  * blob refs and attempts a full cleanup per iteration. The underlying
- * removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject streams internally
- * in batches of 500 with CH soft-delete — if interrupted mid-stream, partial
+ * removeIngestionEventsFromS3AndDeleteDorisRefsForProject streams internally
+ * in batches of 500 with Doris soft-delete — if interrupted mid-stream, partial
  * progress is preserved and the next run picks up where it left off, so both
  * this cleaner and the queue job have less work on retry.
  */
@@ -114,7 +114,7 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
     return (
       (await this.withLock(
         async () => {
-          await removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject(
+          await removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
             projectId,
             undefined, // no cutoff — delete all
           );
@@ -141,7 +141,7 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
       return new Map();
     }
 
-    const results = await queryClickhouse<{
+    const results = await queryDoris<{
       project_id: string;
       count: string;
     }>({

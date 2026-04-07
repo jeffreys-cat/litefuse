@@ -1,43 +1,17 @@
 import { OrderByState } from "../../interfaces/orderBy";
-import {
-  tracesTableUiColumnDefinitions,
-  tracesTableUiColumnDefinitionsForDoris,
-} from "../tableMappings";
-import { tracesTableCols } from "../../tableDefinitions/tracesTable";
+import { tracesTableUiColumnDefinitionsForDoris } from "../tableMappings";
 import { FilterState } from "../../types";
-import {
-  StringFilter,
-  StringOptionsFilter,
-  DateTimeFilter,
-} from "../queries/clickhouse-sql/clickhouse-filter";
-import {
-  getProjectIdDefaultFilter,
-  createFilterFromFilterState,
-} from "../queries/clickhouse-sql/factory";
-import { orderByToClickhouseSql } from "../queries/clickhouse-sql/orderby-factory";
-import { clickhouseSearchCondition } from "../queries/clickhouse-sql/search";
+
 import { TraceRecordReadType } from "../repositories/definitions";
 import Decimal from "decimal.js";
 import { ScoreAggregate } from "../../features/scores";
-import {
-  OBSERVATIONS_TO_TRACE_INTERVAL,
-  SCORE_TO_TRACE_OBSERVATIONS_INTERVAL,
-  parseClickhouseUTCDateTimeFormat,
-  queryClickhouse,
-  reduceUsageOrCostDetails,
-} from "../repositories";
-import { measureAndReturn } from "../clickhouse/measureAndReturn";
+import { reduceUsageOrCostDetails } from "../repositories";
 import { TracingSearchType } from "../../interfaces/search";
 import { ObservationLevelType, TraceDomain } from "../../domain";
-import { ClickHouseClientConfigOptions } from "@clickhouse/client";
-import { shouldSkipObservationsFinal } from "../queries/clickhouse-sql/query-options";
 // Doris imports
-import {
-  isDorisBackend,
-  convertDateToAnalyticsDateTime,
-  dq,
-} from "../repositories/analytics";
+import { convertDateToAnalyticsDateTime, dq } from "../repositories/analytics";
 import { queryDoris } from "../repositories/doris";
+import { parseDorisUTCDateTimeFormat } from "../repositories/doris";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -48,10 +22,7 @@ import {
   DateTimeFilter as DorisDateTimeFilter,
 } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
-import {
-  dorisSearchCondition,
-  DorisSearchContext,
-} from "../queries/doris-sql/search";
+import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { logger } from "../logger";
 
 export type TracesTableReturnType = Pick<
@@ -116,7 +87,7 @@ export const convertToUiTableRows = (
   const timestamp =
     timestampValue instanceof Date
       ? (timestampValue as Date)
-      : parseClickhouseUTCDateTimeFormat(row.timestamp as string);
+      : parseDorisUTCDateTimeFormat(row.timestamp as string);
 
   return {
     id: row.id,
@@ -134,7 +105,7 @@ export const convertToUiTableRows = (
   };
 };
 
-export type TracesTableMetricsClickhouseReturnType = {
+export type TracesTableMetricsDorisReturnType = {
   id: string;
   project_id: string;
   timestamp: Date;
@@ -152,7 +123,7 @@ export type TracesTableMetricsClickhouseReturnType = {
 };
 
 export const convertToUITableMetrics = (
-  row: TracesTableMetricsClickhouseReturnType,
+  row: TracesTableMetricsDorisReturnType,
 ): Omit<TracesMetricsUiReturnType, "scores"> => {
   const usageDetails = reduceUsageOrCostDetails(row.usage_details);
 
@@ -206,14 +177,13 @@ export type FetchTracesTableProps = {
   orderBy?: OrderByState;
   limit?: number;
   page?: number;
-  clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
   tags?: Record<string, string>;
 };
 
 // Define return type mapping for better type safety
 type SelectReturnTypeMap = {
   count: { count: string };
-  metrics: TracesTableMetricsClickhouseReturnType;
+  metrics: TracesTableMetricsDorisReturnType;
   rows: TracesTableReturnType;
   identifiers: { id: string; projectId: string; timestamp: string };
 };
@@ -250,11 +220,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     page,
     searchQuery,
     searchType,
-    clickhouseConfigs,
   } = props;
-
-  // OTel projects use immutable spans - no need for deduplication
-  const skipObservationsDedup = await shouldSkipObservationsFinal(projectId);
 
   // Shared SELECT statement generation logic (used by Doris path)
   let sqlSelect: string;
@@ -305,112 +271,111 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       throw new Error(`Unknown select type: ${select}`);
   }
 
-  if (isDorisBackend()) {
-    const { tracesFilter, scoresFilter, observationsFilter } =
-      getDorisProjectIdDefaultFilter(projectId, { tracesPrefix: "t" });
+  const { tracesFilter, scoresFilter, observationsFilter } =
+    getDorisProjectIdDefaultFilter(projectId, { tracesPrefix: "t" });
 
-    tracesFilter.push(
-      ...createDorisFilterFromFilterState(
-        filter,
-        tracesTableUiColumnDefinitionsForDoris,
-      ),
-    );
+  tracesFilter.push(
+    ...createDorisFilterFromFilterState(
+      filter,
+      tracesTableUiColumnDefinitionsForDoris,
+    ),
+  );
 
-    const traceIdFilter = tracesFilter.find(
-      (f) => f.table === "traces" && f.field === "id",
-    ) as DorisStringFilter | DorisStringOptionsFilter | undefined;
+  const traceIdFilter = tracesFilter.find(
+    (f) => f.table === "traces" && f.field === "id",
+  ) as DorisStringFilter | DorisStringOptionsFilter | undefined;
 
-    traceIdFilter
-      ? scoresFilter.push(
-          new DorisStringOptionsFilter({
-            clickhouseTable: "scores",
-            field: "trace_id",
-            operator: "any of",
-            values:
-              traceIdFilter instanceof DorisStringFilter
-                ? [traceIdFilter.value]
-                : traceIdFilter.values,
-          }),
-        )
-      : null;
-    traceIdFilter
-      ? observationsFilter.push(
-          new DorisStringOptionsFilter({
-            clickhouseTable: "observations",
-            field: "trace_id",
-            operator: "any of",
-            values:
-              traceIdFilter instanceof DorisStringFilter
-                ? [traceIdFilter.value]
-                : traceIdFilter.values,
-          }),
-        )
-      : null;
+  traceIdFilter
+    ? scoresFilter.push(
+        new DorisStringOptionsFilter({
+          table: "scores",
+          field: "trace_id",
+          operator: "any of",
+          values:
+            traceIdFilter instanceof DorisStringFilter
+              ? [traceIdFilter.value]
+              : traceIdFilter.values,
+        }),
+      )
+    : null;
+  traceIdFilter
+    ? observationsFilter.push(
+        new DorisStringOptionsFilter({
+          table: "observations",
+          field: "trace_id",
+          operator: "any of",
+          values:
+            traceIdFilter instanceof DorisStringFilter
+              ? [traceIdFilter.value]
+              : traceIdFilter.values,
+        }),
+      )
+    : null;
 
-    const timeStampFilter = tracesFilter.find(
-      (f) =>
-        f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
-    ) as DorisDateTimeFilter | undefined;
+  const timeStampFilter = tracesFilter.find(
+    (f) =>
+      f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
+  ) as DorisDateTimeFilter | undefined;
 
-    const requiresScoresJoin =
-      tracesFilter.find((f) => f.table === "scores") !== undefined ||
-      tracesTableUiColumnDefinitionsForDoris.find(
-        (c) =>
-          c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
-      )?.clickhouseTableName === "scores";
+  const requiresScoresJoin =
+    tracesFilter.find((f) => f.table === "scores") !== undefined ||
+    tracesTableUiColumnDefinitionsForDoris.find(
+      (c) =>
+        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
+    )?.tableName === "scores";
 
-    const requiresObservationsJoin =
-      tracesFilter.find((f) => f.table === "observations") !== undefined ||
-      tracesTableUiColumnDefinitionsForDoris.find(
-        (c) =>
-          c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
-      )?.clickhouseTableName === "observations";
+  const requiresObservationsJoin =
+    tracesFilter.find((f) => f.table === "observations") !== undefined ||
+    tracesTableUiColumnDefinitionsForDoris.find(
+      (c) =>
+        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
+    )?.tableName === "observations";
 
-    const tracesFilterRes = tracesFilter.apply();
-    const scoresFilterRes = scoresFilter.apply();
-    const observationFilterRes = observationsFilter.apply();
+  const tracesFilterRes = tracesFilter.apply();
+  const scoresFilterRes = scoresFilter.apply();
+  const observationFilterRes = observationsFilter.apply();
 
-    const search = dorisSearchCondition(searchQuery, searchType, {
-      type: "traces",
-    });
+  const search = dorisSearchCondition(searchQuery, searchType, {
+    type: "traces",
+  });
 
-    const defaultOrder = orderBy?.order && orderBy?.column === "timestamp";
-    const orderByCols = [
-      ...tracesTableUiColumnDefinitionsForDoris,
-      {
-        clickhouseSelect: "DATE(t.timestamp)",
-        uiTableName: "timestamp_to_date",
-        uiTableId: "timestamp_to_date",
-        clickhouseTableName: "traces",
-      },
-      {
-        clickhouseSelect: "t.event_ts",
-        uiTableName: "event_ts",
-        uiTableId: "event_ts",
-        clickhouseTableName: "traces",
-      },
-    ];
-    const dorisOrderBy = orderByToDorisSQL(
-      [
-        defaultOrder
-          ? [
-              {
-                column: "timestamp_to_date",
-                order: orderBy.order,
-              },
-              { column: "timestamp", order: orderBy.order },
-              { column: "event_ts", order: "DESC" as "DESC" },
-            ]
-          : null,
-        orderBy ?? null,
-      ].flat(),
-      orderByCols,
-    );
+  const defaultOrder = orderBy?.order && orderBy?.column === "timestamp";
+  const orderByCols = [
+    ...tracesTableUiColumnDefinitionsForDoris,
+    {
+      select: "DATE(t.timestamp)",
+      uiTableName: "timestamp_to_date",
+      uiTableId: "timestamp_to_date",
+      tableName: "traces",
+    },
+    {
+      select: "t.event_ts",
+      uiTableName: "event_ts",
+      uiTableId: "event_ts",
+      tableName: "traces",
+    },
+  ];
+  const dorisOrderBy = orderByToDorisSQL(
+    [
+      defaultOrder
+        ? [
+            {
+              column: "timestamp_to_date",
+              order: orderBy.order,
+            },
+            { column: "timestamp", order: orderBy.order },
+            { column: "event_ts", order: "DESC" as "DESC" },
+          ]
+        : null,
+      orderBy ?? null,
+    ].flat(),
+    orderByCols,
+  );
 
-    // Doris version of the complex query
-    const observations_stats_cte =
-      select === "metrics" || requiresObservationsJoin
-        ? `
+  // Doris version of the complex query
+  const observations_stats_cte =
+    select === "metrics" || requiresObservationsJoin
+      ? `
       observations_stats AS (
         SELECT
           agg.trace_id,
@@ -494,11 +459,11 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           GROUP BY trace_id, project_id
         ) cost_maps ON agg.trace_id = cost_maps.trace_id AND agg.project_id = cost_maps.project_id
       )`
-        : "";
+      : "";
 
-    const scores_avg_cte =
-      select === "metrics" || requiresScoresJoin
-        ? `
+  const scores_avg_cte =
+    select === "metrics" || requiresScoresJoin
+      ? `
       scores_avg AS (
         SELECT
           project_id,
@@ -545,13 +510,13 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         ) tmp
         GROUP BY project_id, trace_id
       )`
-        : "";
+      : "";
 
-    const withClause = [observations_stats_cte, scores_avg_cte]
-      .filter(Boolean)
-      .join(",\n");
+  const withClause = [observations_stats_cte, scores_avg_cte]
+    .filter(Boolean)
+    .join(",\n");
 
-    const query = `
+  const query = `
       ${withClause ? `WITH ${withClause}` : ""}
       SELECT ${sqlSelect}
       FROM traces t
@@ -565,468 +530,190 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
     `;
 
-    // Define Doris-specific return type for metrics
-    type DorisMetricsReturnType = Omit<
-      TracesTableMetricsClickhouseReturnType,
-      "scores_avg" | "score_categories" | "usage_details" | "cost_details"
-    > & {
-      scores_avg: string | Array<string>; // Doris format: JSON string or array
-      score_categories: string | Array<string>; // JSON string or array
-      usage_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
-      cost_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
-    };
+  // Define Doris-specific return type for metrics
+  type DorisMetricsReturnType = Omit<
+    TracesTableMetricsDorisReturnType,
+    "scores_avg" | "score_categories" | "usage_details" | "cost_details"
+  > & {
+    scores_avg: string | Array<string>; // Doris format: JSON string or array
+    score_categories: string | Array<string>; // JSON string or array
+    usage_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
+    cost_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
+  };
 
-    const res = await queryDoris<
-      SelectReturnTypeMap[keyof SelectReturnTypeMap]
-    >({
-      query: query,
-      params: {
-        limit: limit,
-        offset: limit && page ? limit * page : 0,
-        ...(timeStampFilter
-          ? {
-              traceTimestamp: convertDateToAnalyticsDateTime(
-                timeStampFilter.value,
-              ),
-            }
-          : {}),
-        projectId: projectId,
-        ...tracesFilterRes.params,
-        ...observationFilterRes.params,
-        ...scoresFilterRes.params,
-        ...search.params,
-      },
-      tags: {
-        ...(props.tags ?? {}),
-        feature: "tracing",
-        type: "traces-table",
-        projectId,
-      },
-    });
+  const res = await queryDoris<SelectReturnTypeMap[keyof SelectReturnTypeMap]>({
+    query: query,
+    params: {
+      limit: limit,
+      offset: limit && page ? limit * page : 0,
+      ...(timeStampFilter
+        ? {
+            traceTimestamp: convertDateToAnalyticsDateTime(
+              timeStampFilter.value,
+            ),
+          }
+        : {}),
+      projectId: projectId,
+      ...tracesFilterRes.params,
+      ...observationFilterRes.params,
+      ...scoresFilterRes.params,
+      ...search.params,
+    },
+    tags: {
+      ...(props.tags ?? {}),
+      feature: "tracing",
+      type: "traces-table",
+      projectId,
+    },
+  });
 
-    // Post-process Doris results to match ClickHouse format
-    if (select === "metrics") {
-      const processedRes = (res as unknown as DorisMetricsReturnType[]).map(
-        (row) => {
-          // Helper function to parse details fields (usage_details, cost_details)
-          const parseDetails = (
-            details: string | Record<string, number> | null,
-          ): Record<string, number> => {
-            if (!details) {
+  // Post-process Doris results to match ClickHouse format
+  if (select === "metrics") {
+    const processedRes = (res as unknown as DorisMetricsReturnType[]).map(
+      (row) => {
+        // Helper function to parse details fields (usage_details, cost_details)
+        const parseDetails = (
+          details: string | Record<string, number> | null,
+        ): Record<string, number> => {
+          if (!details) {
+            return {};
+          }
+
+          // If already an object (ClickHouse format), return as is
+          if (typeof details === "object" && !Array.isArray(details)) {
+            return details;
+          }
+
+          // If it's a string (Doris format), parse it
+          if (typeof details === "string") {
+            const trimmed = details.trim();
+
+            // Handle common null/empty cases
+            if (!trimmed || trimmed === "null" || trimmed === "NULL") {
               return {};
             }
 
-            // If already an object (ClickHouse format), return as is
-            if (typeof details === "object" && !Array.isArray(details)) {
-              return details;
+            // Handle empty object/array cases
+            if (trimmed === "{}" || trimmed === "[]") {
+              return {};
             }
 
-            // If it's a string (Doris format), parse it
-            if (typeof details === "string") {
-              const trimmed = details.trim();
-
-              // Handle common null/empty cases
-              if (!trimmed || trimmed === "null" || trimmed === "NULL") {
-                return {};
-              }
-
-              // Handle empty object/array cases
-              if (trimmed === "{}" || trimmed === "[]") {
-                return {};
-              }
-
-              try {
-                const parsed = JSON.parse(trimmed);
-                if (typeof parsed === "object" && !Array.isArray(parsed)) {
-                  // Convert values to numbers
-                  const result: Record<string, number> = {};
-                  for (const [key, value] of Object.entries(parsed)) {
-                    result[key] = Number(value) || 0;
-                  }
-                  return result;
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (typeof parsed === "object" && !Array.isArray(parsed)) {
+                // Convert values to numbers
+                const result: Record<string, number> = {};
+                for (const [key, value] of Object.entries(parsed)) {
+                  result[key] = Number(value) || 0;
                 }
-                return {};
-              } catch (error) {
-                logger.warn("Failed to parse details JSON:", {
-                  error,
-                  rawValue: trimmed.substring(0, 100),
-                });
-                return {};
+                return result;
               }
+              return {};
+            } catch (error) {
+              logger.warn("Failed to parse details JSON:", {
+                error,
+                rawValue: trimmed.substring(0, 100),
+              });
+              return {};
             }
-
-            return {};
-          };
-
-          // Convert Doris string array format to ClickHouse object array format
-          const parsedScoresAvg: Array<{ name: string; avg_value: number }> =
-            [];
-
-          // Handle scores_avg - could be string or array
-          let scoresAvgArray: string[] = [];
-          if (typeof row.scores_avg === "string") {
-            try {
-              scoresAvgArray = JSON.parse(row.scores_avg);
-            } catch {
-              scoresAvgArray = [];
-            }
-          } else if (Array.isArray(row.scores_avg)) {
-            scoresAvgArray = row.scores_avg;
           }
 
-          scoresAvgArray
-            .filter((s) => s && s.includes(":"))
-            .forEach((scoreStr) => {
-              const [name, value] = scoreStr.split(":");
-              if (name && value) {
-                parsedScoresAvg.push({
-                  name: name,
-                  avg_value: parseFloat(value) || 0,
-                });
-              }
-            });
+          return {};
+        };
 
-          // Handle score_categories - could be string or array
-          let scoreCategoriesArray: string[] = [];
-          if (typeof row.score_categories === "string") {
-            try {
-              scoreCategoriesArray = JSON.parse(row.score_categories);
-            } catch {
-              scoreCategoriesArray = [];
-            }
-          } else if (Array.isArray(row.score_categories)) {
-            scoreCategoriesArray = row.score_categories;
+        // Convert Doris string array format to ClickHouse object array format
+        const parsedScoresAvg: Array<{ name: string; avg_value: number }> = [];
+
+        // Handle scores_avg - could be string or array
+        let scoresAvgArray: string[] = [];
+        if (typeof row.scores_avg === "string") {
+          try {
+            scoresAvgArray = JSON.parse(row.scores_avg);
+          } catch {
+            scoresAvgArray = [];
           }
+        } else if (Array.isArray(row.scores_avg)) {
+          scoresAvgArray = row.scores_avg;
+        }
 
-          // Return row with ClickHouse-compatible format
-          return {
-            ...row,
-            scores_avg: parsedScoresAvg,
-            score_categories: scoreCategoriesArray,
-            usage_details: parseDetails(row.usage_details),
-            cost_details: parseDetails(row.cost_details),
-          } as TracesTableMetricsClickhouseReturnType;
-        },
-      );
-
-      return processedRes as Array<
-        SelectReturnTypeMap[keyof SelectReturnTypeMap]
-      >;
-    }
-
-    // Post-process Doris results for rows to ensure tags field is properly formatted as array
-    if (select === "rows") {
-      const processedRes = (res as unknown as TracesTableReturnType[]).map(
-        (row) => {
-          // Ensure tags is always an array
-          let processedTags: string[] = [];
-
-          if (Array.isArray(row.tags)) {
-            processedTags = row.tags;
-          } else if (typeof row.tags === "string") {
-            try {
-              // Try to parse as JSON array
-              const parsed = JSON.parse(row.tags);
-              processedTags = Array.isArray(parsed) ? parsed : [row.tags];
-            } catch {
-              // If parsing fails, treat as single tag
-              processedTags = row.tags ? [row.tags] : [];
+        scoresAvgArray
+          .filter((s) => s && s.includes(":"))
+          .forEach((scoreStr) => {
+            const [name, value] = scoreStr.split(":");
+            if (name && value) {
+              parsedScoresAvg.push({
+                name: name,
+                avg_value: parseFloat(value) || 0,
+              });
             }
-          } else if (row.tags == null) {
-            processedTags = [];
-          } else {
-            // Convert any other type to empty array
-            processedTags = [];
+          });
+
+        // Handle score_categories - could be string or array
+        let scoreCategoriesArray: string[] = [];
+        if (typeof row.score_categories === "string") {
+          try {
+            scoreCategoriesArray = JSON.parse(row.score_categories);
+          } catch {
+            scoreCategoriesArray = [];
           }
+        } else if (Array.isArray(row.score_categories)) {
+          scoreCategoriesArray = row.score_categories;
+        }
 
-          return {
-            ...row,
-            tags: processedTags,
-          } as TracesTableReturnType;
-        },
-      );
+        // Return row with ClickHouse-compatible format
+        return {
+          ...row,
+          scores_avg: parsedScoresAvg,
+          score_categories: scoreCategoriesArray,
+          usage_details: parseDetails(row.usage_details),
+          cost_details: parseDetails(row.cost_details),
+        } as TracesTableMetricsDorisReturnType;
+      },
+    );
 
-      return processedRes as Array<
-        SelectReturnTypeMap[keyof SelectReturnTypeMap]
-      >;
-    }
-
-    return res;
+    return processedRes as Array<
+      SelectReturnTypeMap[keyof SelectReturnTypeMap]
+    >;
   }
 
-  // Original ClickHouse implementation continues below...
-  const { tracesFilter, scoresFilter, observationsFilter } =
-    getProjectIdDefaultFilter(projectId, { tracesPrefix: "t" });
+  // Post-process Doris results for rows to ensure tags field is properly formatted as array
+  if (select === "rows") {
+    const processedRes = (res as unknown as TracesTableReturnType[]).map(
+      (row) => {
+        // Ensure tags is always an array
+        let processedTags: string[] = [];
 
-  tracesFilter.push(
-    ...createFilterFromFilterState(
-      filter,
-      tracesTableUiColumnDefinitions,
-      tracesTableCols,
-    ),
-  );
+        if (Array.isArray(row.tags)) {
+          processedTags = row.tags;
+        } else if (typeof row.tags === "string") {
+          try {
+            // Try to parse as JSON array
+            const parsed = JSON.parse(row.tags);
+            processedTags = Array.isArray(parsed) ? parsed : [row.tags];
+          } catch {
+            // If parsing fails, treat as single tag
+            processedTags = row.tags ? [row.tags] : [];
+          }
+        } else if (row.tags == null) {
+          processedTags = [];
+        } else {
+          // Convert any other type to empty array
+          processedTags = [];
+        }
 
-  const traceIdFilter = tracesFilter.find(
-    (f) => f.table === "traces" && f.field === "id",
-  ) as StringFilter | StringOptionsFilter | undefined;
+        return {
+          ...row,
+          tags: processedTags,
+        } as TracesTableReturnType;
+      },
+    );
 
-  traceIdFilter
-    ? scoresFilter.push(
-        new StringOptionsFilter({
-          clickhouseTable: "scores",
-          field: "trace_id",
-          operator: "any of",
-          values:
-            traceIdFilter instanceof StringFilter
-              ? [traceIdFilter.value]
-              : traceIdFilter.values,
-        }),
-      )
-    : null;
-  traceIdFilter
-    ? observationsFilter.push(
-        new StringOptionsFilter({
-          clickhouseTable: "observations",
-          field: "trace_id",
-          operator: "any of",
-          values:
-            traceIdFilter instanceof StringFilter
-              ? [traceIdFilter.value]
-              : traceIdFilter.values,
-        }),
-      )
-    : null;
+    return processedRes as Array<
+      SelectReturnTypeMap[keyof SelectReturnTypeMap]
+    >;
+  }
 
-  // for query optimisation, we have to add the timeseries filter to observations + scores as well
-  // stats show, that 98% of all observations have their start_time larger than trace.timestamp - 5 min
-  const timeStampFilter = tracesFilter.find(
-    (f) =>
-      f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
-  ) as DateTimeFilter | undefined;
-
-  const requiresScoresJoin =
-    tracesFilter.find((f) => f.table === "scores") !== undefined ||
-    tracesTableUiColumnDefinitions.find(
-      (c) =>
-        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
-    )?.clickhouseTableName === "scores";
-
-  const requiresObservationsJoin =
-    tracesFilter.find((f) => f.table === "observations") !== undefined ||
-    tracesTableUiColumnDefinitions.find(
-      (c) =>
-        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
-    )?.clickhouseTableName === "observations";
-
-  const tracesFilterRes = tracesFilter.apply();
-  const scoresFilterRes = scoresFilter.apply();
-  const observationFilterRes = observationsFilter.apply();
-
-  const observationsAndScoresCTE = `
-    WITH observations_stats AS (
-      SELECT
-        COUNT(*) AS observation_count,
-        sumMap(usage_details) as usage_details,
-        SUM(total_cost) AS total_cost,
-        date_diff('millisecond', least(min(start_time), min(end_time)), greatest(max(start_time), max(end_time))) as latency_milliseconds,
-        countIf(level = 'ERROR') as error_count,
-        countIf(level = 'WARNING') as warning_count,
-        countIf(level = 'DEFAULT') as default_count,
-        countIf(level = 'DEBUG') as debug_count,
-        multiIf(
-          arrayExists(x -> x = 'ERROR', groupArray(level)), 'ERROR',
-          arrayExists(x -> x = 'WARNING', groupArray(level)), 'WARNING',
-          arrayExists(x -> x = 'DEFAULT', groupArray(level)), 'DEFAULT',
-          'DEBUG'
-        ) AS aggregated_level,
-        sumMap(cost_details) as cost_details,
-        trace_id,
-        project_id
-      FROM observations o ${skipObservationsDedup ? "" : "FINAL"}
-      WHERE o.project_id = {projectId: String}
-        ${timeStampFilter ? `AND o.start_time >= {traceTimestamp: DateTime64(3)} - ${OBSERVATIONS_TO_TRACE_INTERVAL}` : ""}
-        ${observationsFilter ? `AND ${observationFilterRes.query}` : ""}
-      GROUP BY trace_id, project_id
-    ),
-         scores_avg AS (
-           SELECT
-             project_id,
-             trace_id,
-             -- For numeric scores, use tuples of (name, avg_value)
-             groupArrayIf(
-               tuple(name, avg_value),
-               data_type IN ('NUMERIC', 'BOOLEAN')
-             ) AS scores_avg,
-             -- For categorical scores, use name:value format for improved query performance
-             groupArrayIf(
-               concat(name, ':', string_value),
-               data_type = 'CATEGORICAL' AND notEmpty(string_value)
-             ) AS score_categories
-           FROM (
-                  SELECT
-                    project_id,
-                    trace_id,
-                    name,
-                    data_type,
-                    string_value,
-                    avg(value) as avg_value
-                  FROM scores s FINAL
-                  WHERE
-                    project_id = {projectId: String}
-                    ${timeStampFilter ? `AND s.timestamp >= {traceTimestamp: DateTime64(3)} - ${SCORE_TO_TRACE_OBSERVATIONS_INTERVAL}` : ""}
-                    ${scoresFilterRes ? `AND ${scoresFilterRes.query}` : ""}
-                  GROUP BY
-                    project_id,
-                    trace_id,
-                    name,
-                    data_type,
-                    string_value
-                ) tmp
-           GROUP BY project_id, trace_id
-         )
-  `;
-
-  return measureAndReturn({
-    operationName: "getTracesTableGeneric",
-    projectId: props.projectId,
-    input: props,
-    fn: async (props) => {
-      let sqlSelect: string;
-      switch (select) {
-        case "count":
-          // Using uniqExact here as we need the correct count to handle pagination right
-          sqlSelect = "uniqExact(t.id) as count";
-          break;
-        case "metrics":
-          sqlSelect = `
-            t.id as id,
-            t.project_id as project_id,
-            t.timestamp as timestamp,
-            o.latency_milliseconds / 1000 as latency,
-            o.cost_details as cost_details,
-            o.usage_details as usage_details,
-            o.aggregated_level as level,
-            o.error_count as error_count,
-            o.warning_count as warning_count,
-            o.default_count as default_count,
-            o.debug_count as debug_count,
-            o.observation_count as observation_count,
-            s.scores_avg as scores_avg,
-            s.score_categories as score_categories,
-            t.public as public`;
-          break;
-        case "rows":
-          sqlSelect = `
-            t.id as id,
-            t.project_id as project_id,
-            t.timestamp as timestamp,
-            t.tags as tags,
-            t.bookmarked as bookmarked,
-            t.name as name,
-            t.release as release,
-            t.version as version,
-            t.user_id as user_id,
-            t.environment as environment,
-            t.session_id as session_id,
-            t.public as public`;
-          break;
-        case "identifiers":
-          sqlSelect = `
-            t.id as id,
-            t.project_id as projectId,
-            t.timestamp as timestamp`;
-          break;
-        default:
-          throw new Error(`Unknown select type: ${select}`);
-      }
-
-      const search = clickhouseSearchCondition(searchQuery, searchType, "t");
-
-      const defaultOrder = orderBy?.order && orderBy?.column === "timestamp";
-      const orderByCols = [
-        ...tracesTableUiColumnDefinitions,
-        {
-          clickhouseSelect: "toDate(t.timestamp)",
-          uiTableName: "timestamp_to_date",
-          uiTableId: "timestamp_to_date",
-          clickhouseTableName: "traces",
-        },
-        {
-          clickhouseSelect: "t.event_ts",
-          uiTableName: "event_ts",
-          uiTableId: "event_ts",
-          clickhouseTableName: "traces",
-        },
-      ];
-      const chOrderBy = orderByToClickhouseSql(
-        [
-          defaultOrder
-            ? [
-                {
-                  column: "timestamp_to_date",
-                  order: orderBy.order,
-                },
-                { column: "timestamp", order: orderBy.order },
-                { column: "event_ts", order: "DESC" as "DESC" },
-              ]
-            : null,
-          orderBy ?? null,
-        ].flat(),
-        orderByCols,
-      );
-
-      // complex query ahead:
-      // - we only join scores and observations if we really need them to speed up default views
-      // - we use FINAL on traces only in case we not need to order by something different than time. Otherwise we cannot guarantee correct reads.
-      // - we filter the observations and scores as much as possible before joining them to traces.
-      // - we order by todate(timestamp), event_ts desc per default and do not use FINAL.
-      //   In this case, CH is able to read the data only from the latest date from disk and filtering them in memory. No need to read all data e.g. for 1 month from disk.
-
-      const query = `
-        ${observationsAndScoresCTE}
-
-        SELECT ${sqlSelect}
-        -- FINAL is used for non default ordering.
-        FROM traces t  ${defaultOrder || select === "count" ? "" : "FINAL"}
-        ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats o on o.project_id = t.project_id and o.trace_id = t.id` : ""}
-        ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.id` : ""}
-        WHERE t.project_id = {projectId: String}
-        ${tracesFilterRes ? `AND ${tracesFilterRes.query}` : ""}
-        ${search.query}
-        ${chOrderBy}
-        -- This is used for metrics and row queries. Count has only one result.
-        -- This is only used for default ordering. Otherwise, we use final.
-        ${["metrics", "rows", "identifiers"].includes(select) && defaultOrder ? "LIMIT 1 BY id, project_id" : ""}
-        ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
-      `;
-
-      const res = await queryClickhouse<
-        SelectReturnTypeMap[keyof SelectReturnTypeMap]
-      >({
-        query: query,
-        params: {
-          limit: limit,
-          offset: limit && page ? limit * page : 0,
-          traceTimestamp: timeStampFilter?.value.getTime(),
-          projectId: projectId,
-          ...tracesFilterRes.params,
-          ...observationFilterRes.params,
-          ...scoresFilterRes.params,
-          ...search.params,
-        },
-        tags: {
-          ...(props.tags ?? {}),
-          feature: "tracing",
-          type: "traces-table",
-          projectId,
-          operation_name: "getTracesTableGeneric",
-        },
-        clickhouseConfigs,
-      });
-
-      return res;
-    },
-  });
+  return res;
 }
 
 export const getTracesTableCount = async (props: {
@@ -1058,7 +745,6 @@ export const getTracesTableMetrics = async (props: {
   orderBy?: OrderByState;
   limit?: number;
   page?: number;
-  clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 }): Promise<Array<Omit<TracesMetricsUiReturnType, "scores">>> => {
   const countRows = await getTracesTableGeneric({
     select: "metrics",
@@ -1077,18 +763,9 @@ export const getTracesTable = async (p: {
   orderBy?: OrderByState;
   limit?: number;
   page?: number;
-  clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 }) => {
-  const {
-    projectId,
-    filter,
-    searchQuery,
-    searchType,
-    orderBy,
-    limit,
-    page,
-    clickhouseConfigs,
-  } = p;
+  const { projectId, filter, searchQuery, searchType, orderBy, limit, page } =
+    p;
   const rows = await getTracesTableGeneric({
     select: "rows",
     tags: { kind: "list" },
@@ -1099,7 +776,6 @@ export const getTracesTable = async (p: {
     orderBy,
     limit,
     page,
-    clickhouseConfigs,
   });
 
   return rows.map(convertToUiTableRows);
@@ -1113,18 +789,9 @@ export const getTraceIdentifiers = async (props: {
   orderBy?: OrderByState;
   limit?: number;
   page?: number;
-  clickhouseConfigs?: ClickHouseClientConfigOptions | undefined;
 }) => {
-  const {
-    projectId,
-    filter,
-    searchQuery,
-    searchType,
-    orderBy,
-    limit,
-    page,
-    clickhouseConfigs,
-  } = props;
+  const { projectId, filter, searchQuery, searchType, orderBy, limit, page } =
+    props;
   const identifiers = await getTracesTableGeneric({
     select: "identifiers",
     tags: { kind: "list" },
@@ -1135,7 +802,6 @@ export const getTraceIdentifiers = async (props: {
     orderBy,
     limit,
     page,
-    clickhouseConfigs,
   });
 
   return identifiers.map((row) => ({
@@ -1146,6 +812,6 @@ export const getTraceIdentifiers = async (props: {
     timestamp:
       (row.timestamp as unknown) instanceof Date
         ? (row.timestamp as unknown as Date)
-        : parseClickhouseUTCDateTimeFormat(row.timestamp),
+        : parseDorisUTCDateTimeFormat(row.timestamp),
   }));
 };

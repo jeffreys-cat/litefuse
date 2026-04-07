@@ -3,17 +3,16 @@ import {
   ScoreDataTypeEnum,
   type ScoreDataTypeType,
   TracingSearchType,
-  tracesTableCols,
 } from "@langfuse/shared";
 import {
   getDistinctScoreNames,
-  queryClickhouseStream,
+  queryDorisStream,
   logger,
   FilterList,
   createFilterFromFilterState,
   tracesTableUiColumnDefinitions,
-  clickhouseSearchCondition,
-  parseClickhouseUTCDateTimeFormat,
+  dorisSearchCondition,
+  parseDorisUTCDateTimeFormat,
   StringFilter,
 } from "@langfuse/shared/src/server";
 import { Readable } from "stream";
@@ -44,17 +43,6 @@ export const getTraceStream = async (props: {
     rowLimit = env.BATCH_EXPORT_ROW_LIMIT,
   } = props;
 
-  const clickhouseConfigs = {
-    request_timeout: 180_000,
-    clickhouse_settings: {
-      join_algorithm: "partial_merge" as const,
-      // Increase HTTP timeouts to prevent Code 209 errors during slow blob storage uploads
-      // See: https://github.com/ClickHouse/ClickHouse/issues/64731
-      http_send_timeout: 300,
-      http_receive_timeout: 300,
-    },
-  };
-
   // Filter out observation-level filters since we don't join the observations table
   // This prevents batch export failures when observation-level filters are present
   const traceOnlyFilters = (filter ?? []).filter((f) => {
@@ -62,7 +50,7 @@ export const getTraceStream = async (props: {
       (col) => col.uiTableName === f.column || col.uiTableId === f.column,
     );
     // Keep the filter if it's not an observation-level filter
-    return columnDef?.clickhouseTableName !== "observations";
+    return columnDef?.tableName !== "observations";
   });
 
   // Get distinct score names for empty columns
@@ -71,7 +59,6 @@ export const getTraceStream = async (props: {
     cutoffCreatedAt,
     filter: traceOnlyFilters,
     isTimestampFilter: isTraceTimestampFilter,
-    clickhouseConfigs,
   });
 
   const emptyScoreColumns = distinctScoreNames.reduce(
@@ -94,7 +81,6 @@ export const getTraceStream = async (props: {
         },
       ],
       tracesTableUiColumnDefinitions,
-      tracesTableCols,
     ),
   );
 
@@ -102,7 +88,7 @@ export const getTraceStream = async (props: {
 
   const scoresFilter = new FilterList([
     new StringFilter({
-      clickhouseTable: "scores",
+      table: "scores",
       field: "project_id",
       operator: "=",
       value: projectId,
@@ -111,7 +97,10 @@ export const getTraceStream = async (props: {
 
   const appliedScoresFilter = scoresFilter.apply();
 
-  const search = clickhouseSearchCondition(searchQuery, searchType, "t");
+  const search = dorisSearchCondition(searchQuery, searchType, {
+    type: "traces",
+    hasTracesJoin: false,
+  });
 
   const query = `
     WITH scores_agg AS (
@@ -181,7 +170,7 @@ export const getTraceStream = async (props: {
       LIMIT {rowLimit: Int64}
     `;
 
-  const asyncGenerator = queryClickhouseStream<{
+  const asyncGenerator = queryDorisStream<{
     id: string;
     project_id: string;
     timestamp: Date;
@@ -216,7 +205,6 @@ export const getTraceStream = async (props: {
       ...appliedScoresFilter.params,
       ...search.params,
     },
-    clickhouseConfigs,
     tags: {
       feature: "batch-export",
       type: "trace",
@@ -230,7 +218,7 @@ export const getTraceStream = async (props: {
     bufferedRow: Awaited<ReturnType<typeof asyncGenerator.next>>["value"],
     commentsByTrace: Map<string, any[]>,
   ) => {
-    // Process numeric/boolean scores (tuples from ClickHouse)
+    // Process numeric/boolean scores (tuples from Doris)
     const numericScores = (bufferedRow.scores_avg ?? []).map((score: any) => ({
       name: score[0],
       value: score[1],
@@ -238,7 +226,7 @@ export const getTraceStream = async (props: {
       stringValue: score[3],
     }));
 
-    // Process categorical scores (tuples from ClickHouse)
+    // Process categorical scores (tuples from Doris)
     const categoricalScores = (bufferedRow.score_categories_tuples ?? []).map(
       (cat: [string, string | null]) => ({
         name: cat[0],
@@ -261,7 +249,7 @@ export const getTraceStream = async (props: {
           timestamp:
             bufferedRow.timestamp instanceof Date
               ? bufferedRow.timestamp
-              : parseClickhouseUTCDateTimeFormat(bufferedRow.timestamp),
+              : parseDorisUTCDateTimeFormat(bufferedRow.timestamp),
           name: bufferedRow.name ?? "",
           userId: bufferedRow.user_id,
           sessionId: bufferedRow.session_id,

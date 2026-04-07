@@ -45,7 +45,7 @@ export function orderByToDorisSQL(
 
     // Append the order by clause to the array
     orderByClauses.push(
-      `${col.queryPrefix ? col.queryPrefix + "." : ""}${col.clickhouseSelect} ${order.data}`,
+      `${col.queryPrefix ? col.queryPrefix + "." : ""}${col.select} ${order.data}`,
     );
   }
 

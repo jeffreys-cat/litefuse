@@ -7,7 +7,7 @@ import {
   findExpiredMediaByProjectId,
   getS3MediaStorageClient,
   logger,
-  removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject,
+  removeIngestionEventsFromS3AndDeleteDorisRefsForProject,
   getCurrentSpan,
 } from "@langfuse/shared/src/server";
 import { Job } from "bullmq";
@@ -86,7 +86,7 @@ export const handleDataRetentionProcessingJob = async (job: Job) => {
   );
   await Promise.all([
     env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
-      ? removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject(
+      ? removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
           projectId,
           cutoffDate,
         )

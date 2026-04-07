@@ -65,7 +65,7 @@ export type PageProps = {
     onelogin: boolean;
     azureAd: boolean;
     auth0: boolean;
-    clickhouseCloud: boolean;
+    dorisCloud: boolean;
     cognito: boolean;
     keycloak:
       | {
@@ -134,10 +134,10 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
           env.AUTH_AUTH0_CLIENT_SECRET !== undefined &&
           env.AUTH_AUTH0_ISSUER !== undefined,
         // Langfuse Cloud only — NOT for self-hosted Langfuse
-        clickhouseCloud:
-          env.AUTH_CLICKHOUSE_CLOUD_CLIENT_ID !== undefined &&
-          env.AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET !== undefined &&
-          env.AUTH_CLICKHOUSE_CLOUD_ISSUER !== undefined &&
+        dorisCloud:
+          env.AUTH_DORIS_CLOUD_CLIENT_ID !== undefined &&
+          env.AUTH_DORIS_CLOUD_CLIENT_SECRET !== undefined &&
+          env.AUTH_DORIS_CLOUD_ISSUER !== undefined &&
           env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== undefined,
         cognito:
           env.AUTH_COGNITO_CLIENT_ID !== undefined &&
@@ -340,14 +340,14 @@ export function SSOButtons({
               }
             />
           )}
-          {authProviders.clickhouseCloud && (
+          {authProviders.dorisCloud && (
             <AuthProviderButton
               icon={<SiClickhouse className="mr-3" size={18} />}
-              label="ClickHouse Cloud"
-              onClick={() => handleSignIn("clickhouse-cloud")}
-              loading={providerSigningIn === "clickhouse-cloud"}
+              label="Doris Cloud"
+              onClick={() => handleSignIn("doris-cloud")}
+              loading={providerSigningIn === "doris-cloud"}
               showLastUsedBadge={
-                hasMultipleAuthMethods && lastUsedMethod === "clickhouse-cloud"
+                hasMultipleAuthMethods && lastUsedMethod === "doris-cloud"
               }
             />
           )}

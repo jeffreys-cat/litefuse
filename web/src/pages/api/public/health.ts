@@ -3,10 +3,10 @@ import { cors, runMiddleware } from "@/src/features/public-api/server/cors";
 import { telemetry } from "@/src/features/telemetry";
 import { prisma } from "@langfuse/shared/src/db";
 import {
-  convertDateToClickhouseDateTime,
+  convertDateToAnalyticsDateTime,
   logger,
   measureAndReturn,
-  queryClickhouse,
+  queryDoris,
   traceException,
 } from "@langfuse/shared/src/server";
 import { type NextApiRequest, type NextApiResponse } from "next";
@@ -42,10 +42,10 @@ export default async function handler(
           operationName: "healthCheckTraces",
           projectId: "__CROSS_PROJECT__",
           input: {
-            now: convertDateToClickhouseDateTime(now),
+            now: convertDateToAnalyticsDateTime(now),
           },
           fn: async (input: { now: string }) => {
-            return queryClickhouse<{ id: string }>({
+            return queryDoris<{ id: string }>({
               query: `
                 SELECT id
                 FROM traces
@@ -61,7 +61,7 @@ export default async function handler(
             });
           },
         });
-        const observations = await queryClickhouse({
+        const observations = await queryDoris({
           query: `
             SELECT id
             FROM observations
@@ -70,7 +70,7 @@ export default async function handler(
             LIMIT 1
           `,
           params: {
-            now: convertDateToClickhouseDateTime(now),
+            now: convertDateToAnalyticsDateTime(now),
           },
           tags: {
             feature: "health-check",

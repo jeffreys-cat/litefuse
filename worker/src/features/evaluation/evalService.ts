@@ -272,7 +272,6 @@ export const createEvalJobs = async ({
             : "timestamp" in event
               ? new Date(event.timestamp)
               : new Date(jobTimestamp),
-        clickhouseFeatureTag: "eval-create",
         excludeInputOutput: true,
       });
 
@@ -1205,7 +1204,6 @@ export async function extractVariablesFromTracingData({
           traceId,
           projectId,
           timestamp: traceTimestamp,
-          clickhouseFeatureTag: "eval-execution",
         });
         traceCache.set(traceCacheKey, trace ?? null);
       }
@@ -1215,7 +1213,7 @@ export async function extractVariablesFromTracingData({
         logger.warn(
           `Trace ${traceId} for project ${projectId} not found. Please ensure the mapped data on the trace exists and consider extending the job delay.`,
         );
-        // this should only happen for deleted data or replication lags across clickhouse nodes.
+        // this should only happen for deleted data or replication lags across Doris nodes.
         throw Error(
           `Trace ${traceId} for project ${projectId} not found. Please ensure the mapped data on the trace exists and consider extending the job delay.`,
         );
@@ -1276,7 +1274,7 @@ export async function extractVariablesFromTracingData({
         logger.warn(
           `Observation ${mapping.objectName} for trace ${traceId} not found. Please ensure the mapped data exists and consider extending the job delay.`,
         );
-        // this should only happen for deleted data or data replication lags across clickhouse nodes.
+        // this should only happen for deleted data or data replication lags across Doris nodes.
         throw new UnrecoverableError(
           `Observation ${mapping.objectName} for trace ${traceId} not found. Please ensure the mapped data exists and consider extending the job delay.`,
         );

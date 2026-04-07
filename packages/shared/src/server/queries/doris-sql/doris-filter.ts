@@ -1,20 +1,6 @@
 import { filterOperators } from "../../../interfaces/filters";
-import { clickhouseCompliantRandomCharacters } from "../../repositories";
 import { Filter, DbFilter } from "../filter";
 
-// export type DorisOperator =
-//   | (typeof filterOperators)[keyof typeof filterOperators][number]
-//   | "!=";
-// export interface Filter {
-//   apply(): DbFilter;
-//   table: string;
-//   operator: DorisOperator;
-//   field: string;
-// }
-// type DbFilter = {
-//   query: string;
-//   params: { [x: string]: any } | {};
-// };
 export class StringFilter implements Filter {
   public table: string;
   public field: string;
@@ -23,13 +9,14 @@ export class StringFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    dorisTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["string"][number];
     value: string;
     tablePrefix?: string;
   }) {
-    this.table = opts.dorisTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -80,23 +67,25 @@ export class NumberFilter implements Filter {
   public field: string;
   public value: number;
   public operator: (typeof filterOperators)["number"][number] | "!=";
-  public clickhouseTypeOverwrite?: string;
+  public typeOverwrite?: string;
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["number"][number] | "!=";
     value: number;
     tablePrefix?: string;
-    clickhouseTypeOverwrite?: string;
+    typeOverwrite?: string;
+    dorisTypeOverwrite?: string; // Backward compatibility alias for typeOverwrite
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
     this.tablePrefix = opts.tablePrefix;
-    this.clickhouseTypeOverwrite = opts.clickhouseTypeOverwrite;
+    this.typeOverwrite = opts.typeOverwrite ?? opts.dorisTypeOverwrite;
   }
 
   apply(): DbFilter {
@@ -117,13 +106,14 @@ export class DateTimeFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    table: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["datetime"][number];
     value: Date;
     tablePrefix?: string;
   }) {
-    this.table = opts.table;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -156,13 +146,14 @@ export class StringOptionsFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators.stringOptions)[number];
     values: string[];
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.values = opts.values;
     this.operator = opts.operator;
@@ -205,13 +196,14 @@ export class BooleanFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["boolean"][number];
     value: boolean;
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -235,12 +227,13 @@ export class NullFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["null"][number];
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.operator = opts.operator;
     this.tablePrefix = opts.tablePrefix;
@@ -264,13 +257,14 @@ export class ArrayOptionsFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators.arrayOptions)[number];
     values: string[];
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.values = opts.values;
     this.operator = opts.operator;
@@ -330,14 +324,15 @@ export class CategoryOptionsFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators.categoryOptions)[number];
     key: string;
     values: string[];
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.key = opts.key;
     this.values = opts.values;
@@ -395,14 +390,15 @@ export class StringObjectFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["stringObject"][number];
     key: string;
     value: string;
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;
@@ -453,14 +449,15 @@ export class NumberObjectFilter implements Filter {
   public tablePrefix?: string;
 
   constructor(opts: {
-    clickhouseTable: string;
+    table?: string;
+    dorisTable?: string; // Backward compatibility alias for table
     field: string;
     operator: (typeof filterOperators)["numberObject"][number] | "!=";
     key: string;
     value: number;
     tablePrefix?: string;
   }) {
-    this.table = opts.clickhouseTable;
+    this.table = opts.table ?? opts.dorisTable ?? "";
     this.field = opts.field;
     this.value = opts.value;
     this.operator = opts.operator;

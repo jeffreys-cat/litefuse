@@ -1,10 +1,10 @@
-import { convertApiProvidedFilterToClickhouseFilter } from "@langfuse/shared/src/server";
+import { convertApiProvidedFilterToDorisFilter } from "@langfuse/shared/src/server";
 import {
-  convertDateToClickhouseDateTime,
-  queryClickhouse,
-  TRACE_TO_OBSERVATIONS_INTERVAL,
+  convertDateToAnalyticsDateTime,
+  queryDoris,
   type DateTimeFilter,
   measureAndReturn,
+  TRACE_TO_OBSERVATIONS_INTERVAL,
 } from "@langfuse/shared/src/server";
 
 type QueryType = {
@@ -19,10 +19,7 @@ type QueryType = {
 };
 
 export const generateDailyMetrics = async (props: QueryType) => {
-  const filter = convertApiProvidedFilterToClickhouseFilter(
-    props,
-    filterParams,
-  );
+  const filter = convertApiProvidedFilterToDorisFilter(props, filterParams);
   const hasTracesFilter = filter.some((f) => f.table === "traces");
   const tracesFilter = filter.filter((f) => f.table === "traces");
   const appliedFilter = filter.apply();
@@ -111,7 +108,7 @@ export const generateDailyMetrics = async (props: QueryType) => {
           : {}),
         ...(timeFilter
           ? {
-              cteTimeFilter: convertDateToClickhouseDateTime(timeFilter.value),
+              cteTimeFilter: convertDateToAnalyticsDateTime(timeFilter.value),
             }
           : {}),
       },
@@ -125,7 +122,8 @@ export const generateDailyMetrics = async (props: QueryType) => {
       timestamp,
     },
     fn: async (input) => {
-      const result = await queryClickhouse<{
+      // Note: This SQL uses ClickHouse-specific features and needs rewrite for Doris
+      const result = await queryDoris<{
         date: string;
         countTraces: number;
         countObservations: number;
@@ -135,9 +133,6 @@ export const generateDailyMetrics = async (props: QueryType) => {
         query: query.replaceAll("__TRACE_TABLE__", "traces"),
         params: input.params,
         tags: input.tags,
-        clickhouseConfigs: {
-          request_timeout: 60_000, // Use 1 minute timeout for daily metrics
-        },
       });
 
       return result.map((record) => ({
@@ -160,10 +155,7 @@ export const generateDailyMetrics = async (props: QueryType) => {
 };
 
 export const getDailyMetricsCount = async (props: QueryType) => {
-  const filter = convertApiProvidedFilterToClickhouseFilter(
-    props,
-    filterParams,
-  );
+  const filter = convertApiProvidedFilterToDorisFilter(props, filterParams);
   const appliedFilter = filter.filter((f) => f.table === "traces").apply();
 
   const query = `
@@ -192,7 +184,8 @@ export const getDailyMetricsCount = async (props: QueryType) => {
       timestamp,
     },
     fn: async (input) => {
-      const records = await queryClickhouse<{ count: string }>({
+      // Note: This SQL uses ClickHouse-specific features and needs rewrite for Doris
+      const records = await queryDoris<{ count: string }>({
         query: query.replace("__TRACE_TABLE__", "traces"),
         params: input.params,
         tags: input.tags,
@@ -205,53 +198,53 @@ export const getDailyMetricsCount = async (props: QueryType) => {
 const filterParams = [
   {
     id: "userId",
-    clickhouseSelect: "user_id",
+    dorisSelect: "user_id",
     filterType: "StringFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
   {
     id: "traceName",
-    clickhouseSelect: "name",
+    dorisSelect: "name",
     filterType: "StringFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
   {
     id: "tags",
-    clickhouseSelect: "tags",
+    dorisSelect: "tags",
     filterType: "ArrayOptionsFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
   {
     id: "traceEnvironment",
-    clickhouseSelect: "environment",
+    dorisSelect: "environment",
     filterType: "StringOptionsFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
   {
     id: "observationEnvironment",
-    clickhouseSelect: "environment",
+    dorisSelect: "environment",
     filterType: "StringOptionsFilter",
-    clickhouseTable: "observations",
-    clickhousePrefix: "o",
+    dorisTable: "observations",
+    dorisPrefix: "o",
   },
   {
     id: "fromTimestamp",
-    clickhouseSelect: "timestamp",
+    dorisSelect: "timestamp",
     operator: ">=" as const,
     filterType: "DateTimeFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
   {
     id: "toTimestamp",
-    clickhouseSelect: "timestamp",
+    dorisSelect: "timestamp",
     operator: "<" as const,
     filterType: "DateTimeFilter",
-    clickhouseTable: "traces",
-    clickhousePrefix: "t",
+    dorisTable: "traces",
+    dorisPrefix: "t",
   },
 ];

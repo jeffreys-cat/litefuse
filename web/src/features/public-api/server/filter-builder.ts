@@ -13,11 +13,11 @@ import { z } from "zod";
 
 export type ApiColumnMapping = {
   id: string;
-  clickhouseSelect: string;
-  clickhouseTable: string;
+  dorisSelect: string;
+  dorisTable: string;
   filterType: string;
   operator?: DbOperator;
-  clickhousePrefix?: string;
+  dorisPrefix?: string;
 };
 
 type BaseQueryType = {
@@ -26,7 +26,7 @@ type BaseQueryType = {
   projectId: string;
 } & Record<string, unknown>;
 
-export function convertApiProvidedFilterToClickhouseFilter(
+export function convertApiProvidedFilterToDorisFilter(
   filter: BaseQueryType,
   columnMapping: ApiColumnMapping[],
 ) {
@@ -53,11 +53,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
           typeof value === "string" &&
           ["<", "<=", ">", ">="].includes(finalOperator)
             ? (filterInstance = new DateTimeFilter({
-                clickhouseTable: columnMapping.clickhouseTable,
-                field: columnMapping.clickhouseSelect,
+                table: columnMapping.dorisTable,
+                field: columnMapping.dorisSelect,
                 operator: finalOperator as "<" | "<=" | ">" | ">=",
                 value: new Date(value),
-                tablePrefix: columnMapping.clickhousePrefix,
+                tablePrefix: columnMapping.dorisPrefix,
               }))
             : undefined;
 
@@ -65,22 +65,22 @@ export function convertApiProvidedFilterToClickhouseFilter(
         case "ArrayOptionsFilter":
           if (Array.isArray(value) || typeof value === "string") {
             filterInstance = new ArrayOptionsFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "all of",
               values: Array.isArray(value) ? value : value.split(","),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
         case "StringOptionsFilter":
           if (Array.isArray(value) || typeof value === "string") {
             filterInstance = new StringOptionsFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "any of",
               values: Array.isArray(value) ? value : value.split(","),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
@@ -98,12 +98,12 @@ export function convertApiProvidedFilterToClickhouseFilter(
               typeof filter.key === "string"
             ) {
               filterInstance = new CategoryOptionsFilter({
-                clickhouseTable: columnMapping.clickhouseTable,
-                field: columnMapping.clickhouseSelect,
+                table: columnMapping.dorisTable,
+                field: columnMapping.dorisSelect,
                 key: filter.key,
                 operator: parsedOperatorCategory.data,
                 values: value,
-                tablePrefix: columnMapping.clickhousePrefix,
+                tablePrefix: columnMapping.dorisPrefix,
               });
             }
           }
@@ -112,11 +112,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
         case "StringFilter":
           if (typeof value === "string") {
             filterInstance = new StringFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: "=",
               value: value,
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;
@@ -131,11 +131,11 @@ export function convertApiProvidedFilterToClickhouseFilter(
 
           if (parsedOperatorNum.success) {
             filterInstance = new NumberFilter({
-              clickhouseTable: columnMapping.clickhouseTable,
-              field: columnMapping.clickhouseSelect,
+              table: columnMapping.dorisTable,
+              field: columnMapping.dorisSelect,
               operator: parsedOperatorNum.data,
               value: Number(value),
-              tablePrefix: columnMapping.clickhousePrefix,
+              tablePrefix: columnMapping.dorisPrefix,
             });
           }
           break;

@@ -5,12 +5,12 @@ import type {
   ScoreSourceType,
 } from "../../domain/scores";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import { parseClickhouseUTCDateTimeFormat } from "./clickhouse";
+import { parseDorisUTCDateTimeFormat } from "./doris";
 
 /** Safely parse a date value that may be a Date object (Doris/mysql2) or a string (ClickHouse) */
 function safeParseDatetime(value: string | Date): Date {
   if (value instanceof Date) return value;
-  return parseClickhouseUTCDateTimeFormat(value);
+  return parseDorisUTCDateTimeFormat(value);
 }
 
 export type ScoreAggregation = {
@@ -24,7 +24,7 @@ export type ScoreAggregation = {
   timestamp: Date;
 };
 
-export const convertClickhouseScoreToDomain = <
+export const convertDorisScoreToDomain = <
   ExcludeMetadata extends boolean = false,
   DataType extends ScoreDataTypeType = ScoreDataTypeType,
 >(

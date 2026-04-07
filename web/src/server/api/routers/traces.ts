@@ -36,13 +36,10 @@ import {
   getObservationsForTrace,
   getTraceById,
   logger,
-  upsertTrace,
-  convertTraceDomainToClickhouse,
   hasAnyTrace,
   traceDeletionProcessor,
   getTracesTableMetrics,
   getCategoricalScoresGroupedByName,
-  convertDateToClickhouseDateTime,
   convertDateToAnalyticsDateTime,
   getAgentGraphData,
   tracesTableUiColumnDefinitions,
@@ -50,7 +47,6 @@ import {
   getTracesGroupedBySessionId,
   updateEvents,
   getScoresAndCorrectionsForTraces,
-  isDorisBackend,
   partialUpdateDoris,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
@@ -489,33 +485,27 @@ export const traceRouter = createTRPCRouter({
 
         let trace;
 
-        const clickhouseTrace = await getTraceById({
+        const traceById = await getTraceById({
           traceId: input.traceId,
           projectId: input.projectId,
-          clickhouseFeatureTag: "tracing-trpc",
         });
-        if (clickhouseTrace) {
-          trace = clickhouseTrace;
-          clickhouseTrace.bookmarked = input.bookmarked;
+        if (traceById) {
+          trace = traceById;
+          traceById.bookmarked = input.bookmarked;
           const promises: Promise<void>[] = [];
-          if (isDorisBackend()) {
-            promises.push(
-              partialUpdateDoris({
-                table: "traces",
-                where: { project_id: input.projectId, id: input.traceId },
-                set: { bookmarked: input.bookmarked },
-              }),
-            );
-          } else {
-            promises.push(
-              upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
-            );
-          }
+          promises.push(
+            partialUpdateDoris({
+              table: "traces",
+              where: { project_id: input.projectId, id: input.traceId },
+              set: { bookmarked: input.bookmarked },
+            }),
+          );
+
           if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
             promises.push(
               updateEvents(
                 input.projectId,
-                { traceIds: [clickhouseTrace.id], rootOnly: true },
+                { traceIds: [traceById.id], rootOnly: true },
                 { bookmarked: input.bookmarked },
               ),
             );
@@ -523,7 +513,7 @@ export const traceRouter = createTRPCRouter({
           await Promise.all(promises);
         } else {
           logger.error(
-            `Trace not found in Clickhouse: ${input.traceId}. Skipping bookmark.`,
+            `Trace not found in Doris: ${input.traceId}. Skipping bookmark.`,
           );
         }
 
@@ -558,46 +548,39 @@ export const traceRouter = createTRPCRouter({
           after: input.public,
         });
 
-        const clickhouseTrace = await getTraceById({
+        const traceById = await getTraceById({
           traceId: input.traceId,
           projectId: input.projectId,
-          clickhouseFeatureTag: "tracing-trpc",
         });
-        if (!clickhouseTrace) {
+        if (!traceById) {
           logger.error(
-            `Trace not found in Clickhouse: ${input.traceId}. Skipping publishing.`,
+            `Trace not found in Doris: ${input.traceId}. Skipping publishing.`,
           );
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Trace not found",
           });
         }
-        clickhouseTrace.public = input.public;
+        traceById.public = input.public;
         const promises: Promise<void>[] = [];
-        if (isDorisBackend()) {
-          promises.push(
-            partialUpdateDoris({
-              table: "traces",
-              where: { project_id: input.projectId, id: input.traceId },
-              set: { public: input.public },
-            }),
-          );
-        } else {
-          promises.push(
-            upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace)),
-          );
-        }
+        promises.push(
+          partialUpdateDoris({
+            table: "traces",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { public: input.public },
+          }),
+        );
         if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
           promises.push(
             updateEvents(
               input.projectId,
-              { traceIds: [clickhouseTrace.id] },
+              { traceIds: [traceById.id] },
               { public: input.public },
             ),
           );
         }
         await Promise.all(promises);
-        return clickhouseTrace;
+        return traceById;
       } catch (error) {
         logger.error("Failed to call traces.publish", error);
         throw new TRPCError({
@@ -628,30 +611,25 @@ export const traceRouter = createTRPCRouter({
           after: input.tags,
         });
 
-        const clickhouseTrace = await getTraceById({
+        const traceById = await getTraceById({
           traceId: input.traceId,
           projectId: input.projectId,
-          clickhouseFeatureTag: "tracing-trpc",
         });
-        if (!clickhouseTrace) {
+        if (!traceById) {
           logger.error(
-            `Trace not found in Clickhouse: ${input.traceId}. Skipping tag update.`,
+            `Trace not found in Doris: ${input.traceId}. Skipping tag update.`,
           );
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Trace not found",
           });
         }
-        clickhouseTrace.tags = input.tags;
-        if (isDorisBackend()) {
-          await partialUpdateDoris({
-            table: "traces",
-            where: { project_id: input.projectId, id: input.traceId },
-            set: { tags: input.tags },
-          });
-        } else {
-          await upsertTrace(convertTraceDomainToClickhouse(clickhouseTrace));
-        }
+        traceById.tags = input.tags;
+        await partialUpdateDoris({
+          table: "traces",
+          where: { project_id: input.projectId, id: input.traceId },
+          set: { tags: input.tags },
+        });
       } catch (error) {
         logger.error("Failed to call traces.updateTags", error);
         throw new TRPCError({

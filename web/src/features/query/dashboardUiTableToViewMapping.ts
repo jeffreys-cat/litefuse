@@ -226,32 +226,32 @@ const isLegacyUiTableFilter = (
       {
         uiTableName: "Session",
         uiTableId: "sessionId",
-        clickhouseTableName: "traces",
-        clickhouseSelect: 't."sessionId"',
+        tableName: "traces",
+        select: 't."sessionId"',
       },
       {
         uiTableName: "Observation Name",
         uiTableId: "observationName",
-        clickhouseTableName: "observations",
-        clickhouseSelect: 'o."name"',
+        tableName: "observations",
+        select: 'o."name"',
       },
       {
         uiTableName: "Metadata",
         uiTableId: "metadata",
-        clickhouseTableName: "traces",
-        clickhouseSelect: 't."metadata"',
+        tableName: "traces",
+        select: 't."metadata"',
       },
       {
         uiTableName: "Score Value",
         uiTableId: "value",
-        clickhouseTableName: "scores",
-        clickhouseSelect: 's."value"',
+        tableName: "scores",
+        select: 's."value"',
       },
       {
         uiTableName: "Score String Value",
         uiTableId: "stringValue",
-        clickhouseTableName: "scores",
-        clickhouseSelect: 's."string_value"',
+        tableName: "scores",
+        select: 's."string_value"',
       },
     ])
     .some((columnDef) => columnDef.uiTableName === filter.column);

@@ -1,28 +1,19 @@
 import { DatasetRunItemDomain } from "../../domain/dataset-run-items";
 import { type OrderByState } from "../../interfaces/orderBy";
-import { datasetRunItemsTableUiColumnDefinitions } from "../tableMappings";
+import { datasetRunItemsTableUiColumnDefinitions } from "../tableMappings/mapDatasetRunItemsTable";
 import { datasetRunsTableUiColumnDefinitions } from "../../tableDefinitions/mapDatasetRunsTable";
-import { datasetRunItemsTableCols } from "../../tableDefinitions/datasetRunItemsTable";
-import { datasetRunsTableCols } from "../../tableDefinitions/datasetRunsTable";
 import { FilterState } from "../../types";
+import { createDorisFilterFromFilterState, FilterList } from "../queries";
+import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import {
-  createFilterFromFilterState,
-  FilterList,
-  orderByToClickhouseSql,
-  StringFilter,
-  StringOptionsFilter,
-} from "../queries";
-import {
-  parseClickhouseUTCDateTimeFormat,
-  queryClickhouse,
-} from "./clickhouse";
-import { convertDatasetRunItemClickhouseToDomain } from "./dataset-run-items-converters";
+  StringFilter as DorisStringFilter,
+  StringOptionsFilter as DorisStringOptionsFilter,
+} from "../queries/doris-sql/doris-filter";
+import { queryDoris, commandDoris, parseDorisUTCDateTimeFormat } from "./doris";
+import { convertDatasetRunItemDorisToDomain } from "./dataset-run-items-converters";
 import { DatasetRunItemRecord } from "./definitions";
-import { env } from "../../env";
-import { commandClickhouse } from "./clickhouse";
 import Decimal from "decimal.js";
-import { ClickHouseClientConfigOptions } from "@clickhouse/client";
-import { convertDateToClickhouseDateTime } from "../clickhouse/client";
+import { convertDateToAnalyticsDateTime } from "./analytics";
 import { ScoreAggregate } from "../../features/scores";
 
 type DatasetItemIdsByTraceIdQuery = {
@@ -39,7 +30,6 @@ type DatasetRunItemsTableQuery = {
   orderBy?: OrderByState | OrderByState[];
   limit?: number;
   offset?: number;
-  clickhouseConfigs?: ClickHouseClientConfigOptions;
 };
 
 type BaseDatasetItemWithRunDataQuery = {
@@ -184,7 +174,7 @@ const convertDatasetRunsRowsRecord = (
     id: record.dataset_run_id,
     name: record.dataset_run_name,
     projectId: record.project_id,
-    createdAt: parseClickhouseUTCDateTimeFormat(record.dataset_run_created_at),
+    createdAt: parseDorisUTCDateTimeFormat(record.dataset_run_created_at),
     datasetId: record.dataset_id,
     description: record.dataset_run_description,
     metadata: record.dataset_run_metadata,
@@ -198,16 +188,16 @@ const getProjectDatasetIdDefaultFilter = (
 ) => {
   return {
     datasetRunItemsFilter: new FilterList([
-      new StringFilter({
-        clickhouseTable: "dataset_run_items_rmt",
+      new DorisStringFilter({
+        table: "dataset_run_items",
         field: "project_id",
         operator: "=",
         value: projectId,
       }),
       ...(datasetId
         ? [
-            new StringFilter({
-              clickhouseTable: "dataset_run_items_rmt",
+            new DorisStringFilter({
+              table: "dataset_run_items",
               field: "dataset_id",
               operator: "=",
               value: datasetId,
@@ -216,8 +206,8 @@ const getProjectDatasetIdDefaultFilter = (
         : []),
       ...(runIds && runIds.length > 0
         ? [
-            new StringOptionsFilter({
-              clickhouseTable: "dataset_run_items_rmt",
+            new DorisStringOptionsFilter({
+              table: "dataset_run_items",
               field: "dataset_run_id",
               operator: "any of",
               values: runIds,
@@ -290,8 +280,8 @@ const getDatasetRunsTableInternal = async <T>(
   const baseFilter = datasetRunItemsFilter.apply();
 
   const scoresFilter = new FilterList([
-    new StringFilter({
-      clickhouseTable: "scores",
+    new DorisStringFilter({
+      table: "scores",
       field: "project_id",
       operator: "=",
       value: projectId,
@@ -300,10 +290,9 @@ const getDatasetRunsTableInternal = async <T>(
 
   const appliedScoresFilter = scoresFilter.apply();
 
-  const userFilters = createFilterFromFilterState(
+  const userFilters = createDorisFilterFromFilterState(
     filter,
     datasetRunsTableUiColumnDefinitions,
-    datasetRunsTableCols,
   );
   datasetRunItemsFilter.push(...userFilters);
 
@@ -322,7 +311,7 @@ const getDatasetRunsTableInternal = async <T>(
     orderByArray.push(orderBy);
   }
 
-  const orderByClause = orderByToClickhouseSql(
+  const orderByClause = orderByToDorisSQL(
     orderByArray,
     datasetRunsTableUiColumnDefinitions,
   );
@@ -477,7 +466,7 @@ const getDatasetRunsTableInternal = async <T>(
     ${orderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
 
-  const res = await queryClickhouse<T>({
+  const res = await queryDoris<T>({
     query,
     params: {
       projectId,
@@ -574,18 +563,17 @@ const getQualifyingDatasetItems = async <T>(opts: {
     const { runId, filters: filterState } = runFilter;
 
     // Create run ID condition
-    const runConditionFilter = new StringFilter({
-      clickhouseTable: "dataset_run_items_rmt",
+    const runConditionFilter = new DorisStringFilter({
+      table: "dataset_run_items",
       field: "dataset_run_id",
       operator: "=",
       value: runId,
     });
 
     // Create user filters for this run
-    const userFilters = createFilterFromFilterState(
+    const userFilters = createDorisFilterFromFilterState(
       filterState,
       datasetRunItemsTableUiColumnDefinitions,
-      datasetRunItemsTableCols,
     );
 
     // Combine run condition with user filters using AND and apply immediately
@@ -600,8 +588,8 @@ const getQualifyingDatasetItems = async <T>(opts: {
     }
     // Create run ID condition
     const runConditionFilter = new FilterList([
-      new StringFilter({
-        clickhouseTable: "dataset_run_items_rmt",
+      new DorisStringFilter({
+        table: "dataset_run_items",
         field: "dataset_run_id",
         operator: "=",
         value: runId,
@@ -624,8 +612,8 @@ const getQualifyingDatasetItems = async <T>(opts: {
 
   // Build scores filter
   const scoresFilter = new FilterList([
-    new StringFilter({
-      clickhouseTable: "scores",
+    new DorisStringFilter({
+      table: "scores",
       field: "project_id",
       operator: "=",
       value: projectId,
@@ -701,7 +689,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
     ${select === "count" ? "" : "ORDER BY dataset_item_id -- for consistent pagination"}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
 
-  const res = await queryClickhouse<T>({
+  const res = await queryDoris<T>({
     query,
     params: {
       ...baseFilter.params,
@@ -772,17 +760,16 @@ const getDatasetRunItemsTableInternal = async <
   );
 
   datasetRunItemsFilter.push(
-    ...createFilterFromFilterState(
+    ...createDorisFilterFromFilterState(
       filter,
       datasetRunItemsTableUiColumnDefinitions,
-      datasetRunItemsTableCols,
     ),
   );
   const appliedFilter = datasetRunItemsFilter.apply();
 
   const scoresFilter = new FilterList([
-    new StringFilter({
-      clickhouseTable: "scores",
+    new DorisStringFilter({
+      table: "scores",
       field: "project_id",
       operator: "=",
       value: projectId,
@@ -815,7 +802,7 @@ const getDatasetRunItemsTableInternal = async <
     });
   }
 
-  const orderByClause = orderByToClickhouseSql(
+  const orderByClause = orderByToDorisSQL(
     orderByArray,
     datasetRunItemsTableUiColumnDefinitions,
   );
@@ -883,7 +870,7 @@ const getDatasetRunItemsTableInternal = async <
     ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
     WHERE ${appliedFilter.query};`;
 
-  const res = await queryClickhouse<T>({
+  const res = await queryDoris<T>({
     query,
     params: {
       ...appliedFilter.params,
@@ -899,7 +886,6 @@ const getDatasetRunItemsTableInternal = async <
       projectId,
       ...(datasetId ? { datasetId } : {}),
     },
-    clickhouseConfigs: opts.clickhouseConfigs,
   });
 
   return res;
@@ -914,7 +900,7 @@ export const getDatasetRunItemsCh = async (
     tags: { kind: "list" },
   });
 
-  return rows.map((row) => convertDatasetRunItemClickhouseToDomain(row));
+  return rows.map((row) => convertDatasetRunItemDorisToDomain(row));
 };
 
 export const getDatasetRunItemsByDatasetIdCh = async (
@@ -926,7 +912,7 @@ export const getDatasetRunItemsByDatasetIdCh = async (
     tags: { kind: "list" },
   });
 
-  return rows.map((row) => convertDatasetRunItemClickhouseToDomain(row));
+  return rows.map((row) => convertDatasetRunItemDorisToDomain(row));
 };
 
 export const getDatasetItemsWithRunDataCount = async (
@@ -988,7 +974,7 @@ export const getDatasetRunItemsWithoutIOByItemIds = async (
   });
 
   // Step 2: Convert to domain
-  return rows.map((row) => convertDatasetRunItemClickhouseToDomain(row));
+  return rows.map((row) => convertDatasetRunItemDorisToDomain(row));
 };
 
 export const getDatasetItemIdsByTraceIdCh = async (
@@ -999,14 +985,14 @@ export const getDatasetItemIdsByTraceIdCh = async (
   const { projectId, traceId, filter } = opts;
 
   const datasetRunItemsFilter = new FilterList([
-    new StringFilter({
-      clickhouseTable: "dataset_run_items_rmt",
+    new DorisStringFilter({
+      table: "dataset_run_items",
       field: "project_id",
       operator: "=",
       value: projectId,
     }),
-    new StringFilter({
-      clickhouseTable: "dataset_run_items_rmt",
+    new DorisStringFilter({
+      table: "dataset_run_items",
       field: "trace_id",
       operator: "=",
       value: traceId,
@@ -1014,10 +1000,9 @@ export const getDatasetItemIdsByTraceIdCh = async (
   ]);
 
   datasetRunItemsFilter.push(
-    ...createFilterFromFilterState(
+    ...createDorisFilterFromFilterState(
       filter,
       datasetRunItemsTableUiColumnDefinitions,
-      datasetRunItemsTableCols,
     ),
   );
   const appliedFilter = datasetRunItemsFilter.apply();
@@ -1031,7 +1016,7 @@ export const getDatasetItemIdsByTraceIdCh = async (
   WHERE ${appliedFilter.query}
   LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id;`;
 
-  const res = await queryClickhouse<{
+  const res = await queryDoris<{
     dataset_item_id: string;
     observation_id: string | null;
     dataset_id: string;
@@ -1091,7 +1076,7 @@ export const hasAnyDatasetRunItem = async (
     LIMIT 1
   `;
 
-  const rows = await queryClickhouse<{ 1: number }>({
+  const rows = await queryDoris<{ 1: number }>({
     query,
     params: { projectId },
     tags: {
@@ -1117,12 +1102,9 @@ export const deleteDatasetRunItemsByProjectId = async (
     DELETE FROM dataset_run_items_rmt
     WHERE project_id = {projectId: String};
   `;
-  await commandClickhouse({
+  await commandDoris({
     query,
     params: { projectId },
-    clickhouseConfigs: {
-      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
-    },
     tags: {
       feature: "datasets",
       type: "dataset-run-items",
@@ -1147,14 +1129,11 @@ export const deleteDatasetRunItemsByDatasetId = async ({
   AND dataset_id = {datasetId: String}
 `;
 
-  await commandClickhouse({
+  await commandDoris({
     query,
     params: {
       projectId,
       datasetId,
-    },
-    clickhouseConfigs: {
-      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "datasets",
@@ -1181,15 +1160,12 @@ export const deleteDatasetRunItemsByDatasetRunIds = async ({
     AND dataset_run_id IN ({datasetRunIds: Array(String)})
   `;
 
-  await commandClickhouse({
+  await commandDoris({
     query,
     params: {
       projectId,
       datasetRunIds,
       datasetId,
-    },
-    clickhouseConfigs: {
-      request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
     },
     tags: {
       feature: "datasets",
@@ -1217,11 +1193,11 @@ export const getDatasetRunItemCountsByProjectInCreationInterval = async ({
   GROUP BY project_id
 `;
 
-  const rows = await queryClickhouse<{ project_id: string; count: string }>({
+  const rows = await queryDoris<{ project_id: string; count: string }>({
     query,
     params: {
-      start: convertDateToClickhouseDateTime(start),
-      end: convertDateToClickhouseDateTime(end),
+      start: convertDateToAnalyticsDateTime(start),
+      end: convertDateToAnalyticsDateTime(end),
     },
     tags: {
       feature: "datasets",

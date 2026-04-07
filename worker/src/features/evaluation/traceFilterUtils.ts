@@ -21,7 +21,7 @@ function getColumnDefinition(column: string) {
     (col) =>
       col.uiTableId === column ||
       col.uiTableName === column ||
-      col.clickhouseSelect === column,
+      col.select === column,
   );
   if (!columnDef) {
     throw new Error(`Unhandled column for trace filter: ${column}`);

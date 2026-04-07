@@ -16,7 +16,7 @@ import {
   isPresent,
   TracingSearchType,
   timeFilter,
-  isClickhouseFilterColumn,
+  isDorisFilterColumn,
   optionalPaginationZod,
   LangfuseConflictError,
   LangfuseNotFoundError,
@@ -105,13 +105,13 @@ const buildPathPrefixFilter = (pathPrefix?: string): Prisma.Sql => {
  * @param filters - Array of filter conditions to evaluate
  * @returns true if any filter requires DRI metrics, false if using basic dataset run data is sufficient
  */
-export const requiresClickhouseLookups = (filters: FilterState): boolean => {
+export const requiresDorisLookups = (filters: FilterState): boolean => {
   if (filters.length === 0) {
     return false;
   }
 
   return filters.some((filter) => {
-    return isClickhouseFilterColumn(filter.column);
+    return isDorisFilterColumn(filter.column);
   });
 };
 
@@ -503,7 +503,7 @@ export const datasetRouter = createTRPCRouter({
     .input(datasetRunsTableSchema)
     .query(async ({ input, ctx }) => {
       // Use helper function to determine if we need DRI metrics
-      if (!requiresClickhouseLookups(input.filter ?? [])) {
+      if (!requiresDorisLookups(input.filter ?? [])) {
         const [runs, totalRuns] = await Promise.all([
           await ctx.prisma.datasetRuns.findMany({
             where: {
@@ -1497,7 +1497,7 @@ export const datasetRouter = createTRPCRouter({
         offset: page * limit,
       });
 
-      // Step 2: Given dataset item ids, lookup dataset run items in clickhouse
+      // Step 2: Given dataset item ids, lookup dataset run items in Doris
       // Note: for each unique dataset item id and dataset run id combination, we will retrieve a dataset run item
       const datasetRunItems = await getDatasetRunItemsWithoutIOByItemIds({
         projectId: input.projectId,
@@ -1545,7 +1545,7 @@ export const datasetRouter = createTRPCRouter({
     .query(async ({ input }) => {
       const { filterByRun, datasetId, projectId, runIds } = input;
 
-      // Rely on clickhouse to return only dataset item count that match the filters
+      // Rely on Doris to return only dataset item count that match the filters
       const datasetItemCount = await getDatasetItemsWithRunDataCount({
         projectId,
         datasetId,

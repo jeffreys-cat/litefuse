@@ -1,6 +1,6 @@
 /**
  * Event stream for batch exports.
- * Queries the ClickHouse events table with filters and streams results
+ * Queries the Doris events table with filters and streams results
  * for efficient batch export processing.
  *
  * The events table is denormalized with trace data already included,
@@ -13,18 +13,16 @@ import {
   type ScoreDataTypeType,
   TimeFilter,
   TracingSearchType,
-  eventsTableCols,
 } from "@langfuse/shared";
 import {
   getDistinctScoreNames,
-  queryClickhouseStream,
+  queryDorisStream,
   logger,
   FilterList,
   createFilterFromFilterState,
   eventsTableUiColumnDefinitions,
-  clickhouseSearchCondition,
-  EventsQueryBuilder,
-  eventsScoresAggregation,
+  dorisSearchCondition,
+  parseDorisUTCDateTimeFormat,
 } from "@langfuse/shared/src/server";
 import { Readable } from "stream";
 import { env } from "../../env";
@@ -38,7 +36,7 @@ import { BatchExportEventsRow } from "./types";
 const BATCH_SIZE = 1000; // Fetch comments in batches for efficiency
 
 /**
- * Creates a stream of events from ClickHouse for batch export.
+ * Creates a stream of events from Doris for batch export.
  * Includes comments fetched in batches and flattened scores.
  *
  * @param props - Query parameters including projectId, filters, and limits
@@ -61,17 +59,6 @@ export const getEventsStream = async (props: {
     rowLimit = env.BATCH_EXPORT_ROW_LIMIT,
   } = props;
 
-  const clickhouseConfigs = {
-    request_timeout: 180_000, // 3 minutes
-    clickhouse_settings: {
-      join_algorithm: "partial_merge" as const,
-      // Increase HTTP timeouts to prevent Code 209 errors during slow blob storage uploads
-      // See: https://github.com/ClickHouse/ClickHouse/issues/64731
-      http_send_timeout: 300,
-      http_receive_timeout: 300,
-    },
-  };
-
   // Filter out score and comment filters since they require special handling
   const eventOnlyFilters = (filter ?? []).filter((f) => {
     const columnDef = eventsTableUiColumnDefinitions.find(
@@ -79,8 +66,7 @@ export const getEventsStream = async (props: {
     );
     // Keep the filter if it's not a scores or comments filter
     return (
-      columnDef?.clickhouseTableName !== "scores" &&
-      columnDef?.clickhouseTableName !== "comments"
+      columnDef?.tableName !== "scores" && columnDef?.tableName !== "comments"
     );
   });
 
@@ -93,7 +79,6 @@ export const getEventsStream = async (props: {
       filterItem: FilterCondition,
     ): filterItem is TimeFilter =>
       filterItem.column === "Start Time" && filterItem.type === "datetime",
-    clickhouseConfigs,
   });
 
   const emptyScoreColumns = distinctScoreNames.reduce(
@@ -114,46 +99,89 @@ export const getEventsStream = async (props: {
         },
       ],
       eventsTableUiColumnDefinitions,
-      eventsTableCols,
     ),
   );
 
   const appliedEventsFilter = eventsFilter.apply();
 
-  const search = clickhouseSearchCondition(searchQuery, searchType, "e", [
-    "span_id",
-    "name",
-    "user_id",
-    "session_id",
-    "trace_id",
-  ]);
+  const search = dorisSearchCondition(searchQuery, searchType, {
+    type: "observations",
+    hasTracesJoin: false,
+  });
 
-  // Build the query using EventsQueryBuilder
-  const eventsQuery = new EventsQueryBuilder({ projectId })
-    .selectFieldSet("export")
-    .selectIO(false) // Full I/O, no truncation
-    .selectMetadataExpanded() // Full metadata values from events_full
-    .selectRaw(
-      "s.scores_avg as scores_avg",
-      "s.score_categories as score_categories",
-      "s.score_categories_tuples as score_categories_tuples",
+  // Build the query using raw SQL for Doris
+  // Doris doesn't have FINAL modifier or LIMIT 1 BY, so we use ROW_NUMBER() for deduplication
+  const query = `
+    WITH scores_agg AS (
+      SELECT
+        trace_id,
+        observation_id,
+        -- For numeric scores, use JSON format for compatibility
+        GROUP_CONCAT(
+          DISTINCT CONCAT(
+            '{"name":"', name, '","value":', avg_value, ',"dataType":"', data_type, '","stringValue":"', COALESCE(string_value, ''), '"}'
+          )
+        ) AS scores_avg,
+        -- For categorical scores, concatenate name:string_value pairs
+        GROUP_CONCAT(
+          DISTINCT CONCAT(name, ':', COALESCE(string_value, ''))
+        ) AS score_categories
+      FROM scores
+      WHERE project_id = {projectId: String}
+      GROUP BY trace_id, observation_id, name, data_type, string_value
     )
-    .withCTE(
-      "scores_agg",
-      eventsScoresAggregation({ projectId, includeTupleEncoding: true }),
-    )
-    .leftJoin(
-      "scores_agg s",
-      "ON s.trace_id = e.trace_id AND s.observation_id = e.span_id",
-    )
-    .where(appliedEventsFilter)
-    .where(search)
-    .whereRaw("e.is_deleted = 0")
-    .orderByDefault()
-    .limitBy("e.span_id", "e.project_id")
-    .limit(rowLimit);
+    SELECT
+      e.id,
+      e.trace_id,
+      e.project_id,
+      e.start_time,
+      e.end_time,
+      e.name,
+      e.type,
+      e.environment,
+      e.version,
+      e.user_id,
+      e.session_id,
+      e.level,
+      e.status_message,
+      e.prompt_name,
+      e.prompt_id,
+      e.prompt_version,
+      e.model_id,
+      e.provided_model_name,
+      e.model_parameters,
+      e.usage_details,
+      e.cost_details,
+      e.total_cost,
+      e.input,
+      e.output,
+      e.metadata,
+      e.completion_start_time,
+      e.latency,
+      e.time_to_first_token,
+      e.tags,
+      e.release,
+      e.trace_name,
+      e.parent_observation_id,
+      e.is_deleted,
+      s.scores_avg,
+      s.score_categories
+    FROM events e
+    LEFT JOIN scores_agg s ON s.trace_id = e.trace_id AND s.observation_id = e.id
+    WHERE e.project_id = {projectId: String}
+      ${appliedEventsFilter.query ? `AND ${appliedEventsFilter.query}` : ""}
+      ${search.query}
+      AND e.is_deleted = 0
+    ORDER BY e.start_time DESC
+    LIMIT {rowLimit: Int64}
+  `;
 
-  const { query, params: queryParams } = eventsQuery.buildWithParams();
+  const queryParams = {
+    projectId,
+    rowLimit,
+    ...appliedEventsFilter.params,
+    ...search.params,
+  };
 
   type EventRow = {
     id: string;
@@ -200,10 +228,9 @@ export const getEventsStream = async (props: {
     score_categories_tuples: [string, string | null][] | undefined;
   };
 
-  const asyncGenerator = queryClickhouseStream<EventRow>({
+  const asyncGenerator = queryDorisStream<EventRow>({
     query,
     params: queryParams,
-    clickhouseConfigs,
     tags: {
       feature: "batch-export",
       type: "event",
@@ -217,7 +244,7 @@ export const getEventsStream = async (props: {
     bufferedRow: EventRow,
     commentsByEvent: Map<string, any[]>,
   ) => {
-    // Process numeric/boolean scores (tuples from ClickHouse)
+    // Process numeric/boolean scores (tuples from Doris)
     const numericScores = (bufferedRow.scores_avg ?? []).map((score: any) => ({
       name: score[0],
       value: score[1],
@@ -225,7 +252,7 @@ export const getEventsStream = async (props: {
       stringValue: score[3],
     }));
 
-    // Process categorical scores (tuples from ClickHouse)
+    // Process categorical scores (tuples from Doris)
     const categoricalScores = (bufferedRow.score_categories_tuples ?? []).map(
       (cat) => ({
         name: cat[0],
@@ -348,7 +375,7 @@ export const getEventsStream = async (props: {
  * - Uses the "eval" field set (no time/latency/modelId columns)
  * - Skips scores CTE and JOIN
  * - Skips comment fetching
- * - Maps ClickHouse rows to ObservationForEval at the stream boundary
+ * - Maps Doris rows to ObservationForEval at the stream boundary
  */
 export const getEventsStreamForEval = async (props: {
   projectId: string;
@@ -374,8 +401,7 @@ export const getEventsStreamForEval = async (props: {
     );
 
     return (
-      columnDef?.clickhouseTableName !== "scores" &&
-      columnDef?.clickhouseTableName !== "comments"
+      columnDef?.tableName !== "scores" && columnDef?.tableName !== "comments"
     );
   });
 
@@ -391,32 +417,64 @@ export const getEventsStreamForEval = async (props: {
         },
       ],
       eventsTableUiColumnDefinitions,
-      eventsTableCols,
     ),
   );
 
   const appliedEventsFilter = eventsFilter.apply();
 
-  const search = clickhouseSearchCondition(searchQuery, searchType, "e", [
-    "span_id",
-    "name",
-    "user_id",
-    "session_id",
-    "trace_id",
-  ]);
+  const search = dorisSearchCondition(searchQuery, searchType, {
+    type: "observations",
+    hasTracesJoin: false,
+  });
 
-  const eventsQuery = new EventsQueryBuilder({ projectId })
-    .selectFieldSet("eval")
-    .selectIO(false)
-    .selectFieldSet("metadata")
-    .where(appliedEventsFilter)
-    .where(search)
-    .whereRaw("e.is_deleted = 0")
-    .orderByDefault()
-    .limitBy("e.span_id", "e.project_id")
-    .limit(rowLimit);
+  // Build the query for Doris - lightweight eval version
+  const query = `
+    SELECT
+      e.id,
+      e.trace_id,
+      e.project_id,
+      e.parent_observation_id,
+      e.type,
+      e.name,
+      e.environment,
+      e.version,
+      e.level,
+      e.status_message,
+      e.trace_name,
+      e.user_id,
+      e.session_id,
+      e.tags,
+      e.release,
+      e.provided_model_name,
+      e.model_parameters,
+      e.prompt_id,
+      e.prompt_name,
+      e.prompt_version,
+      e.provided_usage_details,
+      e.usage_details,
+      e.provided_cost_details,
+      e.cost_details,
+      e.tool_definitions,
+      e.tool_calls,
+      e.tool_call_names,
+      e.input,
+      e.output,
+      e.metadata
+    FROM events e
+    WHERE e.project_id = {projectId: String}
+      ${appliedEventsFilter.query ? `AND ${appliedEventsFilter.query}` : ""}
+      ${search.query}
+      AND e.is_deleted = 0
+    ORDER BY e.start_time DESC
+    LIMIT {rowLimit: Int64}
+  `;
 
-  const { query, params: queryParams } = eventsQuery.buildWithParams();
+  const queryParams = {
+    projectId,
+    rowLimit,
+    ...appliedEventsFilter.params,
+    ...search.params,
+  };
 
   // Matches the aliased columns from the "eval" field set + selectIO + selectFieldSet("metadata")
   type EvalEventRow = {
@@ -452,16 +510,9 @@ export const getEventsStreamForEval = async (props: {
     metadata: Record<string, unknown> | null;
   };
 
-  const asyncGenerator = queryClickhouseStream<EvalEventRow>({
+  const asyncGenerator = queryDorisStream<EvalEventRow>({
     query,
     params: queryParams,
-    clickhouseConfigs: {
-      request_timeout: 180_000,
-      clickhouse_settings: {
-        http_send_timeout: 300,
-        http_receive_timeout: 300,
-      },
-    },
     tags: {
       feature: "batch-eval",
       type: "event",
@@ -470,7 +521,7 @@ export const getEventsStreamForEval = async (props: {
     },
   });
 
-  // Remap ClickHouse aliases to schema field names.
+  // Remap Doris aliases to schema field names.
   // Schema validation is left to the consumer so per-row errors can be handled gracefully.
   return Readable.from(
     (async function* () {
@@ -513,8 +564,7 @@ export const getEventsStreamForDataset = async (props: {
     );
 
     return (
-      columnDef?.clickhouseTableName !== "scores" &&
-      columnDef?.clickhouseTableName !== "comments"
+      columnDef?.tableName !== "scores" && columnDef?.tableName !== "comments"
     );
   });
 
@@ -530,32 +580,39 @@ export const getEventsStreamForDataset = async (props: {
         },
       ],
       eventsTableUiColumnDefinitions,
-      eventsTableCols,
     ),
   );
 
   const appliedEventsFilter = eventsFilter.apply();
 
-  const search = clickhouseSearchCondition(searchQuery, searchType, "e", [
-    "span_id",
-    "name",
-    "user_id",
-    "session_id",
-    "trace_id",
-  ]);
+  const search = dorisSearchCondition(searchQuery, searchType, {
+    type: "observations",
+    hasTracesJoin: false,
+  });
 
-  const eventsQuery = new EventsQueryBuilder({ projectId })
-    .selectFieldSet("core")
-    .selectIO(false)
-    .selectFieldSet("metadata")
-    .where(appliedEventsFilter)
-    .where(search)
-    .whereRaw("e.is_deleted = 0")
-    .orderByDefault()
-    .limitBy("e.span_id", "e.project_id")
-    .limit(rowLimit);
+  // Build the query for Doris - lightweight dataset version
+  const query = `
+    SELECT
+      e.id,
+      e.trace_id,
+      e.input,
+      e.output,
+      e.metadata
+    FROM events e
+    WHERE e.project_id = {projectId: String}
+      ${appliedEventsFilter.query ? `AND ${appliedEventsFilter.query}` : ""}
+      ${search.query}
+      AND e.is_deleted = 0
+    ORDER BY e.start_time DESC
+    LIMIT {rowLimit: Int64}
+  `;
 
-  const { query, params: queryParams } = eventsQuery.buildWithParams();
+  const queryParams = {
+    projectId,
+    rowLimit,
+    ...appliedEventsFilter.params,
+    ...search.params,
+  };
 
   type DatasetEventRow = {
     id: string;
@@ -565,16 +622,9 @@ export const getEventsStreamForDataset = async (props: {
     metadata: Record<string, unknown> | null;
   };
 
-  const asyncGenerator = queryClickhouseStream<DatasetEventRow>({
+  const asyncGenerator = queryDorisStream<DatasetEventRow>({
     query,
     params: queryParams,
-    clickhouseConfigs: {
-      request_timeout: 180_000,
-      clickhouse_settings: {
-        http_send_timeout: 300,
-        http_receive_timeout: 300,
-      },
-    },
     tags: {
       feature: "batch-add-to-dataset",
       type: "event",

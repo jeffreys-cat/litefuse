@@ -16,10 +16,7 @@ import {
 import { v4 } from "uuid";
 import { FieldValidationError } from "../../utils/jsonSchemaValidation";
 import { DatasetItemDomain, DatasetItemDomainWithoutIO } from "../../domain";
-import {
-  parseClickhouseUTCDateTimeFormat,
-  queryClickhouse,
-} from "./clickhouse";
+import { queryDoris, parseDorisUTCDateTimeFormat } from "./doris";
 
 const emptyNormalizeOpts: { sanitizeControlChars?: boolean } = {};
 const emptyValidateOpts: { normalizeUndefinedToNull?: boolean } = {};
@@ -1712,15 +1709,15 @@ export async function getDatasetVersionForRun(params: {
       return null;
     },
     [Implementation.VERSIONED]: async () => {
-      // Step 1: Get the latest creation timestamp from dataset run items (ClickHouse)
-      const maxCreatedAtResult = await queryClickhouse<{
+      // Step 1: Get the latest creation timestamp from dataset run items (Doris)
+      const maxCreatedAtResult = await queryDoris<{
         max_created_at: string | null;
         max_dataset_item_version: string | null;
       }>({
         query: `
           SELECT 
-            maxOrNull(created_at) as max_created_at,
-            maxOrNull(dataset_item_version) as max_dataset_item_version
+            COALESCE(MAX(created_at), NULL) as max_created_at,
+            COALESCE(MAX(dataset_item_version), NULL) as max_dataset_item_version
           FROM dataset_run_items_rmt
           WHERE project_id = {projectId: String}
             AND dataset_id = {datasetId: String}
@@ -1742,7 +1739,7 @@ export async function getDatasetVersionForRun(params: {
         maxCreatedAtResult[0]?.max_dataset_item_version ?? null;
 
       if (maxDatasetItemVersion) {
-        return parseClickhouseUTCDateTimeFormat(maxDatasetItemVersion);
+        return parseDorisUTCDateTimeFormat(maxDatasetItemVersion);
       }
 
       if (!maxCreatedAt) {
@@ -1751,7 +1748,7 @@ export async function getDatasetVersionForRun(params: {
 
       // dataset item version takes precedence over created_at
       // max_created_at as fallback for experiments that ran before dataset item versioning was introduced
-      const formattedTimestamp = parseClickhouseUTCDateTimeFormat(maxCreatedAt);
+      const formattedTimestamp = parseDorisUTCDateTimeFormat(maxCreatedAt);
       // Step 2: Resolve to dataset version using temporal query (PostgreSQL)
       const result = await prisma.$queryRaw<Array<{ valid_from: Date | null }>>(
         Prisma.sql`

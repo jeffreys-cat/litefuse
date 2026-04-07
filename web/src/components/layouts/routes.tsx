@@ -62,6 +62,7 @@ export type Route = {
     organization: User["organizations"][number] | undefined;
   }) => boolean;
   group?: RouteGroup; // group this route belongs to (within a section)
+  hidden?: boolean; // hide this route from navigation
 };
 
 export const ROUTES: Route[] = [
@@ -130,57 +131,61 @@ export const ROUTES: Route[] = [
     productModule: "prompt-management",
     group: RouteGroup.PromptManagement,
     section: RouteSection.Main,
+    hidden: true,
   },
-  // {
-  //   title: "Playground",
-  //   pathname: "/project/[projectId]/playground",
-  //   icon: TerminalIcon,
-  //   productModule: "playground",
-  //   group: RouteGroup.PromptManagement,
-  //   section: RouteSection.Main,
-  // },
-  // Scores feature is not supported in this build
-  // {
-  //   title: "Scores",
-  //   pathname: `/project/[projectId]/scores`,
-  //   group: RouteGroup.Evaluation,
-  //   section: RouteSection.Main,
-  //   icon: SquarePercent,
-  // },
-  // Evaluation section is not supported in this build
-  // {
-  //   title: "LLM-as-a-Judge",
-  //   icon: Lightbulb,
-  //   productModule: "evaluation",
-  //   projectRbacScopes: ["evalJob:read"],
-  //   group: RouteGroup.Evaluation,
-  //   section: RouteSection.Main,
-  //   pathname: `/project/[projectId]/evals`,
-  // },
-  // {
-  //   title: "Human Annotation",
-  //   pathname: `/project/[projectId]/annotation-queues`,
-  //   projectRbacScopes: ["annotationQueues:read"],
-  //   group: RouteGroup.Evaluation,
-  //   section: RouteSection.Main,
-  //   icon: ClipboardPen,
-  // },
-  // {
-  //   title: "Datasets",
-  //   pathname: `/project/[projectId]/datasets`,
-  //   icon: Database,
-  //   productModule: "datasets",
-  //   group: RouteGroup.Evaluation,
-  //   section: RouteSection.Main,
-  // },
-  // {
-  //   title: "Experiments",
-  //   pathname: `/project/[projectId]/experiments`,
-  //   icon: Beaker,
-  //   featureFlag: "experimentsV4Enabled",
-  //   group: RouteGroup.Evaluation,
-  //   section: RouteSection.Main,
-  // },
+  {
+    title: "Playground",
+    pathname: "/project/[projectId]/playground",
+    icon: TerminalIcon,
+    productModule: "playground",
+    group: RouteGroup.PromptManagement,
+    section: RouteSection.Main,
+    hidden: true,
+  },
+  {
+    title: "Scores",
+    pathname: `/project/[projectId]/scores`,
+    group: RouteGroup.Evaluation,
+    section: RouteSection.Main,
+    icon: SquarePercent,
+    hidden: true,
+  },
+  {
+    title: "LLM-as-a-Judge",
+    icon: Lightbulb,
+    productModule: "evaluation",
+    projectRbacScopes: ["evalJob:read"],
+    group: RouteGroup.Evaluation,
+    section: RouteSection.Main,
+    pathname: `/project/[projectId]/evals`,
+    hidden: true,
+  },
+  {
+    title: "Human Annotation",
+    pathname: `/project/[projectId]/annotation-queues`,
+    projectRbacScopes: ["annotationQueues:read"],
+    group: RouteGroup.Evaluation,
+    section: RouteSection.Main,
+    icon: ClipboardPen,
+    hidden: true,
+  },
+  {
+    title: "Datasets",
+    pathname: `/project/[projectId]/datasets`,
+    icon: Database,
+    productModule: "datasets",
+    group: RouteGroup.Evaluation,
+    section: RouteSection.Main,
+    hidden: true,
+  },
+  {
+    title: "Experiments",
+    pathname: `/project/[projectId]/experiments`,
+    icon: Beaker,
+    featureFlag: "experimentsV4Enabled",
+    group: RouteGroup.Evaluation,
+    section: RouteSection.Main,
+  },
   {
     title: "Logging",
     pathname: `/project/[projectId]/discover`,

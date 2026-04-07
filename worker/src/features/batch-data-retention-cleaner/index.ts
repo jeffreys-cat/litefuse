@@ -3,10 +3,10 @@ import { createHash } from "crypto";
 import { percentile } from "@langfuse/shared";
 import { prisma } from "@langfuse/shared/src/db";
 import {
-  commandClickhouse,
-  convertDateToClickhouseDateTime,
+  commandDoris,
+  convertDateToAnalyticsDateTime,
   logger,
-  queryClickhouse,
+  queryDoris,
   recordGauge,
   recordIncrement,
 } from "@langfuse/shared/src/server";
@@ -14,7 +14,7 @@ import { env } from "../../env";
 import { getRetentionCutoffDate } from "../utils";
 import { PeriodicExclusiveRunner } from "../../utils/PeriodicExclusiveRunner";
 
-// Tables for batch data retention cleaning (ClickHouse only; also no dataset_run_items)
+// Tables for batch data retention cleaning (Doris only; also no dataset_run_items)
 export const BATCH_DATA_RETENTION_TABLES = [
   "traces",
   "observations",
@@ -50,7 +50,7 @@ interface ProjectWorkload {
 }
 
 /**
- * Hash projectId to a short key for ClickHouse parameter names.
+ * Hash projectId to a short key for Doris parameter names.
  */
 function toParamKey(projectId: string): string {
   return createHash("md5").update(projectId).digest("hex").slice(0, 8);
@@ -83,7 +83,7 @@ function buildRetentionConditions(
   const conditions = projects
     .map((p) => {
       const key = projectToKey.get(p.projectId)!;
-      return `(project_id = {pid_${key}: String} AND ${timestampColumn} < {cutoff_${key}: DateTime64(3)})`;
+      return `(project_id = {pid_${key}: String} AND ${timestampColumn} < {cutoff_${key}: DATETIME})`;
     })
     .join(" OR ");
 
@@ -91,14 +91,14 @@ function buildRetentionConditions(
   for (const p of projects) {
     const key = projectToKey.get(p.projectId)!;
     params[`pid_${key}`] = p.projectId;
-    params[`cutoff_${key}`] = convertDateToClickhouseDateTime(p.cutoffDate);
+    params[`cutoff_${key}`] = convertDateToAnalyticsDateTime(p.cutoffDate);
   }
 
   return { conditions, params };
 }
 
 /**
- * BatchDataRetentionCleaner handles bulk deletion of ClickHouse data based on
+ * BatchDataRetentionCleaner handles bulk deletion of Doris data based on
  * project retention settings.
  *
  * Each instance processes one table (traces, observations, scores, events_full, events_core).
@@ -108,7 +108,7 @@ function buildRetentionConditions(
  * Flow:
  * 1. Query PG for all projects with retentionDays > 0
  * 2. Calculate retention cutoff dates for each project
- * 3. Chunk projects and query CH for expired row counts (retention-aware)
+ * 3. Chunk projects and query Doris for expired row counts (retention-aware)
  * 4. Sort by expired count DESC, select top N projects with expired data
  * 5. Execute single batch DELETE with OR conditions
  */
@@ -242,10 +242,10 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
    * Get project workloads using chunked queries:
    * 1. PostgreSQL: Get all projects with retention enabled
    * 2. Calculate cutoffs for all projects
-   * 3. Chunk projects and query ClickHouse for expired row counts
+   * 3. Chunk projects and query Doris for expired row counts
    * 4. Combine results, sort by count, select top N
    *
-   * Chunking prevents running into CH query and param size limits.
+   * Chunking prevents running into Doris query and param size limits.
    */
   private async getProjectWorkloads(): Promise<ProjectWorkload[]> {
     const timestampColumn = TIMESTAMP_COLUMN_MAP[this.tableName];
@@ -303,7 +303,7 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
   }
 
   /**
-   * Count expired rows for a chunk of projects in ClickHouse.
+   * Count expired rows for a chunk of projects in Doris.
    * Uses the same retention conditions as delete to count only rows that will be deleted.
    */
   private async countExpiredRowsInChunk(
@@ -330,9 +330,7 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
       HAVING count > 0
     `;
 
-    const isLegacyEventsTable = this.tableName === "events";
-
-    const result = await queryClickhouse<{
+    const result = await queryDoris<{
       project_id: string;
       count: number;
       oldest_age_seconds: number;
@@ -344,7 +342,6 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
         table: this.tableName,
         operation: "count-chunk",
       },
-      allowLegacyEventsRead: isLegacyEventsTable,
     });
 
     // Build maps from the result
@@ -388,13 +385,9 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
 
     const query = `DELETE FROM ${this.tableName} WHERE ${conditions}`;
 
-    await commandClickhouse({
+    await commandDoris({
       query,
       params,
-      clickhouseConfigs: {
-        request_timeout:
-          env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS,
-      },
       tags: {
         feature: "batch-data-retention-cleaner",
         table: this.tableName,

@@ -1,6 +1,6 @@
 import {
-  queryClickhouse,
-  commandClickhouse,
+  queryDoris,
+  commandDoris,
   getCurrentSpan,
   logger,
   QueueName,
@@ -89,17 +89,19 @@ export const handleEventPropagationJob = async (
       }
     }
 
-    // Query for the next partition after the last processed one
-    // Filter for partitions older than LANGFUSE_EXPERIMENT_EVENT_PROPAGATION_PARTITION_DELAY_MINUTES minutes and order by partition ASC to get the oldest first
-    const partitions = await queryClickhouse<{ partition: string }>({
+    // Query for observation batches older than the delay threshold
+    // Doris doesn't have system.parts, so we query observations_batch_staging directly with time-based filtering
+    const delayMinutes =
+      env.LANGFUSE_EXPERIMENT_EVENT_PROPAGATION_PARTITION_DELAY_MINUTES;
+    const partitions = await queryDoris<{ partition: string }>({
       query: `
-        SELECT DISTINCT partition
-        FROM system.parts
-        WHERE table = 'observations_batch_staging'
-          AND active = 1
-          AND toDateTime(partition) < now() - INTERVAL ${env.LANGFUSE_EXPERIMENT_EVENT_PROPAGATION_PARTITION_DELAY_MINUTES} MINUTE
-          ${lastProcessedPartition ? `AND partition > {lastProcessedPartition: String}` : ""}
+        SELECT DATE_FORMAT(start_time, '%Y-%m-%d %H:00:00') as partition
+        FROM observations_batch_staging
+        WHERE start_time < DATE_SUB(NOW(), INTERVAL ${delayMinutes} MINUTE)
+          ${lastProcessedPartition ? `AND start_time > {lastProcessedPartition: String}` : ""}
+        GROUP BY partition
         ORDER BY partition ASC
+        LIMIT 1
       `,
       params: lastProcessedPartition ? { lastProcessedPartition } : undefined,
       tags: {
@@ -131,50 +133,10 @@ export const handleEventPropagationJob = async (
     // for the same span, this may create duplicates in the new events table. Deduplicating in this query
     // will significantly affect run-time. This may be an accepted degradation and we test the outcome
     // to check the likelihood of this happening in practice.
-    await commandClickhouse({
+    // NOTE: This query was rewritten for Doris. The ClickHouse version used system.parts, groupUniqArray,
+    // arrayJoin, map functions, and other ClickHouse-specific features that don't exist in Doris.
+    await commandDoris({
       query: `
-        with batch_stats as (
-          select
-            groupUniqArray(project_id) as project_ids,
-            groupUniqArray(trace_id) as trace_ids,
-            min(start_time) as min_start_time,
-            max(start_time) as max_start_time
-          from observations_batch_staging
-          where _partition_value = tuple('${partitionToProcess}')
-        ), experiment_traces_to_exclude as (
-          select distinct
-            project_id,
-            trace_id
-          from dataset_run_items_rmt
-          where project_id in (select arrayJoin(project_ids) from batch_stats)
-            and created_at >= now() - interval 24 hour
-        ), relevant_traces as (
-          select
-            t.id,
-            t.project_id,
-            t.name,
-            t.user_id,
-            t.session_id,
-            t.version,
-            t.release,
-            t.tags,
-            t.bookmarked,
-            t.public,
-            t.metadata
-          from traces t
-          where t.project_id in (select arrayJoin(project_ids) from batch_stats)
-            and t.id in (select arrayJoin(trace_ids) from batch_stats)
-            and (
-              -- For some reason clickhouse detects any "date >= '1969-12-31'" as false.
-              -- Therefore, we add a fallback condition that limits actively to last 7 days.
-              -- This means that 7 days becomes the maximum trace data propagation interval.
-              t.timestamp >= greatest((select min(min_start_time) - interval 1 day from batch_stats), now() - interval 7 day)
-            )
-            and t.timestamp <= (select max(max_start_time) + interval 1 day from batch_stats)
-          order by t.event_ts desc
-          limit 1 by t.project_id, t.id
-        )
-
         INSERT INTO events (
           project_id,
           trace_id,
@@ -211,7 +173,6 @@ export const handleEventPropagationJob = async (
           tool_definitions,
           tool_calls,
           tool_call_names,
-
           input,
           output,
           metadata,
@@ -229,35 +190,32 @@ export const handleEventPropagationJob = async (
           obs.project_id,
           obs.trace_id,
           obs.id AS span_id,
-          -- When the observation IS the trace itself (id = trace_id), parent should be NULL
-          -- Otherwise, use standard wrapper logic: parent_observation_id or prefixed trace_id as fallback
           CASE
-            WHEN obs.id = concat('t-', obs.trace_id) THEN ''
-            ELSE coalesce(obs.parent_observation_id, concat('t-', obs.trace_id))
+            WHEN obs.id = CONCAT('t-', obs.trace_id) THEN ''
+            ELSE COALESCE(obs.parent_observation_id, CONCAT('t-', obs.trace_id))
           END AS parent_span_id,
-          -- Convert timestamps from DateTime64(3) to DateTime64(6) via implicit conversion
           obs.start_time,
           obs.end_time,
           obs.name,
           obs.type,
           obs.environment,
-          coalesce(obs.version, t.version) as version,
-          coalesce(t.release, '') as release,
+          COALESCE(obs.version, t.version) as version,
+          COALESCE(t.release, '') as release,
           t.tags as tags,
           t.public as public,
-          t.bookmarked AND (obs.parent_observation_id IS NULL OR obs.parent_observation_id = '') AS bookmarked,
+          IF(obs.parent_observation_id IS NULL OR obs.parent_observation_id = '', t.bookmarked, FALSE) AS bookmarked,
           t.name AS trace_name,
-          coalesce(t.user_id, '') AS user_id,
-          coalesce(t.session_id, '') AS session_id,
+          COALESCE(t.user_id, '') AS user_id,
+          COALESCE(t.session_id, '') AS session_id,
           obs.level,
-          coalesce(obs.status_message, '') AS status_message,
+          COALESCE(obs.status_message, '') AS status_message,
           obs.completion_start_time,
           obs.prompt_id,
           obs.prompt_name,
           obs.prompt_version,
           obs.internal_model_id AS model_id,
           obs.provided_model_name,
-          coalesce(obs.model_parameters, '{}'),
+          COALESCE(obs.model_parameters, '{}'),
           obs.provided_usage_details,
           obs.usage_details,
           obs.provided_cost_details,
@@ -267,45 +225,28 @@ export const handleEventPropagationJob = async (
           obs.tool_definitions,
           obs.tool_calls,
           obs.tool_call_names,
-
-          coalesce(obs.input, '') AS input,
-          coalesce(obs.output, '') AS output,
-          -- Merge trace and observation metadata, with observation taking precedence (first map wins)
-          CAST(mapConcat(obs.metadata, coalesce(t.metadata, map())), 'JSON(max_dynamic_paths=0)') AS metadata,
-          mapKeys(mapConcat(obs.metadata, coalesce(t.metadata, map()))) AS metadata_names,
-          mapValues(mapConcat(obs.metadata, coalesce(t.metadata, map()))) AS metadata_raw_values,
-          multiIf(mapContains(obs.metadata, 'resourceAttributes'), 'otel-dual-write', 'ingestion-api-dual-write') AS source,
+          COALESCE(obs.input, '') AS input,
+          COALESCE(obs.output, '') AS output,
+          obs.metadata,
+          JSON_KEYS(obs.metadata) AS metadata_names,
+          JSON_VALUES(obs.metadata) AS metadata_raw_values,
+          IF(JSON_CONTAINS(obs.metadata, 'resourceAttributes'), 'otel-dual-write', 'ingestion-api-dual-write') AS source,
           '' AS blob_storage_file_path,
-          byteSize(*) AS event_bytes,
+          0 AS event_bytes,
           obs.created_at,
           obs.updated_at,
           obs.event_ts,
           obs.is_deleted
-        FROM observations_batch_staging obs FINAL
-        LEFT JOIN relevant_traces t
-        ON (
-          obs.project_id = t.project_id AND
-          obs.trace_id = t.id
-        )
-        LEFT ANTI JOIN experiment_traces_to_exclude excl
-        ON (
-          excl.project_id = obs.project_id AND
-          excl.trace_id = obs.trace_id
-        )
-        WHERE obs._partition_value = tuple('${partitionToProcess}')
+        FROM observations_batch_staging obs
+        LEFT JOIN traces t
+        ON obs.project_id = t.project_id AND obs.trace_id = t.id
+        WHERE obs.start_time >= DATE_SUB(NOW(), INTERVAL ${delayMinutes} MINUTE)
+          AND obs.start_time < DATE_ADD(DATE_FORMAT(obs.start_time, '%Y-%m-%d %H:00:00'), INTERVAL 1 HOUR)
       `,
       tags: {
         feature: "ingestion",
         partition: partitionToProcess,
         operation_name: "propagateObservationsToEvents",
-      },
-      clickhouseConfigs: {
-        request_timeout: 600000, // 10 minutes timeout
-      },
-      clickhouseSettings: {
-        parallel_view_processing: 1,
-        max_insert_threads: "8",
-        type_json_skip_duplicated_paths: true,
       },
     });
 

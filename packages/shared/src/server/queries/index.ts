@@ -15,39 +15,19 @@ export {
   NumberObjectFilter,
   StringObjectFilter,
   NullFilter,
-} from "./clickhouse-sql/clickhouse-filter";
+} from "./doris-sql/doris-filter";
+
 export { FilterList, type Filter, type DbOperator } from "./filter";
-export {
-  orderByToClickhouseSql,
-  orderByToEntries,
-} from "./clickhouse-sql/orderby-factory";
-export { createFilterFromFilterState } from "./clickhouse-sql/factory";
+export { orderByToDorisSQL } from "./doris-sql/orderby-factory";
 export { createDorisFilterFromFilterState } from "./doris-sql/factory";
-export { clickhouseSearchCondition } from "./clickhouse-sql/search";
+// Alias for backward compatibility - createFilterFromFilterState was the ClickHouse version
+// but is now replaced by createDorisFilterFromFilterState
+export { createDorisFilterFromFilterState as createFilterFromFilterState } from "./doris-sql/factory";
+export { dorisSearchCondition } from "./doris-sql/search";
 export {
-  convertApiProvidedFilterToClickhouseFilter,
+  convertApiProvidedFilterToDorisFilter,
   createPublicApiObservationsColumnMapping,
   createPublicApiTracesColumnMapping,
   deriveFilters,
   type ApiColumnMapping,
 } from "./public-api-filter-builder";
-export {
-  CTEQueryBuilder,
-  EventsAggQueryBuilder,
-  EventsAggregationQueryBuilder,
-  EventsSessionAggregationQueryBuilder,
-  EventsQueryBuilder,
-  buildEventsFullTableSplitQuery,
-  type CTESchema,
-  type CTEWithSchema,
-  type SessionEventsMetricsRow,
-  type SplitQueryBuilder,
-} from "./clickhouse-sql/event-query-builder";
-export {
-  eventsScoresAggregation,
-  eventsSessionsAggregation,
-  eventsSessionScoresAggregation,
-  eventsTraceMetadata,
-  eventsTracesAggregation,
-  eventsTracesScoresAggregation,
-} from "./clickhouse-sql/query-fragments";

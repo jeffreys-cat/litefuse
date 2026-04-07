@@ -15,7 +15,7 @@ vi.mock("@langfuse/shared/src/server", async () => {
   return {
     ...actual,
     getDeletedProjects: vi.fn(),
-    removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject: (
+    removeIngestionEventsFromS3AndDeleteDorisRefsForProject: (
       ...args: unknown[]
     ) => mockRemoveIngestionEvents(...args),
   };

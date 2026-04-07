@@ -59,31 +59,6 @@ const EnvSchema = z.object({
   LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS: z.coerce.number().default(86400), // 24 hours
   LANGFUSE_CACHE_PROMPT_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_CACHE_PROMPT_TTL_SECONDS: z.coerce.number().default(3600), // 1h
-  // ClickHouse is optional when LANGFUSE_ANALYTICS_BACKEND=doris
-  CLICKHOUSE_URL: z.string().url().optional(),
-  CLICKHOUSE_READ_ONLY_URL: z.string().url().optional(),
-  CLICKHOUSE_EVENTS_READ_ONLY_URL: z.string().url().optional(),
-  CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
-  CLICKHOUSE_DB: z.string().default("default"),
-  CLICKHOUSE_USER: z.string().optional(),
-  CLICKHOUSE_PASSWORD: z.string().optional(),
-  CLICKHOUSE_KEEP_ALIVE_IDLE_SOCKET_TTL: z.coerce.number().int().default(9000),
-  CLICKHOUSE_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
-  // Optional to allow for server-setting fallbacks
-  CLICKHOUSE_ASYNC_INSERT_MAX_DATA_SIZE: z.string().optional(),
-  CLICKHOUSE_ASYNC_INSERT_BUSY_TIMEOUT_MS: z.coerce.number().int().optional(),
-  CLICKHOUSE_ASYNC_INSERT_BUSY_TIMEOUT_MIN_MS: z.coerce
-    .number()
-    .int()
-    .min(50)
-    .optional(),
-  CLICKHOUSE_LIGHTWEIGHT_DELETE_MODE: z
-    .enum(["alter_update", "lightweight_update", "lightweight_update_force"])
-    .default("alter_update"),
-  CLICKHOUSE_USE_LIGHTWEIGHT_UPDATE: z.enum(["true", "false"]).default("false"),
-  CLICKHOUSE_UPDATE_PARALLEL_MODE: z
-    .enum(["sync", "async", "auto"])
-    .default("auto"),
 
   // Doris configuration
   DORIS_URL: z.string().url().optional(),
@@ -98,10 +73,8 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false"),
 
-  // Ingestion backend selection
-  LANGFUSE_ANALYTICS_BACKEND: z
-    .enum(["clickhouse", "doris"])
-    .default("clickhouse"),
+  // Analytics backend selection (Doris only)
+  LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 
   LANGFUSE_INGESTION_QUEUE_DELAY_MS: z.coerce
     .number()
@@ -210,8 +183,8 @@ const EnvSchema = z.object({
   LANGFUSE_API_TRACE_OBSERVATIONS_SIZE_LIMIT_BYTES: z.coerce
     .number()
     .default(80e6), // 80MB
-  LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS: z.coerce.number().default(600_000), // 10 minutes
-  LANGFUSE_CLICKHOUSE_QUERY_MAX_ATTEMPTS: z.coerce.number().default(3), // Maximum attempts for socket hang up errors
+  LANGFUSE_DORIS_DELETION_TIMEOUT_MS: z.coerce.number().default(600_000), // 10 minutes
+  LANGFUSE_DORIS_QUERY_MAX_ATTEMPTS: z.coerce.number().default(3), // Maximum attempts for socket hang up errors
   LANGFUSE_SKIP_S3_LIST_FOR_OBSERVATIONS_PROJECT_IDS: z.string().optional(),
   LANGFUSE_INGESTION_PROCESSING_SAMPLED_PROJECTS: z
     .string()
@@ -282,7 +255,7 @@ const EnvSchema = z.object({
     .positive()
     .default(1_000),
 
-  LANGFUSE_CLICKHOUSE_DATA_EXPORT_REQUEST_TIMEOUT_MS: z.coerce
+  LANGFUSE_DORIS_DATA_EXPORT_REQUEST_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
@@ -302,13 +275,8 @@ const EnvSchema = z.object({
   LANGFUSE_AWS_BEDROCK_REGION: z.string().optional(),
 
   // API Performance Flags
-  // Whether to add a `FINAL` modifier to the observations CTE in GET /api/public/traces.
-  // Can be used to improve performance for self-hosters that are fully on the new OTel SDKs.
-  LANGFUSE_API_CLICKHOUSE_DISABLE_OBSERVATIONS_FINAL: z
-    .enum(["true", "false"])
-    .default("false"),
-  // Enable Redis-based tracking of projects using OTEL API to optimize ClickHouse queries.
-  // When enabled, projects ingesting via OTEL API skip the FINAL modifier on some observations queries for better performance.
+  // Enable Redis-based tracking of projects using OTEL API to optimize queries.
+  // When enabled, projects ingesting via OTEL API skip certain modifiers for better performance.
   LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS: z
     .enum(["true", "false"])
     .default("false"),

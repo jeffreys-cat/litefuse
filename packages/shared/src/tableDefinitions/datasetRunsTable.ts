@@ -15,25 +15,25 @@ type DatasetRunFilterColumnLiterals = ExtractLiterals<
 
 /**
  * Columns that can be filtered using basic PostgreSQL dataset run data
- * (don't require aggregated metrics from ClickHouse)
+ * (don't require aggregated metrics from Doris)
  */
-const CLICKHOUSE_FILTER_COLUMNS: DatasetRunFilterColumnLiterals[] = [
+const DORIS_FILTER_COLUMNS: DatasetRunFilterColumnLiterals[] = [
   "Scores (categorical)",
   "Scores (numeric)",
 ];
-const CLICKHOUSE_FILTER_COLUMNS_SET = new Set(CLICKHOUSE_FILTER_COLUMNS);
+const DORIS_FILTER_COLUMNS_SET = new Set(DORIS_FILTER_COLUMNS);
 
 /**
- * Returns true if the dataset run filter column requires DRI metrics from ClickHouse.
+ * Returns true if the dataset run filter column requires DRI metrics from Doris.
  *
  * This function determines data source requirements by checking if the column
- * needs aggregated metrics that are only available in ClickHouse dataset_run_items_rmt.
+ * needs aggregated metrics that are only available in Doris dataset_run_items_rmt.
  *
  * @param column - The dataset run filter column ID to check
- * @returns true if requires ClickHouse DRI metrics, false if PostgreSQL data is sufficient
+ * @returns true if requires Doris DRI metrics, false if PostgreSQL data is sufficient
  */
-export function isClickhouseFilterColumn(column: string): boolean {
-  return CLICKHOUSE_FILTER_COLUMNS_SET.has(column);
+export function isDorisFilterColumn(column: string): boolean {
+  return DORIS_FILTER_COLUMNS_SET.has(column);
 }
 
 export const datasetRunsTableCols: ColumnDefinition[] = [

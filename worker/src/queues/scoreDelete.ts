@@ -1,11 +1,11 @@
 import { Job, Processor } from "bullmq";
 import { QueueName, TQueueJobTypes } from "@langfuse/shared/src/server";
 
-import { processClickhouseScoreDelete } from "../features/scores/processClickhouseScoreDelete";
+import { processDorisScoreDelete } from "../features/scores/processDorisScoreDelete";
 
 export const scoreDeleteProcessor: Processor = async (
   job: Job<TQueueJobTypes[QueueName.ScoreDelete]>,
 ): Promise<void> => {
   const { scoreIds, projectId } = job.data.payload;
-  await processClickhouseScoreDelete(projectId, scoreIds);
+  await processDorisScoreDelete(projectId, scoreIds);
 };

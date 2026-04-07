@@ -13,7 +13,7 @@ vi.mock("@langfuse/shared/src/server", async () => {
   return {
     ...actual,
     getS3MediaStorageClient: vi.fn(),
-    removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject: vi.fn(),
+    removeIngestionEventsFromS3AndDeleteDorisRefsForProject: vi.fn(),
   };
 });
 

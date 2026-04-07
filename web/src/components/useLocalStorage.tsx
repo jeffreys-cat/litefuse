@@ -103,15 +103,18 @@ function useLocalStorage<T>(
       e: CustomEvent<{ key: string; newValue: string }>,
     ) => {
       if (e.detail.key === localStorageKey) {
-        try {
-          setValue(
-            e.detail.newValue
-              ? (JSON.parse(e.detail.newValue) as T)
-              : initialValue,
-          );
-        } catch (error) {
-          console.error("Error parsing custom event", error);
-        }
+        // Defer state update to avoid updating a component while rendering another
+        setTimeout(() => {
+          try {
+            setValue(
+              e.detail.newValue
+                ? (JSON.parse(e.detail.newValue) as T)
+                : initialValue,
+            );
+          } catch (error) {
+            console.error("Error parsing custom event", error);
+          }
+        }, 0);
       }
     };
 

@@ -1,8 +1,8 @@
 import {
   getDeletedProjects,
   logger,
-  queryClickhouse,
-  commandClickhouse,
+  queryDoris,
+  commandDoris,
   traceException,
   recordIncrement,
 } from "@langfuse/shared/src/server";
@@ -30,7 +30,7 @@ interface ProjectCount {
 }
 
 /**
- * BatchProjectCleaner handles bulk deletion of ClickHouse data for soft-deleted projects.
+ * BatchProjectCleaner handles bulk deletion of Doris data for soft-deleted projects.
  *
  * Each instance processes one table (traces, observations, scores, events_full, events_core).
  * Multiple workers coordinate via Redis distributed locking to ensure only one
@@ -38,7 +38,7 @@ interface ProjectCount {
  *
  * Flow:
  * 1. Query PG for projects with deleted_at set (no lock needed)
- * 2. Query ClickHouse for counts per project (no lock needed)
+ * 2. Query Doris for counts per project (no lock needed)
  * 3. Acquire Redis lock for DELETE only
  * 4. Execute DELETE
  * 5. On failure: re-run count query to determine partial success
@@ -102,17 +102,14 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
       return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
-    // Step 2: Query ClickHouse for counts per project (no lock needed)
+    // Step 2: Query Doris for counts per project (no lock needed)
     let initialCounts: Map<string, number>;
     try {
       initialCounts = await this.getProjectCounts(
         deletedProjects.map((p) => p.id),
       );
     } catch (error) {
-      logger.error(
-        `${this.instanceName}: Failed to query ClickHouse counts`,
-        error,
-      );
+      logger.error(`${this.instanceName}: Failed to query Doris counts`, error);
       traceException(error);
       return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
@@ -211,7 +208,7 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
       ORDER BY count DESC
     `;
 
-    const results = await queryClickhouse<ProjectCount>({
+    const results = await queryDoris<ProjectCount>({
       query,
       params: { projectIds },
       tags: {
@@ -219,7 +216,6 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
         table: this.tableName,
         operation: "count",
       },
-      allowLegacyEventsRead: this.tableName === "events",
     });
 
     const counts = new Map<string, number>();
@@ -240,12 +236,9 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
       WHERE project_id IN ({projectIds: Array(String)})
     `;
 
-    await commandClickhouse({
+    await commandDoris({
       query,
       params: { projectIds },
-      clickhouseConfigs: {
-        request_timeout: env.LANGFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS,
-      },
       tags: {
         feature: "batch-project-cleaner",
         table: this.tableName,

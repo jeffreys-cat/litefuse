@@ -11,7 +11,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
 import { env } from "../env";
-import { processClickhouseScoreDelete } from "../features/scores/processClickhouseScoreDelete";
+import { processDorisScoreDelete } from "../features/scores/processDorisScoreDelete";
 
 describe("score deletion", () => {
   let eventStorageService: StorageService;
@@ -35,7 +35,7 @@ describe("score deletion", () => {
     await createScoresCh([score]);
 
     // When
-    await processClickhouseScoreDelete(projectId, [score.id]);
+    await processDorisScoreDelete(projectId, [score.id]);
 
     // Then
     const scores = await getScoresByIds(projectId, [score.id]);
@@ -81,7 +81,7 @@ describe("score deletion", () => {
     });
 
     // When
-    await processClickhouseScoreDelete(projectId, [scoreId]);
+    await processDorisScoreDelete(projectId, [scoreId]);
 
     // Then
     const eventLog = getBlobStorageByProjectId(projectId);

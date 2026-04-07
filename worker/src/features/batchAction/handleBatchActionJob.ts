@@ -29,7 +29,7 @@ import {
 } from "./processAddToQueue";
 import { prisma } from "@langfuse/shared/src/db";
 import { randomUUID } from "node:crypto";
-import { processClickhouseScoreDelete } from "../scores/processClickhouseScoreDelete";
+import { processDorisScoreDelete } from "../scores/processDorisScoreDelete";
 import { getObservationStream } from "../database-read-stream/observation-stream";
 import {
   getEventsStreamForEval,
@@ -83,7 +83,7 @@ async function processActionChunk(
         break;
 
       case "score-delete":
-        await processClickhouseScoreDelete(projectId, chunkIds);
+        await processDorisScoreDelete(projectId, chunkIds);
         break;
 
       default:
@@ -246,7 +246,7 @@ export const handleBatchActionJob = async (
             searchQuery: query.searchQuery ?? undefined,
             searchType: query.searchType,
             rowLimit: env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
-          }) // when reading from clickhouse, we only want to read the necessary identifiers.
+          }) // when reading from Doris, we only want to read the necessary identifiers.
         : await getDatabaseReadStreamPaginated({
             projectId: projectId,
             cutoffCreatedAt: new Date(cutoffCreatedAt),

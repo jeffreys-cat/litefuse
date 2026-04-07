@@ -14,7 +14,7 @@ import {
   getEventsForBlobStorageExport,
   getCurrentSpan,
   BlobStorageIntegrationProcessingQueue,
-  queryClickhouse,
+  queryDoris,
   QueueJobs,
 } from "@langfuse/shared/src/server";
 import {
@@ -40,11 +40,11 @@ const getMinTimestampForExport = async (
   // For first export, use the export mode to determine start date
   switch (exportMode) {
     case BlobStorageExportMode.FULL_HISTORY:
-      // Query ClickHouse for the actual minimum timestamp from traces, observations, and scores tables
+      // Query Doris for the actual minimum timestamp from traces, observations, and scores tables
       try {
-        const result = await queryClickhouse<{ min_timestamp: number | null }>({
+        const result = await queryDoris<{ min_timestamp: number | null }>({
           query: `
-              SELECT min(toUnixTimestamp(ts)) * 1000 as min_timestamp
+              SELECT min(UNIX_TIMESTAMP(ts)) * 1000 as min_timestamp
               FROM (
                 SELECT min(timestamp) as ts
                 FROM traces
@@ -69,7 +69,7 @@ const getMinTimestampForExport = async (
 
         // Extract the minimum timestamp
         logger.info(
-          `[BLOB INTEGRATION] ClickHouse min_timestamp for project ${projectId}: ${result[0]?.min_timestamp}, type: ${typeof result[0]?.min_timestamp}`,
+          `[BLOB INTEGRATION] Doris min_timestamp for project ${projectId}: ${result[0]?.min_timestamp}, type: ${typeof result[0]?.min_timestamp}`,
         );
         const minTimestampValue = Number(result[0]?.min_timestamp);
 
@@ -88,7 +88,7 @@ const getMinTimestampForExport = async (
         return new Date(0);
       } catch (error) {
         logger.error(
-          `[BLOB INTEGRATION] Error querying ClickHouse for minimum timestamp for project ${projectId}`,
+          `[BLOB INTEGRATION] Error querying Doris for minimum timestamp for project ${projectId}`,
           error,
         );
         throw new Error(`Failed to fetch minimum timestamp: ${error}`);
@@ -496,6 +496,6 @@ function extractStorageErrorMessage(error: unknown): string {
     return cause.message.slice(0, 1000);
   }
 
-  // Fallback: ClickHouse errors or other non-wrapped errors
+  // Fallback: Doris errors or other non-wrapped errors
   return error.message.slice(0, 1000);
 }

@@ -11,7 +11,7 @@ import {
   getS3MediaStorageClient,
   logger,
   QueueName,
-  removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject,
+  removeIngestionEventsFromS3AndDeleteDorisRefsForProject,
   TQueueJobTypes,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
@@ -58,7 +58,7 @@ export const projectDeleteProcessor: Processor = async (
   // Delete project data from ClickHouse first
   await Promise.all([
     env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
-      ? removeIngestionEventsFromS3AndDeleteClickhouseRefsForProject(
+      ? removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
           projectId,
           undefined,
         )

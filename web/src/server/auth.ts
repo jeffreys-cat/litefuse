@@ -314,22 +314,22 @@ if (
     }),
   );
 
-// Langfuse Cloud only: "Sign in with ClickHouse Cloud"
+// Langfuse Cloud only: "Sign in with Doris Cloud"
 // Uses Auth0Provider with a custom provider ID so the callback URL becomes
-// /api/auth/callback/clickhouse-cloud. NOT intended for self-hosted Langfuse.
+// /api/auth/callback/doris-cloud. NOT intended for self-hosted Langfuse.
 if (
-  env.AUTH_CLICKHOUSE_CLOUD_CLIENT_ID &&
-  env.AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET &&
-  env.AUTH_CLICKHOUSE_CLOUD_ISSUER &&
+  env.AUTH_DORIS_CLOUD_CLIENT_ID &&
+  env.AUTH_DORIS_CLOUD_CLIENT_SECRET &&
+  env.AUTH_DORIS_CLOUD_ISSUER &&
   env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
 )
   staticProviders.push(
     Auth0Provider({
-      id: "clickhouse-cloud",
-      name: "ClickHouse Cloud",
-      clientId: env.AUTH_CLICKHOUSE_CLOUD_CLIENT_ID,
-      clientSecret: env.AUTH_CLICKHOUSE_CLOUD_CLIENT_SECRET,
-      issuer: env.AUTH_CLICKHOUSE_CLOUD_ISSUER,
+      id: "doris-cloud",
+      name: "Doris Cloud",
+      clientId: env.AUTH_DORIS_CLOUD_CLIENT_ID,
+      clientSecret: env.AUTH_DORIS_CLOUD_CLIENT_SECRET,
+      issuer: env.AUTH_DORIS_CLOUD_ISSUER,
       authorization: {
         params: {
           scope: "openid email profile",
@@ -337,13 +337,12 @@ if (
         },
       },
       allowDangerousEmailAccountLinking:
-        env.AUTH_CLICKHOUSE_CLOUD_ALLOW_ACCOUNT_LINKING === "true",
+        env.AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING === "true",
       client: {
-        token_endpoint_auth_method:
-          env.AUTH_CLICKHOUSE_CLOUD_CLIENT_AUTH_METHOD,
+        token_endpoint_auth_method: env.AUTH_DORIS_CLOUD_CLIENT_AUTH_METHOD,
       },
-      ...(env.AUTH_CLICKHOUSE_CLOUD_CHECKS
-        ? { checks: env.AUTH_CLICKHOUSE_CLOUD_CHECKS }
+      ...(env.AUTH_DORIS_CLOUD_CHECKS
+        ? { checks: env.AUTH_DORIS_CLOUD_CHECKS }
         : {}),
     }),
   );

@@ -197,6 +197,11 @@ function applyFiltersToRoute(
   ctx: NavigationFilterContext,
   organization: Organization | undefined,
 ): Route | null {
+  // Filter out hidden routes
+  if (route.hidden) {
+    return null;
+  }
+
   // Apply filters in sequence - chain short-circuits on first null
   const filterChain = [
     filters.projectScope,

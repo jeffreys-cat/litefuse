@@ -358,7 +358,7 @@ export const commentsRouter = createTRPCRouter({
         scope: "comments:read",
       });
 
-      const clickhouseTraces = await getTracesIdentifierForSession(
+      const dorisTraces = await getTracesIdentifierForSession(
         input.projectId,
         input.sessionId,
       );
@@ -373,7 +373,7 @@ export const commentsRouter = createTRPCRouter({
           GROUP BY object_id
         `;
 
-      const traceIds = new Set(clickhouseTraces.map((t) => t.id));
+      const traceIds = new Set(dorisTraces.map((t) => t.id));
       return new Map(
         allTraceCommentCounts
           .filter((c) => traceIds.has(c.objectId))
@@ -394,12 +394,12 @@ export const commentsRouter = createTRPCRouter({
         scope: "comments:read",
       });
 
-      const clickhouseTraces = await getTracesIdentifierForSession(
+      const dorisTraces = await getTracesIdentifierForSession(
         input.projectId,
         input.sessionId,
       );
 
-      const traceIds = clickhouseTraces.map((t) => t.id);
+      const traceIds = dorisTraces.map((t) => t.id);
 
       if (traceIds.length === 0) {
         return {};

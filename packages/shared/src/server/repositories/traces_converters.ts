@@ -1,6 +1,5 @@
-import { parseClickhouseUTCDateTimeFormat } from "./clickhouse";
 import { TraceRecordExtraFieldsType, TraceRecordReadType } from "./definitions";
-import { convertDateToClickhouseDateTime } from "../clickhouse/client";
+import { convertDateToAnalyticsDateTime } from "./analytics";
 import { TraceDomain } from "../../domain";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
 import {
@@ -8,29 +7,29 @@ import {
   DEFAULT_RENDERING_PROPS,
   applyInputOutputRendering,
 } from "../utils/rendering";
-import { isDorisBackend } from "./analytics";
+import { parseDorisUTCDateTimeFormat } from "./doris";
 
 // Helper function to parse timestamps from different backends
 const parseTimestamp = (timestamp: string | Date): Date => {
   // Only apply special handling for Doris backend
-  if (isDorisBackend() && timestamp instanceof Date) {
+  if (timestamp instanceof Date) {
     return timestamp;
   }
 
   // Default ClickHouse behavior - always expect string
   if (typeof timestamp === "string") {
-    return parseClickhouseUTCDateTimeFormat(timestamp);
+    return parseDorisUTCDateTimeFormat(timestamp);
   }
 
   throw new Error(`Invalid timestamp format: ${typeof timestamp}`);
 };
 
-export const convertTraceDomainToClickhouse = (
+export const convertTraceDomainToDoris = (
   trace: TraceDomain,
 ): TraceRecordReadType => {
   return {
     id: trace.id,
-    timestamp: convertDateToClickhouseDateTime(trace.timestamp),
+    timestamp: convertDateToAnalyticsDateTime(trace.timestamp),
     name: trace.name,
     user_id: trace.userId,
     metadata: trace.metadata as Record<string, string>,
@@ -44,14 +43,14 @@ export const convertTraceDomainToClickhouse = (
     input: trace.input as string,
     output: trace.output as string,
     session_id: trace.sessionId,
-    created_at: convertDateToClickhouseDateTime(trace.createdAt),
-    updated_at: convertDateToClickhouseDateTime(trace.updatedAt),
-    event_ts: convertDateToClickhouseDateTime(new Date()),
+    created_at: convertDateToAnalyticsDateTime(trace.createdAt),
+    updated_at: convertDateToAnalyticsDateTime(trace.updatedAt),
+    event_ts: convertDateToAnalyticsDateTime(new Date()),
     is_deleted: 0,
   };
 };
 
-export const convertClickhouseToDomain = (
+export const convertDorisToDomain = (
   record: TraceRecordReadType,
   renderingProps: RenderingProps = DEFAULT_RENDERING_PROPS,
 ): TraceDomain => {
@@ -92,13 +91,13 @@ export const convertClickhouseToDomain = (
   };
 };
 
-export const convertClickhouseTracesListToDomain = (
+export const convertDorisTracesListToDomain = (
   result: Array<TraceRecordReadType & TraceRecordExtraFieldsType>,
   include: { observations: boolean; scores: boolean; metrics: boolean },
 ): Array<TraceDomain & TraceRecordExtraFieldsType> => {
   return result.map((trace) => {
     return {
-      ...convertClickhouseToDomain(trace, DEFAULT_RENDERING_PROPS),
+      ...convertDorisToDomain(trace, DEFAULT_RENDERING_PROPS),
       // Conditionally include additional fields based on request
       // We need to return empty list on excluded scores / observations
       // and -1 on excluded metrics to not break the SDK API clients
