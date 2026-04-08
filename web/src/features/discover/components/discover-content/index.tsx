@@ -23,6 +23,7 @@ import {
   currentTimeFieldAtom,
 } from "store/discover";
 import { get } from "lodash-es";
+import { formatTimestampToDateTime } from "utils/data";
 import { Button as ShadcnButton } from "@/src/components/ui/button";
 import SDCollapsibleTable from "components/selectdb-ui/sd-collapsible-table";
 import { useDiscoverTheme } from "components/ui/theme";
@@ -330,7 +331,7 @@ export default function DiscoverContent({
           const fieldValue = getValue<string>();
           const fieldName = currentTimeField;
           const fieldType = "DATE";
-          const timeField = fieldValue;
+          const timeField = formatTimestampToDateTime(fieldValue);
           return (
             <div
               className={`${css`
