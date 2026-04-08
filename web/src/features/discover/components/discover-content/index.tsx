@@ -421,6 +421,7 @@ export default function DiscoverContent({
                     overflow: auto;
                     word-break: break-all;
                     white-space: pre-wrap;
+                    max-width: 600px;
                   `}
                 />
               </ColumnStyleWrapper>
@@ -444,6 +445,7 @@ export default function DiscoverContent({
         ...dynamicColumns,
         ...selectedFields.map((field: any) => {
           return {
+            id: `selected_${field.Field}`,
             accessorKey: field.Field,
             header: () => (
               <div
@@ -491,7 +493,8 @@ export default function DiscoverContent({
                   <div
                     className={css`
                       max-height: 192px;
-                      overflow: auto;
+                      max-width: 240px;
+                      overflow: hidden;
                     `}
                   >
                     <div
@@ -499,7 +502,6 @@ export default function DiscoverContent({
                         display: flex;
                         align-items: center;
                         padding: 16px;
-                        word-break: break-all;
                       `}
                     >
                       {isTraceIdField &&
@@ -513,14 +515,35 @@ export default function DiscoverContent({
                           size="sm"
                           className="h-auto p-0"
                         >
-                          {fieldValue}
+                          <span
+                            className={css`
+                              font-size: 12px;
+                              overflow: hidden;
+                              text-overflow: ellipsis;
+                              white-space: nowrap;
+                              max-width: 200px;
+                              display: block;
+                            `}
+                            title={String(fieldValue)}
+                          >
+                            {fieldValue}
+                          </span>
                         </ShadcnButton>
                       ) : (
                         <span
                           className={css`
                             font-size: 12px;
-                            white-space: pre-wrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            white-space: nowrap;
+                            max-width: 200px;
+                            display: block;
                           `}
+                          title={
+                            fieldValue !== null && fieldValue !== undefined
+                              ? String(fieldValue)
+                              : undefined
+                          }
                         >
                           {fieldValue}
                         </span>
