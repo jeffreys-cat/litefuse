@@ -138,7 +138,10 @@ export function JSONView(props: {
               }
               displaySize={isCollapsed ? "collapsed" : "expanded"}
               matchesURL={true}
-              customizeCopy={(node) => stringifyJsonNode(node)}
+              customizeCopy={(node) => {
+                  void copyTextToClipboard(stringifyJsonNode(node));
+                  return ""; // prevent library from calling navigator.clipboard.writeText directly (no fallback for HTTP)
+                }}
               className="w-full"
             />
           </div>
