@@ -432,7 +432,7 @@ export default function DiscoverContent({
               <Tooltip>
                 <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
                 <TooltipContent side="top" align="start">
-                  <p className="text-xs">点击查看 Trace：{traceId}</p>
+                  <p className="text-xs">Click to view Trace: {traceId}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
