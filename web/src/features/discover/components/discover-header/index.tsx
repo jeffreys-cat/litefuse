@@ -251,6 +251,7 @@ export default function DiscoverHeader(props: {
         ...prev,
         database,
         table,
+        timeField: "",
       }));
       setCurrentTable(table);
       setLoc((prev: any) => {
@@ -274,6 +275,7 @@ export default function DiscoverHeader(props: {
         ...prev,
         database,
         table: "",
+        timeField: "",
       }));
       setCurrentTable("");
       setTables([]);
