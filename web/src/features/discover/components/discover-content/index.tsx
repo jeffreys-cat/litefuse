@@ -23,6 +23,7 @@ import {
   currentTimeFieldAtom,
 } from "store/discover";
 import { get } from "lodash-es";
+import { formatTimestampToDateTime } from "utils/data";
 import { Button as ShadcnButton } from "@/src/components/ui/button";
 import SDCollapsibleTable from "components/selectdb-ui/sd-collapsible-table";
 import { useDiscoverTheme } from "components/ui/theme";
@@ -330,7 +331,7 @@ export default function DiscoverContent({
           const fieldValue = getValue<string>();
           const fieldName = currentTimeField;
           const fieldType = "DATE";
-          const timeField = fieldValue;
+          const timeField = formatTimestampToDateTime(fieldValue);
           return (
             <div
               className={`${css`
@@ -421,6 +422,7 @@ export default function DiscoverContent({
                     overflow: auto;
                     word-break: break-all;
                     white-space: pre-wrap;
+                    max-width: 600px;
                   `}
                 />
               </ColumnStyleWrapper>
@@ -432,7 +434,7 @@ export default function DiscoverContent({
               <Tooltip>
                 <TooltipTrigger asChild>{cellContent}</TooltipTrigger>
                 <TooltipContent side="top" align="start">
-                  <p className="text-xs">点击查看 Trace：{traceId}</p>
+                  <p className="text-xs">Click to view Trace: {traceId}</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -444,6 +446,7 @@ export default function DiscoverContent({
         ...dynamicColumns,
         ...selectedFields.map((field: any) => {
           return {
+            id: `selected_${field.Field}`,
             accessorKey: field.Field,
             header: () => (
               <div
@@ -491,7 +494,8 @@ export default function DiscoverContent({
                   <div
                     className={css`
                       max-height: 192px;
-                      overflow: auto;
+                      max-width: 240px;
+                      overflow: hidden;
                     `}
                   >
                     <div
@@ -499,7 +503,6 @@ export default function DiscoverContent({
                         display: flex;
                         align-items: center;
                         padding: 16px;
-                        word-break: break-all;
                       `}
                     >
                       {isTraceIdField &&
@@ -513,14 +516,35 @@ export default function DiscoverContent({
                           size="sm"
                           className="h-auto p-0"
                         >
-                          {fieldValue}
+                          <span
+                            className={css`
+                              font-size: 12px;
+                              overflow: hidden;
+                              text-overflow: ellipsis;
+                              white-space: nowrap;
+                              max-width: 200px;
+                              display: block;
+                            `}
+                            title={String(fieldValue)}
+                          >
+                            {fieldValue}
+                          </span>
                         </ShadcnButton>
                       ) : (
                         <span
                           className={css`
                             font-size: 12px;
-                            white-space: pre-wrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            white-space: nowrap;
+                            max-width: 200px;
+                            display: block;
                           `}
+                          title={
+                            fieldValue !== null && fieldValue !== undefined
+                              ? String(fieldValue)
+                              : undefined
+                          }
                         >
                           {fieldValue}
                         </span>
