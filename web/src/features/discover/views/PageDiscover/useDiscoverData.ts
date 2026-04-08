@@ -2,6 +2,7 @@
 import { useCallback, useEffect } from "react";
 import type { Dayjs } from "dayjs";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { showErrorToast } from "@/src/features/notifications/showErrorToast";
 import { useRouter } from "next/router";
 import {
   currentCatalogAtom,
@@ -141,6 +142,7 @@ export function useDiscoverData() {
     } catch (err) {
       setLoading((prev) => ({ ...prev, getTableData: false }));
       console.error("查询错误", err);
+      showErrorToast("Query failed", err?.message ?? String(err));
     }
   }, [
     buildLuceneWhereClause,
@@ -233,6 +235,7 @@ export function useDiscoverData() {
     } catch (err) {
       setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
       console.error("查询错误", err);
+      showErrorToast("Query failed", err?.message ?? String(err));
     }
   }, [
     buildLuceneWhereClause,
@@ -311,6 +314,7 @@ export function useDiscoverData() {
       setTopData(rowsData);
     } catch (err) {
       console.error("查询错误", err);
+      showErrorToast("Query failed", err?.message ?? String(err));
       setTopData([]);
     }
   }, [
@@ -397,6 +401,7 @@ export function useDiscoverData() {
       setTableTotalCount(totalCount || 0);
     } catch (err) {
       console.error("查询错误", err);
+      showErrorToast("Query failed", err?.message ?? String(err));
       setTableTotalCount(0);
     }
   }, [

@@ -1,6 +1,7 @@
 // @ts-nocheck
 "use client";
 
+import { showErrorToast } from "@/src/features/notifications/showErrorToast";
 import type { Row, ColumnDef } from "@tanstack/react-table";
 import JsonView from "@uiw/react-json-view";
 import React, { useEffect, useMemo, useState } from "react";
@@ -125,6 +126,9 @@ export default function SurroundingLogs() {
           setSurroundingTableData(data);
         }
       },
+      onError: (err) => {
+        showErrorToast("Query failed", err?.message ?? String(err));
+      },
     },
   );
 
@@ -178,6 +182,9 @@ export default function SurroundingLogs() {
           setBeforeTime(result[0]._original[currentTimeField]);
           setSurroundingTableData(data);
         }
+      },
+      onError: (err) => {
+        showErrorToast("Query failed", err?.message ?? String(err));
       },
     },
   );
@@ -236,6 +243,7 @@ export default function SurroundingLogs() {
       },
       onError: (err) => {
         console.log(err);
+        showErrorToast("Query failed", err?.message ?? String(err));
       },
     },
   );
@@ -359,8 +367,8 @@ export default function SurroundingLogs() {
                         </div>
                       </td>
                       <td className="h-8 text-xs">{fieldName || "-"}</td>
-                      <td className="h-8 text-xs whitespace-normal">
-                        <div className="w-full break-all">
+                      <td className="h-8 text-xs whitespace-pre-wrap">
+                        <div className="w-full break-all whitespace-pre-wrap">
                           {fieldValue || "-"}
                         </div>
                       </td>
@@ -567,7 +575,9 @@ export default function SurroundingLogs() {
                       {field.value === "trace_id" ? (
                         <Button>{fieldValue}</Button>
                       ) : (
-                        <span className="text-xs">{fieldValue}</span>
+                        <span className="text-xs whitespace-pre-wrap">
+                          {fieldValue}
+                        </span>
                       )}
                     </div>
                   </div>
