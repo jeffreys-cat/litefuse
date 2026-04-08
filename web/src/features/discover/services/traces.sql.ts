@@ -11,7 +11,7 @@ interface QueryTraceDetailParams {
   trace_id: string;
 }
 
-// 查询某个Table的Trace详情
+// Query trace details for a given table
 export function getQueryTableTraceSQL(params: QueryTraceDetailParams): string {
   const { table, trace_id, database } = params;
 

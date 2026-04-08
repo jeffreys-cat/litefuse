@@ -114,7 +114,7 @@ export function FilterContent({
             <Controller
               name="field"
               control={control}
-              rules={{ required: "请选择字段" }}
+              rules={{ required: "Please select a field" }}
               render={({ field }) => (
                 <Select
                   value={field.value || undefined}
@@ -139,7 +139,7 @@ export function FilterContent({
             <Controller
               name="operator"
               control={control}
-              rules={{ required: "请选择操作符" }}
+              rules={{ required: "Please select an operator" }}
               render={({ field }) => (
                 <Select
                   value={field.value || undefined}
@@ -226,14 +226,14 @@ function renderValueField({
           <Input
             className="h-10"
             placeholder="Start"
-            {...register("minValue", { required: "请输入最小值" })}
+            {...register("minValue", { required: "Please enter min value" })}
           />
         </FormField>
         <FormField label="Maximum value" error={errors.maxValue?.message}>
           <Input
             className="h-10"
             placeholder="End"
-            {...register("maxValue", { required: "请输入最大值" })}
+            {...register("maxValue", { required: "Please enter max value" })}
           />
         </FormField>
       </div>
@@ -263,7 +263,7 @@ function renderValueField({
             ? "value-a, value-b"
             : "Enter a value"
         }
-        {...register("valueText", { required: "请输入值" })}
+        {...register("valueText", { required: "Please enter a value" })}
       />
       <datalist id="discover-field-value-list">
         {suggestions.map((value, idx) => (

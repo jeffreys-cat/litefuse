@@ -13,7 +13,7 @@ export function getQueryTableResultSQL(params: QueryTableDataParams) {
     statement += ` (${indexesStatement}) AND`;
   }
 
-  // timeField 加上反引号
+  // wrap timeField in backticks
   statement += ` (\`${params.timeField}\` BETWEEN '${params.startDate}' AND '${params.endDate}') `;
 
   statement = params.data_filters.reduce((prev, curr) => {
@@ -28,7 +28,7 @@ export function getQueryTableResultSQL(params: QueryTableDataParams) {
     statement = statement + ` AND (${params.lucene_where})`;
   }
 
-  // ORDER BY 的 timeField 也加反引号
+  // also wrap timeField in ORDER BY with backticks
   statement =
     statement +
     ` ORDER BY \`${params.timeField}\` DESC LIMIT ${+params.page_size} OFFSET ${(+params?.page - 1) * params.page_size} `;

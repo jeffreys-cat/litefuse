@@ -52,7 +52,7 @@ export const TIME_FIELD_TYPES = [
   "TIME",
 ];
 export function isValidTimeFieldType(fieldType: string): boolean {
-  // 提取基础字段类型（移除括号及其内容）
+  // extract base field type (strip parentheses and their contents)
   const baseFieldType = fieldType.split("(")[0];
   return TIME_FIELD_TYPES.includes(baseFieldType);
 }
@@ -720,7 +720,7 @@ export function convertColumnToRow(frame: any): Array<Record<string, any>> {
     for (let j = 0; j < columns.length; j++) {
       row[fieldNames[j]] = columns[j][i];
       if (isValidTimeFieldType(frame.schema.fields[j].type.toUpperCase())) {
-        // 如果是时间字段，转换为 Dayjs 对象
+        // if it is a time field, convert to Dayjs object
         row[fieldNames[j]] = formatTimestampToDateTime(
           row[fieldNames[j]],
           frame.schema.fields[j].precision || 3,
@@ -739,7 +739,7 @@ export function convertColumnToRow(frame: any): Array<Record<string, any>> {
   return rows;
 }
 
-// 通过查询 Doris 的字段判断类型，不依赖 Grafana 类型
+// Determine type by querying Doris fields, independent of Grafana types
 export function convertColumnToRowViaFieldsType(
   frame: any,
   fields: any,
@@ -759,7 +759,7 @@ export function convertColumnToRowViaFieldsType(
     for (let j = 0; j < columns.length; j++) {
       row[fieldNames[j]] = columns[j][i];
       if (isValidTimeFieldType(frame.schema.fields[j].type.toUpperCase())) {
-        // 如果是时间字段，转换为 Dayjs 对象
+        // if it is a time field, convert to Dayjs object
         row[fieldNames[j]] = formatTimestampToDateTime(
           row[fieldNames[j]],
           frame.schema.fields[j].precision || 3,
@@ -769,7 +769,7 @@ export function convertColumnToRowViaFieldsType(
       const currentFieldInfo = fields.find(
         (item: any) => item.Field === frame.schema.fields[j].name,
       );
-      // 如果是 VARIANT 类型，转换为 JSON 对象
+      // if VARIANT type, convert to JSON object
       if (
         currentFieldInfo &&
         currentFieldInfo.Type.toUpperCase() === "VARIANT"
@@ -841,17 +841,17 @@ export function convertRowsToTableDataViaFieldsType(
   });
 }
 
-// 格式化时间戳为 DATETIME([number]) 格式
+// Format timestamp to DATETIME([number]) format
 export function formatTimestampToDateTime(timestamp: any, precision = 3) {
   const currentLocale = dayjs.locale();
-  // 基础格式：YYYY-MM-DD HH:mm:ss
+  // base format: YYYY-MM-DD HH:mm:ss
   let formatString = "YYYY-MM-DD HH:mm:ss";
 
-  // 根据精度添加毫秒部分
+  // append fractional seconds based on precision
   if (precision > 0) {
     formatString += `.${"S".repeat(precision)}`;
   }
-  // 转换时间戳并格式化
+  // convert timestamp and format
   return dayjs
     .utc(timestamp)
     .local()
@@ -931,10 +931,10 @@ function insertUnderscore(arr: string[]) {
 }
 
 function compare_ignore_quotes(s1: string, s2: string) {
-  // 移除双引号和单引号
+  // strip double and single quotes
   const cleanS1 = s1.replace(/['"]/g, "");
   const cleanS2 = s2.replace(/['"]/g, "");
-  // 比较
+  // compare
   return cleanS1 === cleanS2;
 }
 

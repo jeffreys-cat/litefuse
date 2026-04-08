@@ -114,7 +114,7 @@ export default function DiscoverHeader(props: {
           selectDatabase(initialDatabase);
         }
       },
-      error: (err: any) => console.log("查询错误", err),
+      error: (err: any) => console.log("Query error", err),
     });
 
     return () => subscription.unsubscribe();
@@ -179,7 +179,7 @@ export default function DiscoverHeader(props: {
           }
         },
         error: (err: any) => {
-          console.log("查询错误", err);
+          console.log("Query error", err);
         },
       });
     },
@@ -238,7 +238,7 @@ export default function DiscoverHeader(props: {
           }
         },
         error: (err: any) => {
-          console.log("查询错误", err);
+          console.log("Query error", err);
         },
       });
     },
@@ -314,7 +314,7 @@ export default function DiscoverHeader(props: {
             }
           }
         },
-        error: (err: any) => console.log("查询错误", err),
+        error: (err: any) => console.log("Query error", err),
       });
     },
     [selectTable, setCurrentTable, setDiscoverCurrent, setLoc, setTables],

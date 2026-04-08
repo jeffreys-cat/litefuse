@@ -406,7 +406,7 @@ export default function SurroundingLogs() {
       let itemSource = "";
       for (const key in item) {
         let highlightValue = item[key];
-        // 兼容 Variant 类型
+        // Handle Variant type
         if (typeof highlightValue === "object") {
           highlightValue = JSON.stringify(highlightValue);
         }
@@ -433,13 +433,13 @@ export default function SurroundingLogs() {
                   <IconButton
                     onClick={row.getToggleExpandedHandler()}
                     name="arrow-down"
-                    tooltip="收起"
+                    tooltip="Collapse"
                   />
                 ) : (
                   <IconButton
                     onClick={row.getToggleExpandedHandler()}
                     name="arrow-right"
-                    tooltip="展开"
+                    tooltip="Expand"
                   />
                 )}
                 <div className="ml-1">{getValue<string>()}</div>
