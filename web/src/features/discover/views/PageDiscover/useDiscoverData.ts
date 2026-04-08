@@ -141,7 +141,7 @@ export function useDiscoverData() {
       setTableData(rowsDataWithUid);
     } catch (err) {
       setLoading((prev) => ({ ...prev, getTableData: false }));
-      console.error("查询错误", err);
+      console.error("Query error", err);
       showErrorToast("Query failed", err?.message ?? String(err));
     }
   }, [
@@ -234,7 +234,7 @@ export function useDiscoverData() {
       setTableDataCharts(chartsData);
     } catch (err) {
       setLoading((prev) => ({ ...prev, getTableDataCharts: false }));
-      console.error("查询错误", err);
+      console.error("Query error", err);
       showErrorToast("Query failed", err?.message ?? String(err));
     }
   }, [
@@ -313,7 +313,7 @@ export function useDiscoverData() {
       const rowsData = convertRowsToTableDataViaFieldsType(rows, tableFields);
       setTopData(rowsData);
     } catch (err) {
-      console.error("查询错误", err);
+      console.error("Query error", err);
       showErrorToast("Query failed", err?.message ?? String(err));
       setTopData([]);
     }
@@ -400,7 +400,7 @@ export function useDiscoverData() {
       );
       setTableTotalCount(totalCount || 0);
     } catch (err) {
-      console.error("查询错误", err);
+      console.error("Query error", err);
       showErrorToast("Query failed", err?.message ?? String(err));
       setTableTotalCount(0);
     }

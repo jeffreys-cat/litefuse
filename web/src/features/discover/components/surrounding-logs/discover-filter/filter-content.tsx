@@ -131,20 +131,28 @@ export function FilterContent(props: FilterContentProps) {
         <div className={rowStyle}>
           <div className={colStyle}>
             <Field
-              label="最小值"
+              label="Min value"
               invalid={!!errors.minValue}
               error={errors.minValue?.message}
             >
-              <Input {...register("minValue", { required: "请输入最小值" })} />
+              <Input
+                {...register("minValue", {
+                  required: "Please enter min value",
+                })}
+              />
             </Field>
           </div>
           <div className={colStyle}>
             <Field
-              label="最大值"
+              label="Max value"
               invalid={!!errors.maxValue}
               error={errors.maxValue?.message}
             >
-              <Input {...register("maxValue", { required: "请输入最大值" })} />
+              <Input
+                {...register("maxValue", {
+                  required: "Please enter max value",
+                })}
+              />
             </Field>
           </div>
         </div>
@@ -163,12 +171,12 @@ export function FilterContent(props: FilterContentProps) {
       return (
         <>
           <Field
-            label="值"
+            label="Value"
             invalid={!!errors.value}
             error={(errors.value as any)?.message}
           >
             <Input
-              {...register("value", { required: "请输入值" })}
+              {...register("value", { required: "Please enter a value" })}
               list="field-value-list"
             />
           </Field>
@@ -183,14 +191,14 @@ export function FilterContent(props: FilterContentProps) {
     if (currentOperator === "in" || currentOperator === "not in") {
       return (
         <Field
-          label="值"
+          label="Value"
           invalid={!!errors.value}
           error={(errors.value as any)?.message}
         >
           <Controller
             name="value"
             control={control}
-            rules={{ required: "请输入值" }}
+            rules={{ required: "Please enter a value" }}
             render={({ field }) => (
               <Select
                 {...field}
@@ -199,7 +207,7 @@ export function FilterContent(props: FilterContentProps) {
                   label: item.value,
                   value: item.value,
                 }))}
-                placeholder="请选择值"
+                placeholder="Select values"
                 onChange={(selected) =>
                   field.onChange(
                     selected ? selected.map((s: any) => s.value) : [],
@@ -229,14 +237,14 @@ export function FilterContent(props: FilterContentProps) {
       <div className={rowStyle}>
         <div className={colStyle}>
           <Field
-            label="列名"
+            label="Column"
             invalid={!!errors.field}
             error={(errors.field as any)?.message}
           >
             <Controller
               name="field"
               control={control}
-              rules={{ required: "请选择字段" }}
+              rules={{ required: "Please select a field" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -251,14 +259,14 @@ export function FilterContent(props: FilterContentProps) {
         </div>
         <div className={colStyle}>
           <Field
-            label="条件"
+            label="Condition"
             invalid={!!errors.operator}
             error={(errors.operator as any)?.message}
           >
             <Controller
               name="operator"
               control={control}
-              rules={{ required: "请选择操作符" }}
+              rules={{ required: "Please select an operator" }}
               render={({ field }) => (
                 <Select
                   {...field}
@@ -303,9 +311,9 @@ export function FilterContent(props: FilterContentProps) {
             onHide();
           }}
         >
-          取消
+          Cancel
         </Button>
-        <Button type="submit">确定</Button>
+        <Button type="submit">Apply</Button>
       </div>
     </form>
   );

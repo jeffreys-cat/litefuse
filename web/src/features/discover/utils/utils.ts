@@ -1,5 +1,5 @@
 // @ts-nocheck
-// --- stable stringify: 递归排序键，避免循环引用导致崩溃 ---
+// --- stable stringify: recursively sort keys, avoid crash on circular references ---
 function stableStringify(value: any): string {
   const seen = new WeakSet();
 
@@ -44,7 +44,7 @@ function stableStringify(value: any): string {
   return recur(value);
 }
 
-// --- 小工具 ---
+// --- helpers ---
 function u8ToHex(u8: Uint8Array): string {
   let out = "";
   for (let i = 0; i < u8.length; i++) {
@@ -62,9 +62,9 @@ function hasSubtle(): boolean {
   );
 }
 
-// --- 纯 JS 的 SHA-256 fallback（简实现，无依赖） ---
+// --- pure JS SHA-256 fallback (simple implementation, no dependencies) ---
 function sha256HexJS(data: Uint8Array): string {
-  // 常量
+  // constants
   const K = new Uint32Array([
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
     0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
@@ -79,7 +79,7 @@ function sha256HexJS(data: Uint8Array): string {
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
   ]);
 
-  // 初始哈希
+  // initial hash values
   let h0 = 0x6a09e667,
     h1 = 0xbb67ae85,
     h2 = 0x3c6ef372,
@@ -89,11 +89,11 @@ function sha256HexJS(data: Uint8Array): string {
     h6 = 0x1f83d9ab,
     h7 = 0x5be0cd19;
 
-  // 预处理：填充
+  // pre-processing: padding
   const l = data.length;
   const bitLenHi = (l >>> 29) >>> 0;
   const bitLenLo = (l << 3) >>> 0;
-  const nBlocks = (((l + 9) >> 6) + 1) << 4; // 以 16 个 32bit 为一组
+  const nBlocks = (((l + 9) >> 6) + 1) << 4; // groups of 16 32-bit words
   const M = new Uint32Array(nBlocks);
 
   for (let i = 0; i < l; i++) {
@@ -166,25 +166,25 @@ function sha256HexJS(data: Uint8Array): string {
   return u8ToHex(out);
 }
 
-// --- 通用 SHA-256（浏览器优先，fallback 到纯 JS） ---
+// --- generic SHA-256 (browser SubtleCrypto preferred, falls back to pure JS) ---
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   if (hasSubtle()) {
     const buf = await window.crypto.subtle.digest("SHA-256", data);
     return u8ToHex(new Uint8Array(buf));
   }
-  // 非 https 或老环境：走纯 JS
+  // non-HTTPS or older environment: use pure JS
   return sha256HexJS(data);
 }
 
-// --- 你的两个导出函数 ---
+// --- exported functions ---
 export async function generateUid(obj: any) {
   const json = stableStringify(obj);
   return sha256Hex(json);
 }
 
 export async function generateTableDataUID(items: any[]) {
-  // 允许 _original 缺失时退回整个 item；并发计算，更快
+  // fall back to whole item when _original is absent; concurrent for speed
   const sources = items.map((it) => (it && it._original) ?? it);
   const uids = await Promise.all(sources.map(generateUid));
   return items.map((it, i) => ({ ...it, _uid: uids[i] }));
@@ -224,15 +224,15 @@ export function isIgnorableHighlightToken(token: string): boolean {
     "'",
     '"',
   ]);
-  // 全是空格或换行
+  // all whitespace or newlines
   if (!token.trim()) {
     return true;
   }
-  // 单个字符且在 ignoreChars 中
+  // single character that is in ignoreChars
   if (token.length === 1 && ignoreChars.has(token)) {
     return true;
   }
-  // 多个字符但全是标点符号
+  // multiple characters but all punctuation
   if (
     /^[\u2000-\u206F\u2E00-\u2E7F!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+$/.test(
       token,

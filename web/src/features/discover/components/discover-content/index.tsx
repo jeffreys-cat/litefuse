@@ -309,13 +309,13 @@ export default function DiscoverContent({
                   <IconButton
                     onClick={row.getToggleExpandedHandler()}
                     name="arrow-down"
-                    tooltip="收起"
+                    tooltip="Collapse"
                   />
                 ) : (
                   <IconButton
                     onClick={row.getToggleExpandedHandler()}
                     name="arrow-right"
-                    tooltip="展开"
+                    tooltip="Expand"
                   />
                 )}
                 <div className="ml-1">{_getValue<string>()}</div>

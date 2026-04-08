@@ -75,7 +75,7 @@ export function TopData({ field }: any) {
           TOP5
         </div>
         <small className="text-n2">
-          {tableTotalCount >= 500 ? 500 : tableTotalCount} 条
+          {tableTotalCount >= 500 ? 500 : tableTotalCount} records
         </small>
       </div>
       {canDisplayTopData ? (
