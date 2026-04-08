@@ -753,7 +753,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "User messages",
-      "description": "Shows the count of Traces",
+      "description": "Total count of user messages (traces)",
       "view": "TRACES",
       "dimensions": [],
       "metrics": [
@@ -779,7 +779,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Output Tokens",
-      "description": "Shows the sum output tokens of Observations",
+      "description": "Sum of output tokens across all observations",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -805,7 +805,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Cost (USD)",
-      "description": "Shows the sum total cost of Traces",
+      "description": "Total cost (USD) across all traces",
       "view": "TRACES",
       "dimensions": [],
       "metrics": [
@@ -831,7 +831,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Tokens Over Time By Model",
-      "description": "",
+      "description": "Token usage trend over time segmented by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -860,7 +860,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Tokens by Model Name ",
-      "description": "Shows the sum total tokens of Observations by provided model name",
+      "description": "Total token distribution by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -890,7 +890,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Input Token",
-      "description": "Shows the count of Traces",
+      "description": "Sum of input tokens across all observations",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -916,7 +916,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sum Input Tokens (Observations)",
-      "description": "Shows the sum input tokens of Observations",
+      "description": "Input token usage over time segmented by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -945,7 +945,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Cost by Provided Model Name",
-      "description": "Shows the sum total cost of Observations by provided model name",
+      "description": "Cost trend over time segmented by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -974,7 +974,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sum Input Tokens by Provided Model Name (Observations)",
-      "description": "Shows the sum input tokens of Observations by provided model name",
+      "description": "Input token distribution by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1004,7 +1004,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sum Total Cost ",
-      "description": "Shows the sum total cost of Observations",
+      "description": "Total cost distribution by model name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1034,7 +1034,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "LLM Avg Durations (milliseconds)",
-      "description": "Shows the count of Traces",
+      "description": "Average LLM generation latency in milliseconds",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1069,7 +1069,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Traces",
-      "description": "Shows the count of Traces",
+      "description": "Total count of traces",
       "view": "TRACES",
       "dimensions": [],
       "metrics": [
@@ -1095,7 +1095,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Avg Agent Duration ",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Average agent (span) duration in milliseconds",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1130,7 +1130,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Avg Tool Durations",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Average tool call duration in milliseconds",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1165,7 +1165,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Count by Name (Observations)",
-      "description": "Shows the count of Observations by name, filtered by Type",
+      "description": "Tool call count distribution by observation name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1204,7 +1204,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Avg LLM Duration Over Time",
-      "description": "Shows the avg latency of Observations",
+      "description": "LLM generation latency trend over time",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1238,7 +1238,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Tool Calls Over Time",
-      "description": "Shows the count of Traces",
+      "description": "Tool call count trend over time by name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1276,7 +1276,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Tool Call Summary",
-      "description": "Shows count of Observations by name, filtered by Type",
+      "description": "Tool call count summary by name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1319,7 +1319,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Tool Performance Summary",
-      "description": "show Tool Performance",
+      "description": "Tool performance metrics: count, avg/max/min/p95 latency by name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1378,7 +1378,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Total Tool Calls",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Total count of tool calls",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1413,7 +1413,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Skill Call Count",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Skill (tool) call count trend over time",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1447,7 +1447,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Tool Execute error",
-      "description": "Shows the count of Traces",
+      "description": "Count of tool execution errors",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1482,7 +1482,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Command Execution",
-      "description": "",
+      "description": "Count of high-risk command executions detected in tool calls",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1517,7 +1517,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Web Data Exfiltration",
-      "description": "",
+      "description": "Count of web data exfiltration attempts detected in tool calls",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1552,7 +1552,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Command Exfiltration",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Count of command exfiltration attempts detected in tool calls",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1587,7 +1587,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Trend",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Sensitive file access count trend over time",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1621,7 +1621,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Prompt Injection Detection",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "Prompt injection detection count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1659,7 +1659,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Sessions",
-      "description": "Shows the count of Observations by session id",
+      "description": "Session distribution by observation count for high-risk activity",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1689,7 +1689,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Skill Usage Distribution (Tool)",
-      "description": "Shows the count of Traces",
+      "description": "Skill (tool) usage distribution by name",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1728,7 +1728,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Commands - CREDENTIAL_ACCESS",
-      "description": "Shows the count of Traces",
+      "description": "Credential access command count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1757,7 +1757,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Commands - DATA_EXFIL",
-      "description": "Shows the count of Observations",
+      "description": "Data exfiltration command count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1786,7 +1786,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Commands - PRIVILEGE_ESCALATION",
-      "description": "Shows the count of Traces",
+      "description": "Privilege escalation command count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1815,7 +1815,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "High-Risk Commands - DESTRUCTIVE",
-      "description": "Shows the count of Traces",
+      "description": "Destructive command count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1844,7 +1844,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Prompt Injection - INJECTION_PATTERN",
-      "description": "Shows the count of Traces",
+      "description": "Injection pattern detection count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1882,7 +1882,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Prompt Injection - ROLE_HIJACK",
-      "description": "Shows the count of Traces",
+      "description": "Role hijack attempt count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1920,7 +1920,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Prompt Injection - HIDDEN_INSTRUCTION",
-      "description": "Shows the count of Traces",
+      "description": "Hidden instruction detection count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -1958,7 +1958,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Prompt Injection - JAILBREAK",
-      "description": "Shows the count of Traces",
+      "description": "Jailbreak attempt count trend over time",
       "view": "OBSERVATIONS",
       "dimensions": [],
       "metrics": [
@@ -1992,7 +1992,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Audit - SSH_KEY",
-      "description": "Shows the count of Observations, filtered by Type",
+      "description": "SSH key file access count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2030,7 +2030,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Audit - ENV_FILE",
-      "description": "Shows the count of Traces",
+      "description": "Environment file access count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2068,7 +2068,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Audit - CREDENTIALS",
-      "description": "Shows the count of Traces",
+      "description": "Credentials file access count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2106,7 +2106,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Audit - CONFIG_SECRET",
-      "description": "Shows the count of Traces",
+      "description": "Config/secret file access count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2144,7 +2144,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Sensitive File Access Audit - HISTORY",
-      "description": "Shows the count of Observations by id, filtered by Type",
+      "description": "History file access count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2182,7 +2182,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "Communication Exfiltration Trend",
-      "description": "Shows the count of Observations",
+      "description": "Communication exfiltration count trend over time by trace",
       "view": "OBSERVATIONS",
       "dimensions": [
         {
@@ -2519,7 +2519,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "OpenClaw - Cost & Efficiency",
-      "description": "",
+      "description": "Monitor token usage, costs, and model efficiency across your OpenClaw deployment.",
       "owner": "LANGFUSE",
       "definition": {
         "widgets": [
@@ -2624,7 +2624,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "OpenClaw - Agent Behavior",
-      "description": "",
+      "description": "Track agent, LLM, and tool behavior including latency, call counts, and performance metrics.",
       "owner": "LANGFUSE",
       "definition": {
         "widgets": [
@@ -2747,7 +2747,7 @@
       "updatedBy": null,
       "projectId": null,
       "name": "OpenClaw - Security & Audit",
-      "description": "",
+      "description": "Monitor security events including high-risk commands, prompt injections, data exfiltration, and sensitive file access.",
       "owner": "LANGFUSE",
       "definition": {
         "widgets": [
