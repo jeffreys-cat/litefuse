@@ -85,9 +85,7 @@ export default function UserPage() {
             </ActionButton>
             <DetailPageNav
               currentId={userId}
-              path={(entry) =>
-                `/project/${projectId}/users/${entry.id}`
-              }
+              path={(entry) => `/project/${projectId}/users/${entry.id}`}
               listKey="users"
             />
           </>
