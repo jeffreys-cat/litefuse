@@ -585,6 +585,9 @@ export const getTracesGroupedByUsers = async (
   );
 
   const filterRes = new FilterList(dorisFilter).apply();
+  const search = dorisSearchCondition(searchQuery, undefined, {
+    type: "traces",
+  });
 
   const query = `
     select
@@ -595,6 +598,7 @@ export const getTracesGroupedByUsers = async (
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
+    ${search.query}
     GROUP BY user
     ORDER BY count desc
     ${limit !== undefined && offset !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
@@ -610,6 +614,7 @@ export const getTracesGroupedByUsers = async (
       limit,
       offset,
       ...(filterRes ? filterRes.params : {}),
+      ...search.params,
     },
     tags: {
       feature: "tracing",
