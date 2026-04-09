@@ -36,6 +36,40 @@ export function getQueryTableResultSQL(params: QueryTableDataParams) {
   return statement;
 }
 
+export function getTopDataFieldSQL(
+  params: QueryTableDataParams & { fieldName: string },
+) {
+  const indexesStatement = params.indexes_statement;
+  // Only select the specific field needed for value distribution
+  let statement = `SELECT \`${params.fieldName}\` FROM \`${params.database}\`.\`${params.table}\` WHERE`;
+
+  if (indexesStatement && params.search_type === "Search") {
+    statement += ` (${indexesStatement}) AND`;
+  }
+
+  // wrap timeField in backticks
+  statement += ` (\`${params.timeField}\` BETWEEN '${params.startDate}' AND '${params.endDate}') `;
+
+  statement = params.data_filters.reduce((prev, curr) => {
+    return addSqlFilter(prev, curr);
+  }, statement);
+
+  if (params.search_type === "SQL" && params.search_value) {
+    statement = statement + ` AND ${params.search_value}`;
+  }
+
+  if (params.search_type === "Lucene" && params.lucene_where) {
+    statement = statement + ` AND (${params.lucene_where})`;
+  }
+
+  // also wrap timeField in ORDER BY with backticks
+  statement =
+    statement +
+    ` ORDER BY \`${params.timeField}\` DESC LIMIT ${+params.page_size} OFFSET ${(+params?.page - 1) * params.page_size} `;
+
+  return statement;
+}
+
 export function getQueryTableChartsSQL(params: QueryTableDataParams) {
   const indexes = params.indexes;
   let statement = `SELECT ${params.interval}_FLOOR(table_per_time.T,${params.interval_value}) as TT,sum(table_per_time.cnt) as \`sum(cnt)\` FROM (SELECT ${params.interval}_FLOOR(${params.timeField}) as T,count(*) as cnt FROM \`${params.database}\`.\`${params.table}\` WHERE`;

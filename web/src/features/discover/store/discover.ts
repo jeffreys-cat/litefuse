@@ -64,6 +64,8 @@ export const intervalAtom = atom<IntervalEnum>(IntervalEnum.Auto);
 export const tableTotalCountAtom = atom<number>(0);
 export const tableEChartsDataAtom = atom<any[]>([]);
 export const tableTracesDataAtom = atom<any>();
+// TopData field query - set by TopData component when it needs to fetch for a specific field
+export const topDataFieldNameAtom = atom<string | null>(null);
 
 // Filter Content Atom
 export const searchableAtom = atom<SearchableEnum>(SearchableEnum.ANY);
@@ -78,7 +80,7 @@ export const tableFieldValuesAtom = atom<
 export const pageAtom = atom<number>(1);
 export const pageSizeAtom = atomWithStorage<number>(
   "discover-pagination-size",
-  50,
+  20,
 );
 
 // Surrounding Data Atoms
