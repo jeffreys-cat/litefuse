@@ -106,7 +106,7 @@ export class QueryBuilder {
 
     switch (metric.aggregation) {
       case "sum":
-        return `sum(${metricValue})`;
+        return `COALESCE(sum(${metricValue}), 0)`;
       case "avg":
         return `avg(${metricValue})`;
       case "count":
