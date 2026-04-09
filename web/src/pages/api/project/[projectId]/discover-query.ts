@@ -18,6 +18,10 @@ import { getServerSession } from "next-auth";
 import { getAuthOptions } from "@/src/server/auth";
 import { isProjectMemberOrAdmin } from "@/src/server/utils/checkProjectMembershipOrAdmin";
 import { dorisClient, logger } from "@langfuse/shared/src/server";
+import {
+  isLangfuseDatabase,
+  injectProjectIdFilter,
+} from "@/src/features/discover/server/queryUtils";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,7 +147,10 @@ export default async function handler(
   const resultEntries = await Promise.all(
     queries.map(async (q): Promise<[string, QueryResult]> => {
       try {
-        const { database, sql } = extractDatabaseAndSql(q.rawSql);
+        const { database, sql: parsedSql } = extractDatabaseAndSql(q.rawSql);
+        const sql = isLangfuseDatabase(database)
+          ? injectProjectIdFilter(parsedSql, projectId)
+          : parsedSql;
         const client = database ? dorisClient({ database }) : doris;
         const rows = (await client.query(sql)) as Record<string, unknown>[];
         return [q.refId, { frames: [rowsToGrafanaFrame(rows)] }];

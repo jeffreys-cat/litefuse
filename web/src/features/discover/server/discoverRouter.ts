@@ -4,6 +4,7 @@ import {
   protectedProjectProcedure,
 } from "@/src/server/api/trpc";
 import { dorisClient } from "@langfuse/shared/src/server";
+import { isLangfuseDatabase, injectProjectIdFilter } from "./queryUtils";
 
 function escapeIdentifier(value: string) {
   return value.replace(/`/g, "``");
@@ -85,8 +86,11 @@ export const discoverRouter = createTRPCRouter({
         sql = trimmed.slice(useMatch[0].length).trim();
       }
 
+      const finalSql = isLangfuseDatabase(database)
+        ? injectProjectIdFilter(sql, input.projectId)
+        : sql;
       const client = database ? dorisClient({ database }) : dorisClient();
-      const rows = (await client.query(sql)) as Record<string, unknown>[];
+      const rows = (await client.query(finalSql)) as Record<string, unknown>[];
 
       // Normalize date values: DATE columns from mysql2 become Date objects with
       // time 00:00:00.000Z. When serialized to JSON, these become ISO strings like
