@@ -288,44 +288,203 @@ function findTopLevelKeyword(sql: string, keyword: string): number {
 }
 
 /**
+ * Extracts the inner content and end index of a parenthesized block starting at `start`.
+ * `start` must point to the opening `(`.
+ * Returns `{ inner, end }` where `inner` is the content between the parens and
+ * `end` is the index of the closing `)`. Returns `{ inner: null, end }` if unmatched.
+ */
+function extractParenContent(
+  sql: string,
+  start: number,
+): { inner: string | null; end: number } {
+  let depth = 1;
+  let i = start + 1;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+
+  while (i < sql.length) {
+    const c = sql[i];
+
+    if (inSingleQuote) {
+      if (c === "'" && i + 1 < sql.length && sql[i + 1] === "'") i++;
+      else if (c === "'") inSingleQuote = false;
+      i++;
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (c === '"') inDoubleQuote = false;
+      i++;
+      continue;
+    }
+    if (inBacktick) {
+      if (c === "`") inBacktick = false;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      inSingleQuote = true;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inDoubleQuote = true;
+      i++;
+      continue;
+    }
+    if (c === "`") {
+      inBacktick = true;
+      i++;
+      continue;
+    }
+    if (c === "(") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === ")") {
+      depth--;
+      if (depth === 0) {
+        return { inner: sql.slice(start + 1, i), end: i };
+      }
+      i++;
+      continue;
+    }
+    i++;
+  }
+
+  return { inner: null, end: i };
+}
+
+/**
+ * Recursively walks top-level parenthesized blocks in `sql` and replaces any
+ * `(SELECT ...)` subquery with its project-id-injected version.
+ * Used when the top-level FROM clause has no Langfuse table references (i.e.
+ * the query wraps the real table in a derived table / subquery).
+ */
+function injectIntoSubqueries(sql: string, projectId: string): string {
+  let result = "";
+  let i = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+
+  while (i < sql.length) {
+    const c = sql[i];
+
+    if (inSingleQuote) {
+      result += c;
+      if (c === "'" && i + 1 < sql.length && sql[i + 1] === "'") {
+        result += sql[++i];
+      } else if (c === "'") {
+        inSingleQuote = false;
+      }
+      i++;
+      continue;
+    }
+    if (inDoubleQuote) {
+      result += c;
+      if (c === '"') inDoubleQuote = false;
+      i++;
+      continue;
+    }
+    if (inBacktick) {
+      result += c;
+      if (c === "`") inBacktick = false;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      inSingleQuote = true;
+      result += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inDoubleQuote = true;
+      result += c;
+      i++;
+      continue;
+    }
+    if (c === "`") {
+      inBacktick = true;
+      result += c;
+      i++;
+      continue;
+    }
+
+    if (c === "(") {
+      const { inner, end } = extractParenContent(sql, i);
+      if (inner !== null) {
+        const trimmedInner = inner.trimStart();
+        if (/^SELECT\b/i.test(trimmedInner)) {
+          // Recursively inject into the subquery
+          const injected = injectProjectIdFilter(trimmedInner, projectId);
+          result += "(" + injected + ")";
+        } else {
+          result += "(" + inner + ")";
+        }
+        i = end + 1;
+        continue;
+      }
+    }
+
+    result += c;
+    i++;
+  }
+
+  return result;
+}
+
+/**
  * Injects `project_id = '<projectId>'` into a SQL SELECT query's WHERE clause
  * to enforce data isolation per project.
  *
  * Strategy:
- * - Finds the first top-level WHERE clause and inserts the filter right after it.
- * - If no WHERE clause exists, inserts one before ORDER BY / GROUP BY / HAVING /
- *   LIMIT, or appends it at the end of the query.
+ * 1. If the top-level FROM clause references a Langfuse table with project_id,
+ *    inject the filter directly into the top-level WHERE clause.
+ * 2. Otherwise, recursively walk top-level subqueries and inject into any nested
+ *    SELECT that references a Langfuse table (handles derived-table patterns like
+ *    `SELECT ... FROM (SELECT ... FROM traces WHERE ...) AS t ...`).
  *
  * Non-SELECT statements (SHOW, USE, DESCRIBE, etc.) are returned unchanged.
  */
 export function injectProjectIdFilter(sql: string, projectId: string): string {
   const trimmed = sql.trimStart();
-  // Only modify SELECT statements targeting tables that have project_id
-  if (!/^SELECT\b/i.test(trimmed) || !sqlReferencesProjectTable(sql)) {
+  // Only modify SELECT statements
+  if (!/^SELECT\b/i.test(trimmed)) {
     return sql;
   }
 
   const safeId = projectId.replace(/'/g, "''");
   const filter = `project_id = '${safeId}'`;
 
-  const wherePos = findTopLevelKeyword(sql, "WHERE");
+  if (sqlReferencesProjectTable(sql)) {
+    // Inject at the top level
+    const wherePos = findTopLevelKeyword(sql, "WHERE");
 
-  if (wherePos !== -1) {
-    const insertAt = wherePos + "WHERE".length;
-    return (
-      sql.slice(0, insertAt) +
-      ` ${filter} AND ` +
-      sql.slice(insertAt).replace(/^\s+/, " ")
-    );
-  }
-
-  // No WHERE found: insert before the first trailing clause or at end
-  for (const kw of ["ORDER BY", "GROUP BY", "HAVING", "LIMIT"]) {
-    const pos = findTopLevelKeyword(sql, kw);
-    if (pos !== -1) {
-      return sql.slice(0, pos).trimEnd() + ` WHERE ${filter} ` + sql.slice(pos);
+    if (wherePos !== -1) {
+      const insertAt = wherePos + "WHERE".length;
+      return (
+        sql.slice(0, insertAt) +
+        ` ${filter} AND ` +
+        sql.slice(insertAt).replace(/^\s+/, " ")
+      );
     }
+
+    // No WHERE found: insert before the first trailing clause or at end
+    for (const kw of ["ORDER BY", "GROUP BY", "HAVING", "LIMIT"]) {
+      const pos = findTopLevelKeyword(sql, kw);
+      if (pos !== -1) {
+        return (
+          sql.slice(0, pos).trimEnd() + ` WHERE ${filter} ` + sql.slice(pos)
+        );
+      }
+    }
+
+    return sql.trimEnd() + ` WHERE ${filter}`;
   }
 
-  return sql.trimEnd() + ` WHERE ${filter}`;
+  // Top-level FROM has no Langfuse table — try injecting into subqueries
+  return injectIntoSubqueries(sql, projectId);
 }
