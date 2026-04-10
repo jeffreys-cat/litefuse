@@ -1,42 +1,42 @@
 // @ts-nocheck
-import { useAtom, useAtomValue } from "jotai";
 import React from "react";
+import { useAtom, useAtomValue } from "jotai";
+import { Controller, useForm } from "react-hook-form";
 import { nanoid } from "nanoid";
-import { Button } from "components/ui/button";
+import { Button } from "@/src/components/ui/button";
+import { Checkbox } from "@/src/components/ui/checkbox";
+import { Input } from "@/src/components/ui/input";
+import { Label } from "@/src/components/ui/label";
 import {
-  Field,
-  InlineField,
-  InlineFieldRow,
-  InlineSwitch,
-} from "components/ui/form";
-import { Input } from "components/ui/input";
-import { Select } from "components/ui/select";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/src/components/ui/select";
 import {
   tableFieldsAtom,
-  dataFilterAtom,
   tableFieldValuesAtom,
   surroundingDataFilterAtom,
 } from "store/discover";
-import { Operator } from "types/type";
 import { OPERATORS } from "utils/data";
-import { Controller, useForm } from "react-hook-form";
-import {
-  containerStyle,
-  rowStyle,
-  colStyle,
-  footerStyle,
-} from "./discover-filter.style";
 import { FilterContentProps } from "../types";
 
-export function FilterContent(props: FilterContentProps) {
-  const { onHide, dataFilterValue } = props;
+type FilterFormValues = {
+  field: string;
+  operator: string;
+  valueText: string;
+  minValue: string;
+  maxValue: string;
+  label: string;
+  showLabel: boolean;
+};
+
+export function FilterContent({ onHide, dataFilterValue }: FilterContentProps) {
   const [surroundingDataFilter, setSurroundingDataFilter] = useAtom(
     surroundingDataFilterAtom,
   );
   const tableFields = useAtomValue(tableFieldsAtom);
-  if (process.env.NODE_ENV !== "production") {
-    dataFilterAtom.debugLabel = "dataFilter";
-  }
   const tableFieldValue = useAtomValue(tableFieldValuesAtom);
 
   const {
@@ -45,267 +45,139 @@ export function FilterContent(props: FilterContentProps) {
     watch,
     register,
     formState: { errors },
-  } = useForm({
+  } = useForm<FilterFormValues>({
     defaultValues: {
-      field: {
-        label: dataFilterValue?.fieldName,
-        value: dataFilterValue?.fieldName,
-      },
-      operator: {
-        label: dataFilterValue?.operator,
-        value: dataFilterValue?.operator,
-      },
-      value: dataFilterValue?.value,
+      field: dataFilterValue?.fieldName ?? "",
+      operator: dataFilterValue?.operator ?? "",
+      valueText: getDefaultValueText(dataFilterValue),
       minValue: Array.isArray(dataFilterValue?.value)
-        ? dataFilterValue?.value[0]
+        ? String(dataFilterValue?.value[0] ?? "")
         : "",
       maxValue: Array.isArray(dataFilterValue?.value)
-        ? dataFilterValue?.value[1]
+        ? String(dataFilterValue?.value[1] ?? "")
         : "",
-      label: dataFilterValue?.label || "",
-      showLabel: !!dataFilterValue?.label, // Initialize based on dataFilterValue
+      label: dataFilterValue?.label ?? "",
+      showLabel: !!dataFilterValue?.label,
     },
   });
+
   const operator = watch("operator");
-  const showLabel: any = watch("showLabel");
+  const showLabel = watch("showLabel");
 
-  const getValue = (value: string): string | number =>
-    isNaN(+value) ? value : +value;
-
-  const onSubmit = (formValues: any) => {
-    const { field, operator, value, minValue, maxValue, label } = formValues;
+  const onSubmit = (formValues: FilterFormValues) => {
     const current = surroundingDataFilter.find(
       (f) => f.id === dataFilterValue?.id,
     );
     const id = dataFilterValue?.id || nanoid();
-
-    let newValue: any[] = [];
-
-    if (operator.value === "between" || operator.value === "not between") {
-      if (minValue && maxValue) {
-        newValue = [getValue(minValue), getValue(maxValue)];
-      }
-    } else if (value || typeof value === "number") {
-      if (
-        (operator.value === "like" || operator.value === "not like") &&
-        typeof value === "string" &&
-        !value.includes("%")
-      ) {
-        newValue = [`%${value}%`];
-      } else {
-        newValue = [value];
-      }
-    }
-
     const newItem = {
       id,
-      fieldName: field.value,
-      operator: operator.value,
-      label,
-      value: newValue,
+      fieldName: formValues.field,
+      operator: formValues.operator,
+      label: formValues.showLabel ? formValues.label : "",
+      value: getFilterValue(formValues),
     };
 
-    if (current) {
-      const updated = surroundingDataFilter.map((f) =>
-        f.id === id ? newItem : f,
-      );
-      setSurroundingDataFilter(updated);
-    } else {
-      setSurroundingDataFilter([...surroundingDataFilter, newItem]);
-    }
+    const nextFilters = current
+      ? surroundingDataFilter.map((f) => (f.id === id ? newItem : f))
+      : [...surroundingDataFilter, newItem];
 
+    setSurroundingDataFilter(nextFilters);
     onHide();
   };
 
-  function renderFiledComponent() {
-    const currentOperator = (
-      typeof operator === "string" ? operator : operator?.value
-    ) as Operator | undefined;
-    if (
-      currentOperator &&
-      currentOperator !== "is null" &&
-      currentOperator !== "is not null" &&
-      (currentOperator === "between" || currentOperator === "not between")
-    ) {
-      return (
-        <div className={rowStyle}>
-          <div className={colStyle}>
-            <Field
-              label="Min value"
-              invalid={!!errors.minValue}
-              error={errors.minValue?.message}
-            >
-              <Input
-                {...register("minValue", {
-                  required: "Please enter min value",
-                })}
-              />
-            </Field>
-          </div>
-          <div className={colStyle}>
-            <Field
-              label="Max value"
-              invalid={!!errors.maxValue}
-              error={errors.maxValue?.message}
-            >
-              <Input
-                {...register("maxValue", {
-                  required: "Please enter max value",
-                })}
-              />
-            </Field>
-          </div>
-        </div>
-      );
-    }
-    if (
-      currentOperator === "=" ||
-      currentOperator === "!=" ||
-      currentOperator === "like" ||
-      currentOperator === "not like" ||
-      currentOperator === "match_all" ||
-      currentOperator === "match_any" ||
-      currentOperator === "match_phrase" ||
-      currentOperator === "match_phrase_prefix"
-    ) {
-      return (
-        <>
-          <Field
-            label="Value"
-            invalid={!!errors.value}
-            error={(errors.value as any)?.message}
-          >
-            <Input
-              {...register("value", { required: "Please enter a value" })}
-              list="field-value-list"
-            />
-          </Field>
-          <datalist id="field-value-list">
-            {tableFieldValue.map((item, idx) => (
-              <option key={idx} value={item.value} />
-            ))}
-          </datalist>
-        </>
-      );
-    }
-    if (currentOperator === "in" || currentOperator === "not in") {
-      return (
-        <Field
-          label="Value"
-          invalid={!!errors.value}
-          error={(errors.value as any)?.message}
-        >
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="w-80 space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="Column" error={errors.field?.message}>
           <Controller
-            name="value"
+            name="field"
             control={control}
-            rules={{ required: "Please enter a value" }}
+            rules={{ required: "Please select a field" }}
             render={({ field }) => (
               <Select
-                {...field}
-                isMulti={true}
-                options={tableFieldValue.map((item) => ({
-                  label: item.value,
-                  value: item.value,
-                }))}
-                placeholder="Select values"
-                onChange={(selected) =>
-                  field.onChange(
-                    selected ? selected.map((s: any) => s.value) : [],
-                  )
-                }
-                value={tableFieldValue
-                  .filter(
-                    (item) =>
-                      Array.isArray(field.value) &&
-                      field.value.includes(item.value),
-                  )
-                  .map((item) => ({
-                    label: item.value,
-                    value: item.value,
-                  }))}
-              />
+                value={field.value || undefined}
+                onValueChange={field.onChange}
+              >
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select a field" />
+                </SelectTrigger>
+                <SelectContent>
+                  {tableFields.map((f) => (
+                    <SelectItem key={f.Field} value={f.Field}>
+                      {f.Field}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
           />
-        </Field>
-      );
-    }
-    return <></>;
-  }
+        </FormField>
 
-  return (
-    <form onSubmit={handleSubmit(onSubmit)} className={containerStyle}>
-      <div className={rowStyle}>
-        <div className={colStyle}>
-          <Field
-            label="Column"
-            invalid={!!errors.field}
-            error={(errors.field as any)?.message}
-          >
-            <Controller
-              name="field"
-              control={control}
-              rules={{ required: "Please select a field" }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  options={tableFields.map((f) => ({
-                    label: f.Field,
-                    value: f.Field,
-                  }))}
-                />
-              )}
+        <FormField label="Condition" error={errors.operator?.message}>
+          <Controller
+            name="operator"
+            control={control}
+            rules={{ required: "Please select an operator" }}
+            render={({ field }) => (
+              <Select
+                value={field.value || undefined}
+                onValueChange={field.onChange}
+              >
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder="Select an operator" />
+                </SelectTrigger>
+                <SelectContent>
+                  {OPERATORS.map((op) => (
+                    <SelectItem key={op} value={op}>
+                      {op}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </FormField>
+      </div>
+
+      {renderValueField({
+        operator,
+        errors,
+        register,
+        suggestions: tableFieldValue.map((item) => item.value),
+      })}
+
+      <div className="flex items-center gap-3 rounded-md border border-dashed px-3 py-3">
+        <Controller
+          name="showLabel"
+          control={control}
+          render={({ field }) => (
+            <Checkbox
+              checked={!!field.value}
+              onCheckedChange={(checked) => field.onChange(checked === true)}
             />
-          </Field>
-        </div>
-        <div className={colStyle}>
-          <Field
-            label="Condition"
-            invalid={!!errors.operator}
-            error={(errors.operator as any)?.message}
-          >
-            <Controller
-              name="operator"
-              control={control}
-              rules={{ required: "Please select an operator" }}
-              render={({ field }) => (
-                <Select
-                  {...field}
-                  options={OPERATORS.map((op) => ({
-                    label: op,
-                    value: op,
-                  }))}
-                />
-              )}
-            />
-          </Field>
+          )}
+        />
+        <div className="space-y-1">
+          <Label className="text-sm font-medium">Custom label</Label>
+          <p className="text-muted-foreground text-xs">
+            Show a custom label on the filter chip.
+          </p>
         </div>
       </div>
 
-      {renderFiledComponent()}
-
-      <InlineFieldRow>
-        <InlineField label="Custom Label">
-          <Controller
-            name="showLabel"
-            control={control}
-            render={({ field }) => <InlineSwitch {...field} />}
-          ></Controller>
-        </InlineField>
-      </InlineFieldRow>
-
       {showLabel && (
-        <Field
-          label="Label"
-          invalid={!!errors.label}
-          error={errors.label?.message}
-        >
-          <Input {...register("label", { required: "Please enter label" })} />
-        </Field>
+        <FormField label="Chip label" error={errors.label?.message}>
+          <Input
+            className="h-10"
+            placeholder="e.g. Error logs"
+            {...register("label", { required: "Please enter label" })}
+          />
+        </FormField>
       )}
 
-      <div className={footerStyle}>
+      <div className="flex justify-end gap-2 pt-2">
         <Button
-          variant="secondary"
+          variant="outline"
           onClick={(e) => {
             e.preventDefault();
             onHide();
@@ -313,8 +185,157 @@ export function FilterContent(props: FilterContentProps) {
         >
           Cancel
         </Button>
-        <Button type="submit">Apply</Button>
+        <Button type="submit">Apply filter</Button>
       </div>
     </form>
   );
+}
+
+function renderValueField({
+  operator,
+  errors,
+  register,
+  suggestions,
+}: {
+  operator: string;
+  errors: any;
+  register: any;
+  suggestions: string[];
+}) {
+  if (operator === "between" || operator === "not between") {
+    return (
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="Minimum value" error={errors.minValue?.message}>
+          <Input
+            className="h-10"
+            placeholder="Start"
+            {...register("minValue", { required: "Please enter min value" })}
+          />
+        </FormField>
+        <FormField label="Maximum value" error={errors.maxValue?.message}>
+          <Input
+            className="h-10"
+            placeholder="End"
+            {...register("maxValue", { required: "Please enter max value" })}
+          />
+        </FormField>
+      </div>
+    );
+  }
+
+  if (operator === "is null" || operator === "is not null") {
+    return null;
+  }
+
+  if (!operator) {
+    return null;
+  }
+
+  const helperText =
+    operator === "in" || operator === "not in"
+      ? "Use commas to enter multiple values."
+      : undefined;
+
+  return (
+    <FormField
+      label="Value"
+      error={errors.valueText?.message}
+      hint={helperText}
+    >
+      <Input
+        className="h-10"
+        list="surrounding-field-value-list"
+        placeholder={
+          operator === "in" || operator === "not in"
+            ? "value-a, value-b"
+            : "Enter a value"
+        }
+        {...register("valueText", { required: "Please enter a value" })}
+      />
+      <datalist id="surrounding-field-value-list">
+        {suggestions.map((value, idx) => (
+          <option key={`${value}-${idx}`} value={value} />
+        ))}
+      </datalist>
+    </FormField>
+  );
+}
+
+function FormField({
+  label,
+  error,
+  hint,
+  children,
+}: React.PropsWithChildren<{
+  label: string;
+  error?: string;
+  hint?: string;
+}>) {
+  return (
+    <div className="space-y-2">
+      <Label className="text-foreground/85 text-xs font-semibold tracking-wide">
+        {label}
+      </Label>
+      {children}
+      {error ? (
+        <p className="text-destructive text-xs">{error}</p>
+      ) : hint ? (
+        <p className="text-muted-foreground text-xs">{hint}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function getDefaultValueText(dataFilterValue?: any) {
+  if (!dataFilterValue?.value?.length) return "";
+
+  if (
+    dataFilterValue.operator === "in" ||
+    dataFilterValue.operator === "not in"
+  ) {
+    return dataFilterValue.value.join(", ");
+  }
+
+  return String(dataFilterValue.value[0] ?? "");
+}
+
+function getFilterValue(formValues: FilterFormValues): Array<string | number> {
+  if (
+    formValues.operator === "between" ||
+    formValues.operator === "not between"
+  ) {
+    return [
+      toTypedValue(formValues.minValue),
+      toTypedValue(formValues.maxValue),
+    ];
+  }
+
+  if (
+    formValues.operator === "is null" ||
+    formValues.operator === "is not null"
+  ) {
+    return [];
+  }
+
+  if (formValues.operator === "in" || formValues.operator === "not in") {
+    return formValues.valueText
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map(toTypedValue);
+  }
+
+  if (formValues.operator === "like" || formValues.operator === "not like") {
+    const v = formValues.valueText;
+    const wrapped = v.includes("%") ? v : `%${v}%`;
+    return [wrapped];
+  }
+
+  return [toTypedValue(formValues.valueText)];
+}
+
+function toTypedValue(value: string): string | number {
+  return Number.isNaN(Number(value)) || value.trim() === ""
+    ? value
+    : Number(value);
 }
