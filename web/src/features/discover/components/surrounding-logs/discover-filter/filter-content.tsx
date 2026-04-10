@@ -8,19 +8,13 @@ import { Checkbox } from "@/src/components/ui/checkbox";
 import { Input } from "@/src/components/ui/input";
 import { Label } from "@/src/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/src/components/ui/select";
-import {
   tableFieldsAtom,
   tableFieldValuesAtom,
   surroundingDataFilterAtom,
 } from "store/discover";
 import { OPERATORS } from "utils/data";
 import { FilterContentProps } from "../types";
+import { cn } from "@/src/utils/tailwind";
 
 type FilterFormValues = {
   field: string;
@@ -94,21 +88,17 @@ export function FilterContent({ onHide, dataFilterValue }: FilterContentProps) {
             control={control}
             rules={{ required: "Please select a field" }}
             render={({ field }) => (
-              <Select
-                value={field.value || undefined}
-                onValueChange={field.onChange}
+              <NativeSelect
+                value={field.value}
+                onChange={(e) => field.onChange(e.target.value)}
+                placeholder="Select a field"
               >
-                <SelectTrigger className="h-10">
-                  <SelectValue placeholder="Select a field" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tableFields.map((f) => (
-                    <SelectItem key={f.Field} value={f.Field}>
-                      {f.Field}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {tableFields.map((f) => (
+                  <option key={f.Field} value={f.Field}>
+                    {f.Field}
+                  </option>
+                ))}
+              </NativeSelect>
             )}
           />
         </FormField>
@@ -119,21 +109,17 @@ export function FilterContent({ onHide, dataFilterValue }: FilterContentProps) {
             control={control}
             rules={{ required: "Please select an operator" }}
             render={({ field }) => (
-              <Select
-                value={field.value || undefined}
-                onValueChange={field.onChange}
+              <NativeSelect
+                value={field.value}
+                onChange={(e) => field.onChange(e.target.value)}
+                placeholder="Select an operator"
               >
-                <SelectTrigger className="h-10">
-                  <SelectValue placeholder="Select an operator" />
-                </SelectTrigger>
-                <SelectContent>
-                  {OPERATORS.map((op) => (
-                    <SelectItem key={op} value={op}>
-                      {op}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {OPERATORS.map((op) => (
+                  <option key={op} value={op}>
+                    {op}
+                  </option>
+                ))}
+              </NativeSelect>
             )}
           />
         </FormField>
@@ -188,6 +174,39 @@ export function FilterContent({ onHide, dataFilterValue }: FilterContentProps) {
         <Button type="submit">Apply filter</Button>
       </div>
     </form>
+  );
+}
+
+function NativeSelect({
+  value,
+  onChange,
+  placeholder,
+  children,
+  className,
+}: {
+  value: string;
+  onChange: React.ChangeEventHandler<HTMLSelectElement>;
+  placeholder?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={onChange}
+      className={cn(
+        "border-input bg-background text-foreground h-10 w-full rounded-md border px-3 py-2 text-sm",
+        !value && "text-muted-foreground",
+        className,
+      )}
+    >
+      {placeholder && (
+        <option value="" disabled>
+          {placeholder}
+        </option>
+      )}
+      {children}
+    </select>
   );
 }
 
