@@ -257,7 +257,12 @@ export function useDiscoverData() {
 
   const fetchTopDataForField = useCallback(
     async (fieldName: string) => {
-      if (!currentTable || !currentDatabase || !projectId) {
+      if (
+        !currentTable ||
+        !currentDatabase ||
+        !projectId ||
+        !currentTimeField
+      ) {
         return;
       }
       setLoading((prev) => ({ ...prev, getTopData: true }));
@@ -485,11 +490,17 @@ export function useDiscoverData() {
   }, [currentDate, currentTimeField, dataFilter, interval, currentTable]);
 
   // Fetch TopData when user hovers over a field (triggered by topDataFieldNameAtom)
+  // Also retry when currentTimeField becomes available (in case it was empty during hover)
   useEffect(() => {
-    if (topDataFieldName) {
+    if (topDataFieldName && currentTimeField) {
       void fetchTopDataForField(topDataFieldName);
     }
-  }, [topDataFieldName, fetchTopDataForField]);
+  }, [topDataFieldName, currentTimeField, fetchTopDataForField]);
+
+  // Clear topDataFieldName when table changes to avoid stale queries
+  useEffect(() => {
+    setTopDataFieldName(null);
+  }, [currentTable, setTopDataFieldName]);
 
   return {
     loading,
