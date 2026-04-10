@@ -1,5 +1,5 @@
 /**
- * Next.js route: /project/[projectId]/discover/traces
+ * Next.js route: /project/[projectId]/logging/traces
  *
  * Entry point for the Traces (distributed tracing explorer) view.
  */
@@ -20,7 +20,7 @@ const PageTrace = dynamic(
   },
 );
 
-export default function DiscoverTracesPage() {
+export default function LoggingTracesPage() {
   const router = useRouter();
   const projectId = router.query.projectId as string;
 

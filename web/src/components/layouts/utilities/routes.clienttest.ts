@@ -25,7 +25,7 @@ describe("processNavigation", () => {
           title: "Logging",
           section: RouteSection.Main,
           group: RouteGroup.Observability,
-          url: "/project/[projectId]/discover",
+          url: "/project/[projectId]/logging",
         }),
       ]),
     );
