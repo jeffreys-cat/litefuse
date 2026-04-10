@@ -23,18 +23,18 @@ import {
   tableFieldsAtom,
   tableTotalCountAtom,
   topDataAtom,
+  topDataFieldNameAtom,
 } from "store/discover";
 import {
   getTableDataChartsService,
   getTableDataCountService,
   getTableDataService,
-  getTopDataService,
+  getTopDataFieldService,
 } from "services/discover";
 import {
   encodeBase64,
   getChartsData,
   convertRowsToTableData,
-  convertRowsToTableDataViaFieldsType,
   generateHighlightedResults,
   getIndexesStatement,
 } from "utils/data";
@@ -62,6 +62,7 @@ export function useDiscoverData() {
   const dataFilter = useAtomValue(dataFilterAtom);
   const searchValue = useAtomValue(searchValueAtom);
   const setTopData = useSetAtom(topDataAtom);
+  const [topDataFieldName, setTopDataFieldName] = useAtom(topDataFieldNameAtom);
   const currentTable = useAtomValue(currentTableAtom);
   const currentCatalog = useAtomValue(currentCatalogAtom);
   const currentDatabase = useAtomValue(currentDatabaseAtom);
@@ -254,85 +255,95 @@ export function useDiscoverData() {
     tableFields,
   ]);
 
-  const getTopData = useCallback(async () => {
-    if (!currentTable || !currentDatabase || !projectId) {
-      return;
-    }
-    const indexesStatement = getIndexesStatement(
-      currentIndexes,
-      tableFields,
-      searchValue,
-    );
-    const payload: any = {
-      catalog: currentCatalog,
-      database: currentDatabase,
-      table: currentTable,
-      timeField: currentTimeField,
-      startDate: currentDate[0]?.utc().format(FORMAT_DATE),
-      endDate: (currentDate[1] as Dayjs).utc().format(FORMAT_DATE),
-      cluster: "",
-      sort: "DESC",
-      search_type: searchType,
-      indexes: "",
-      page: page,
-      page_size: 500,
-    };
+  const fetchTopDataForField = useCallback(
+    async (fieldName: string) => {
+      if (!currentTable || !currentDatabase || !projectId) {
+        return;
+      }
+      setLoading((prev) => ({ ...prev, getTopData: true }));
+      const indexesStatement = getIndexesStatement(
+        currentIndexes,
+        tableFields,
+        searchValue,
+      );
+      const payload: any = {
+        catalog: currentCatalog,
+        database: currentDatabase,
+        table: currentTable,
+        timeField: currentTimeField,
+        startDate: currentDate[0]?.utc().format(FORMAT_DATE),
+        endDate: (currentDate[1] as Dayjs).utc().format(FORMAT_DATE),
+        cluster: "",
+        sort: "DESC",
+        search_type: searchType,
+        indexes: "",
+        page: 1,
+        page_size: 500,
+        fieldName: fieldName,
+      };
 
-    if (searchType === "Search") {
-      payload.indexes_statement = indexesStatement;
-    }
-    payload.data_filters = dataFilter.length > 0 ? dataFilter : [];
+      if (searchType === "Search") {
+        payload.indexes_statement = indexesStatement;
+      }
+      payload.data_filters = dataFilter.length > 0 ? dataFilter : [];
 
-    if (searchValue && searchType !== "Lucene") {
-      payload.search_value =
-        searchType === "Search" ? encodeBase64(searchValue) : searchValue;
-    }
+      if (searchValue && searchType !== "Lucene") {
+        payload.search_value =
+          searchType === "Search" ? encodeBase64(searchValue) : searchValue;
+      }
 
-    if (searchType === "Lucene") {
-      try {
-        const luceneWhere = await buildLuceneWhereClause();
-        if (luceneWhere) {
-          payload.lucene_where = luceneWhere;
+      if (searchType === "Lucene") {
+        try {
+          const luceneWhere = await buildLuceneWhereClause();
+          if (luceneWhere) {
+            payload.lucene_where = luceneWhere;
+          }
+        } catch (error) {
+          console.error("Lucene query build failed", error);
+          setLoading((prev) => ({ ...prev, getTopData: false }));
+          setTopData([]);
+          return;
         }
-      } catch (error) {
-        console.error("Lucene query build failed", error);
-        setTopData([]);
-        return;
-      }
-    }
-
-    try {
-      const { rows } = await getTopDataService(projectId, payload);
-
-      if (!rows || rows.length === 0) {
-        setTopData([]);
-        return;
       }
 
-      // Convert rows to the format expected by sidebar (with field type info)
-      const rowsData = convertRowsToTableDataViaFieldsType(rows, tableFields);
-      setTopData(rowsData);
-    } catch (err) {
-      console.error("Query error", err);
-      showErrorToast("Query failed", err?.message ?? String(err));
-      setTopData([]);
-    }
-  }, [
-    buildLuceneWhereClause,
-    currentCatalog,
-    currentDate,
-    currentDatabase,
-    currentIndexes,
-    currentTable,
-    currentTimeField,
-    dataFilter,
-    page,
-    projectId,
-    searchType,
-    searchValue,
-    setTopData,
-    tableFields,
-  ]);
+      try {
+        const { rows } = await getTopDataFieldService(projectId, payload);
+        setLoading((prev) => ({ ...prev, getTopData: false }));
+
+        if (!rows || rows.length === 0) {
+          setTopData([]);
+          return;
+        }
+
+        // Only keep the values of the specific field (as objects with single key for countValueDistribution)
+        const fieldRows = rows.map((row: any) => ({
+          [fieldName]: row[fieldName],
+        }));
+        setTopData(fieldRows);
+      } catch (err) {
+        console.error("Query error", err);
+        setLoading((prev) => ({ ...prev, getTopData: false }));
+        showErrorToast("Query failed", err?.message ?? String(err));
+        setTopData([]);
+      }
+    },
+    [
+      buildLuceneWhereClause,
+      currentCatalog,
+      currentDate,
+      currentDatabase,
+      currentIndexes,
+      currentTable,
+      currentTimeField,
+      dataFilter,
+      projectId,
+      searchType,
+      searchValue,
+      setLoading,
+      setTopData,
+      tableFields,
+    ],
+  );
 
   const getTableDataCount = useCallback(async () => {
     if (!currentTable || !currentDatabase || !projectId) {
@@ -439,7 +450,6 @@ export function useDiscoverData() {
       void getTableDataCharts();
       void getTableDataCount();
       void getTableData();
-      void getTopData();
     },
     [
       clearData,
@@ -447,7 +457,6 @@ export function useDiscoverData() {
       getTableData,
       getTableDataCharts,
       getTableDataCount,
-      getTopData,
       setPage,
     ],
   );
@@ -465,7 +474,6 @@ export function useDiscoverData() {
       return;
     }
     void getTableData();
-    void getTopData();
     void getTableDataCharts();
     void getTableDataCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -476,8 +484,16 @@ export function useDiscoverData() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDate, currentTimeField, dataFilter, interval, currentTable]);
 
+  // Fetch TopData when user hovers over a field (triggered by topDataFieldNameAtom)
+  useEffect(() => {
+    if (topDataFieldName) {
+      void fetchTopDataForField(topDataFieldName);
+    }
+  }, [topDataFieldName, fetchTopDataForField]);
+
   return {
     loading,
     onQuerying: handleQuerying,
+    setTopDataFieldName,
   };
 }

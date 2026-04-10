@@ -2,12 +2,13 @@
 import { css } from "@emotion/css";
 import { IconButton } from "components/ui/icon-button";
 import { Progress } from "antd";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { get } from "lodash-es";
 import { nanoid } from "nanoid";
-import React from "react";
+import React, { useEffect } from "react";
 import {
   topDataAtom,
+  topDataFieldNameAtom,
   tableTotalCountAtom,
   dataFilterAtom,
 } from "store/discover";
@@ -39,10 +40,21 @@ function countValueDistribution(
 }
 
 export function TopData({ field }: any) {
-  const topData = useAtomValue(topDataAtom);
+  const [topData, setTopData] = useAtom(topDataAtom);
+  const setTopDataFieldName = useSetAtom(topDataFieldNameAtom);
   const tableTotalCount = useAtomValue(tableTotalCountAtom);
   const [dataFilter, setDataFilter] = useAtom(dataFilterAtom);
   const canDisplayTopData = field?.Type?.toUpperCase() !== "VARIANT";
+
+  // Trigger fetch when field changes
+  useEffect(() => {
+    if (field?.Field) {
+      // Clear topData immediately when field changes to avoid showing stale data
+      setTopData([]);
+      setTopDataFieldName(field.Field);
+    }
+  }, [field?.Field, setTopDataFieldName, setTopData]);
+
   const res = Object.entries(countValueDistribution(topData, field.Field)).sort(
     (a: any, b: any) => b[1] - a[1],
   );

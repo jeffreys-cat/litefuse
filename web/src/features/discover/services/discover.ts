@@ -10,6 +10,7 @@ import {
   getQueryTableChartsSQL,
   getQueryTableResultCountSQL,
   getQueryTableResultSQL,
+  getTopDataFieldSQL,
   getSurroundingSQL,
 } from "./sql";
 
@@ -36,6 +37,15 @@ export async function getTableDataChartsService(
 
 export async function getTopDataService(projectId: string, payload: any) {
   const rawSql = getQueryTableResultSQL(payload);
+  return directApi.discover.query.mutate({
+    projectId,
+    rawSql,
+    database: payload.database,
+  });
+}
+
+export async function getTopDataFieldService(projectId: string, payload: any) {
+  const rawSql = getTopDataFieldSQL(payload);
   return directApi.discover.query.mutate({
     projectId,
     rawSql,
