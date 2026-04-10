@@ -4,8 +4,8 @@
  *
  * This file is kept as a thin module re-export so existing internal
  * imports continue to resolve. The actual Next.js route entry points are:
- *   - src/pages/project/[projectId]/discover/index.tsx  → /project/[projectId]/discover
- *   - src/pages/project/[projectId]/discover/traces.tsx  → /project/[projectId]/discover/traces
+ *   - src/pages/project/[projectId]/logging/index.tsx  → /project/[projectId]/logging
+ *   - src/pages/project/[projectId]/logging/traces.tsx  → /project/[projectId]/logging/traces
  */
 import dayjs from "dayjs";
 import localeData from "dayjs/plugin/localeData";

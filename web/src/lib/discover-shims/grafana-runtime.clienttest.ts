@@ -26,7 +26,7 @@ describe("grafana-runtime project ID resolution", () => {
     window.history.replaceState(
       {},
       "",
-      "/project/test-project/discover?from=now-15m",
+      "/project/test-project/logging?from=now-15m",
     );
 
     expect(getDiscoverProjectId()).toBe("test-project");

@@ -16,7 +16,7 @@ import { Observable } from "rxjs";
 let _projectId = "";
 
 function getProjectIdFromPathname(pathname: string) {
-  const match = pathname.match(/^\/project\/([^/]+)\/discover(?:\/|$)/);
+  const match = pathname.match(/^\/project\/([^/]+)\/logging(?:\/|$)/);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 

@@ -106,7 +106,7 @@ export const ROUTES: Route[] = [
   },
   {
     title: "Logging",
-    pathname: `/project/[projectId]/discover`,
+    pathname: `/project/[projectId]/logging`,
     icon: Search,
     group: RouteGroup.Observability,
     section: RouteSection.Main,
