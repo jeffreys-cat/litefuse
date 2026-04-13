@@ -358,7 +358,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "totalTokens",
     tableName: "observations",
     select:
-      "if(MAP_CONTAINS_KEY(os.usage_details, 'total'), os.usage_details['total'], NULL)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -366,7 +366,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokens",
     tableName: "observations",
     select:
-      "if(MAP_CONTAINS_KEY(os.usage_details, 'total'), os.usage_details['total'], NULL)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   // Scores column duplicated to allow renaming column name. Will be removed once session storage cache is outdated

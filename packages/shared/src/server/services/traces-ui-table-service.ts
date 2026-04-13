@@ -335,6 +335,11 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const scoresFilterRes = scoresFilter.apply();
   const observationFilterRes = observationsFilter.apply();
 
+  // Check if any filter references observation-level columns (os.usage_details etc.)
+  // to add Doris optimizer hint when needed.
+  const hasObsLevelFilter =
+    tracesFilter.find((f) => f.table === "observations") !== undefined;
+
   const search = dorisSearchCondition(searchQuery, searchType, {
     type: "traces",
   });
@@ -396,17 +401,17 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             project_id,
             COUNT(*) AS observation_count,
             SUM(total_cost) AS total_cost,
-            -- Doris 中计算毫秒差值 - 使用 CASE WHEN 替代 least/greatest
+            -- Calculate millisecond diff in Doris - use CASE WHEN instead of least/greatest
             milliseconds_diff(
             CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
             CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
             ) as latency_milliseconds,
-            -- 条件计数
+            -- Conditional counts
             sum(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as error_count,
             sum(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) as warning_count,
             sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) as default_count,
             sum(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) as debug_count,
-            -- 级别聚合
+            -- Level aggregation
             CASE 
               WHEN ARRAY_CONTAINS(collect_list(level), 'ERROR') THEN 'ERROR'
               WHEN ARRAY_CONTAINS(collect_list(level), 'WARNING') THEN 'WARNING'
@@ -468,8 +473,8 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         SELECT
           project_id,
           trace_id,
-          -- 数值分数：使用字符串拼接 'name:avg_value' 格式（因为 collect_list 不支持 struct）
-          -- 过滤 NULL 值以与 ClickHouse 的 groupArrayIf 行为保持一致
+          -- Numeric scores: concat 'name:avg_value' strings (collect_list does not support struct)
+          -- Filter NULLs to match ClickHouse groupArrayIf behavior
           array_except(
             collect_list(
               CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN 
@@ -478,8 +483,8 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             ), 
             [NULL]
           ) AS scores_avg,
-          -- 分类分数：构建 name:value 格式字符串数组（与 ClickHouse 保持一致）
-          -- 过滤 NULL 值以与 ClickHouse 的 groupArrayIf 行为保持一致
+          -- Categorical scores: build name:value string array (consistent with ClickHouse)
+          -- Filter NULLs to match ClickHouse groupArrayIf behavior
           array_except(
             collect_list(
               CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN 
@@ -516,9 +521,17 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     .filter(Boolean)
     .join(",\n");
 
+  // Doris Nereids optimizer crashes with "LogicalFilter cannot be cast to
+  // LogicalJoin" when complex expressions referencing LEFT JOIN columns
+  // (os.usage_details with array_filter/map_keys) appear in the WHERE clause.
+  // Disable PUSH_FILTER_INSIDE_JOIN rule via hint when obs-level filters exist.
+  const dorisHint = hasObsLevelFilter
+    ? `/*+ SET_VAR(disable_nereids_rules='PUSH_FILTER_INSIDE_JOIN') */`
+    : "";
+
   const query = `
       ${withClause ? `WITH ${withClause}` : ""}
-      SELECT ${sqlSelect}
+      SELECT ${dorisHint} ${sqlSelect}
       FROM traces t
       ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.id` : ""}
       ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.id` : ""}
