@@ -2,7 +2,7 @@ import {
   type TraceRecordReadType,
   deriveFilters,
   createPublicApiTracesColumnMapping,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
   queryDoris,
   convertDateToAnalyticsDateTime,
   dq,
@@ -49,7 +49,7 @@ export const generateTracesForPublicApi = async ({
     props,
     filterParams,
     advancedFilters,
-    tracesTableUiColumnDefinitions,
+    tracesTableUiColumnDefinitionsForDoris,
     tracesTableCols,
   );
   const appliedFilter = filter.apply();
@@ -205,7 +205,7 @@ export const getTracesCountForPublicApi = async ({
     props,
     filterParams,
     advancedFilters,
-    tracesTableUiColumnDefinitions,
+    tracesTableUiColumnDefinitionsForDoris,
     tracesTableCols,
   );
   const appliedDorisFilter = dorisFilter.apply();

@@ -42,7 +42,7 @@ import {
   getCategoricalScoresGroupedByName,
   convertDateToAnalyticsDateTime,
   getAgentGraphData,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
   getTracesGroupedByUsers,
   getTracesGroupedBySessionId,
   updateEvents,
@@ -279,7 +279,7 @@ export const traceRouter = createTRPCRouter({
         ),
         getTracesGroupedByName(
           input.projectId,
-          tracesTableUiColumnDefinitions,
+          tracesTableUiColumnDefinitionsForDoris,
           timestampFilter ?? [],
         ),
         getTracesGroupedByTags({

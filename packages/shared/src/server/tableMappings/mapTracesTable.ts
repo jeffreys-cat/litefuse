@@ -415,6 +415,7 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Total Cost ($)",
     uiTableId: "totalCost",
     tableName: "observations",
-    select: "os.cost_details['total']",
+    select:
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
   },
 ];

@@ -1,7 +1,7 @@
 import {
   orderByToClickhouseSql,
   orderByToPrismaSql,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
 } from "@langfuse/shared/src/server";
 import {
   InvalidRequestError,
@@ -55,7 +55,7 @@ describe("orderByToPrisma (Convert orderBy to Prisma.sql)", () => {
     expect(() =>
       orderByToClickhouseSql(
         { column: "not_a_column", order: "ASC" },
-        tracesTableUiColumnDefinitions,
+        tracesTableUiColumnDefinitionsForDoris,
       ),
     ).toThrow(InvalidRequestError);
   });
