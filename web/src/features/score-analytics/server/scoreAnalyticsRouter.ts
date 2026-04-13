@@ -277,15 +277,15 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         : 1.0;
       const samplingPercent = Math.round(samplingRate * 100); // Convert to 0-100 for modulo
 
-      // Sampling expression using cityHash64 on composite key (trace_id, observation_id, session_id, dataset_run_id)
+      // Sampling expression using murmur_hash3_64 on composite key (Doris-compatible)
       // This ensures deterministic pseudo-random sampling that preserves matched pairs
       const samplingExpression = shouldSample
-        ? `cityHash64(
+        ? `abs(murmur_hash3_64(concat_ws('|',
             coalesce(trace_id, ''),
             coalesce(observation_id, ''),
             coalesce(session_id, ''),
             coalesce(dataset_run_id, '')
-          ) % 100 < ${samplingPercent}`
+          ))) % 100 < ${samplingPercent}`
         : null;
 
       // Determine if this is a single-score or two-score query

@@ -152,7 +152,6 @@ export const ROUTES: Route[] = [
     group: RouteGroup.Evaluation,
     section: RouteSection.Main,
     icon: SquarePercent,
-    hidden: true,
   },
   {
     title: "LLM-as-a-Judge",

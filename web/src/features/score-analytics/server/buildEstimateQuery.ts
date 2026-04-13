@@ -55,9 +55,9 @@ export async function buildEstimateQuery(params: {
       score1_sample AS (
         SELECT trace_id, observation_id, session_id, dataset_run_id
         FROM scores
-        PREWHERE project_id = {projectId: String}
+        WHERE project_id = {projectId: String}
           AND name = {score1Name: String}
-        WHERE source = {score1Source: String}
+          AND source = {score1Source: String}
           AND data_type = {score1DataType: String}
           AND timestamp >= {fromTimestamp: DateTime64(3)}
           AND timestamp <= {toTimestamp: DateTime64(3)}
@@ -68,9 +68,9 @@ export async function buildEstimateQuery(params: {
       score2_sample AS (
         SELECT trace_id, observation_id, session_id, dataset_run_id
         FROM scores
-        PREWHERE project_id = {projectId: String}
+        WHERE project_id = {projectId: String}
           AND name = {score2Name: String}
-        WHERE source = {score2Source: String}
+          AND source = {score2Source: String}
           AND data_type = {score2DataType: String}
           AND timestamp >= {fromTimestamp: DateTime64(3)}
           AND timestamp <= {toTimestamp: DateTime64(3)}
