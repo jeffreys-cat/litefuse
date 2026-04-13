@@ -45,7 +45,7 @@ import {
   getScoresForSessions,
   getNumericScoresGroupedByName,
   getCategoricalScoresGroupedByName,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
   getEventsGroupedByUserId,
   getEventsGroupedByTraceTags,
   hasAnySessionFromEventsTable,
@@ -510,7 +510,7 @@ export const sessionRouter = createTRPCRouter({
     .query(async ({ input }): Promise<SessionOptions> => {
       const { timestampFilter } = input;
       const columns = [
-        ...tracesTableUiColumnDefinitions,
+        ...tracesTableUiColumnDefinitionsForDoris,
         {
           uiTableName: "Created At",
           uiTableId: "createdAt",

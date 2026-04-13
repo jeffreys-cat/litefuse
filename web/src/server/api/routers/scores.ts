@@ -48,7 +48,7 @@ import {
   getEventsGroupedByTraceName,
   getEventsGroupedByTraceTags,
   getEventsGroupedByUserId,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
   upsertScore,
   logger,
   getTraceById,
@@ -387,7 +387,7 @@ export const scoresRouter = createTRPCRouter({
           }),
           getTracesGroupedByName(
             input.projectId,
-            tracesTableUiColumnDefinitions,
+            tracesTableUiColumnDefinitionsForDoris,
             timestampFilter ?? [],
           ),
           getTracesGroupedByUsers(

@@ -17,7 +17,7 @@ import {
   getNumericScoresGroupedByName,
   getTracesGroupedByName,
   getTracesGroupedByTags,
-  tracesTableUiColumnDefinitions,
+  tracesTableUiColumnDefinitionsForDoris,
 } from "@langfuse/shared/src/server";
 
 export const filterOptionsQuery = protectedProjectProcedure
@@ -49,7 +49,7 @@ export const filterOptionsQuery = protectedProjectProcedure
     > => {
       const traces = await getTracesGroupedByName(
         input.projectId,
-        tracesTableUiColumnDefinitions,
+        tracesTableUiColumnDefinitionsForDoris,
         traceTimestampFilters,
       );
       return traces.map((i) => ({ traceName: i.name }));
