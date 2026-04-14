@@ -619,9 +619,22 @@ export function buildScoreComparisonQuery(params: {
           ${
             isIdenticalScores
               ? "NULL"
-              : `-- Spearman correlation: Doris has no rankCorr function.
-          -- TODO: implement with RANK() window functions if Spearman is required.
-          CAST(NULL AS DOUBLE)`
+              : `-- Spearman correlation: Doris has no rankCorr, but Spearman is defined
+          -- as Pearson correlation on average-ranks (with tie correction).
+          -- Implementation: row_number() gives positions 1..n; avg() OVER
+          -- (PARTITION BY value) collapses tied positions to the average rank,
+          -- matching the textbook Spearman formula exactly.
+          if(
+            (SELECT is_safe FROM correlation_check),
+            (SELECT corr(avg_rank1, avg_rank2) FROM (
+              SELECT
+                avg(row_number() OVER (ORDER BY value1)) OVER (PARTITION BY value1) as avg_rank1,
+                avg(row_number() OVER (ORDER BY value2)) OVER (PARTITION BY value2) as avg_rank2
+              FROM matched_scores
+              WHERE value1 IS NOT NULL AND value2 IS NOT NULL
+            ) ranked),
+            NULL
+          )`
           } as spearman_correlation`
               : `-- Categorical/boolean scores: statistical metrics are not meaningful
           NULL as mean1,
