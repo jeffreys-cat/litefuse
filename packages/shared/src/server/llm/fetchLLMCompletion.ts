@@ -62,6 +62,40 @@ function getThinkingBlockTypes(adapter: LLMAdapter): Set<string> | undefined {
   return THINKING_BLOCK_TYPES[adapter];
 }
 
+// Providers that return thinking/reasoning content in their responses.
+// These providers corrupt JSON parsing when using json_object mode for structured output,
+// so we must force function calling mode instead.
+const PROVIDERS_WITH_THINKING_CONTENT = new Set(["minimax"]);
+
+function hasThinkingContent(provider: string | undefined): boolean {
+  return provider ? PROVIDERS_WITH_THINKING_CONTENT.has(provider) : false;
+}
+
+// Regex to strip thinking tags from string content
+// Matches: <think>(anything)</think> or <think>(anything)内科
+const THINKING_TAG_REGEX = /<think>[\s\S]*?<\/think>/gi;
+
+/**
+ * Recursively strips thinking content from an object.
+ * Used for providers (like MiniMax) that include thinking tags in JSON string fields.
+ */
+function stripThinkingFromObject(obj: unknown): unknown {
+  if (typeof obj === "string") {
+    return obj.replace(THINKING_TAG_REGEX, "");
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(stripThinkingFromObject);
+  }
+  if (obj !== null && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = stripThinkingFromObject(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 const PROVIDERS_WITH_REQUIRED_USER_MESSAGE = [
   LLMAdapter.VertexAI,
   LLMAdapter.GoogleAIStudio,
@@ -460,8 +494,13 @@ export async function fetchLLMCompletion(
     if (params.structuredOutputSchema) {
       // Thinking-capable adapters may produce reasoning blocks that corrupt JSON schema
       // parsing. Force function calling so the parser reads from tool_calls instead.
+      // Also force function calling for providers (like MiniMax) that return thinking content.
+      // Check both provider name and baseURL since provider may be empty in eval template.
+      const isMiniMaxUrl = baseURL?.includes("minimax") ?? false;
       const structuredOutputConfig =
-        thinkingTypes != null
+        thinkingTypes != null ||
+        hasThinkingContent(modelParams.provider) ||
+        isMiniMaxUrl
           ? { method: "functionCalling" as const }
           : undefined;
 
@@ -471,6 +510,15 @@ export async function fetchLLMCompletion(
           structuredOutputConfig,
         )
         .invoke(finalMessages, runConfig);
+
+      // For providers with thinking content (like MiniMax), strip thinking tags from the result
+      // as a safety measure even when using function calling mode
+      if (hasThinkingContent(modelParams.provider) || isMiniMaxUrl) {
+        return stripThinkingFromObject(structuredOutput) as Record<
+          string,
+          unknown
+        >;
+      }
 
       return structuredOutput;
     }
@@ -642,7 +690,22 @@ function processOpenAIBaseURL(params: {
 }): string | null | undefined {
   const { url, modelName } = params;
 
-  if (!url || !url.includes("{model}")) {
+  if (!url) return url;
+
+  // Process MiniMax-style unique URLs that use non-standard completions paths.
+  // MiniMax uses `/v1/text/chatcompletion_v2` which LangChain would incorrectly
+  // append `/chat/completions` to. We strip the completions path so LangChain
+  // can correctly append `/chat/completions` to reach the standard endpoint.
+  const miniMaxCompletionsPaths = ["/v1/text/chatcompletion_v2"];
+
+  for (const path of miniMaxCompletionsPaths) {
+    if (url.endsWith(path)) {
+      return url.slice(0, -path.length);
+    }
+  }
+
+  // Process {model} placeholder
+  if (!url.includes("{model}")) {
     return url;
   }
 
