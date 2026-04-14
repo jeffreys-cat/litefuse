@@ -787,14 +787,21 @@ const getObservationsTableInternal = async <T>(
       traceTableFilter.length > 0 || orderByTraces || Boolean(opts.searchQuery),
   });
 
-  // Simplified scores CTE for Doris
+  // Scores CTE for Doris.
+  // scores_avg uses Array<Struct(name, avg_value)> to match CK's Array<Tuple>
+  // semantics. NumberObjectFilter uses array_filter + struct_element to
+  // OR-match any struct where name=key and value satisfies the threshold.
+  // This preserves multi-evaluator rows (same score name with different
+  // comments) which matter for LLM-as-a-judge evaluation workflows.
+  // score_categories stays as Array<"name:value"> because CategoryOptionsFilter
+  // uses arrays_overlap(column, array(...)) which expects a string array.
   const scoresCte = hasScoresFilter
     ? `WITH scores_agg AS (
       SELECT
         trace_id,
         observation_id,
         collect_list(CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN
-          CONCAT(name, ':', CAST(avg_value AS STRING)) ELSE NULL END) AS scores_avg,
+          struct(name, avg_value) END) AS scores_avg,
         collect_list(CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN
           CONCAT(name, ':', string_value) ELSE NULL END) AS score_categories
       FROM (

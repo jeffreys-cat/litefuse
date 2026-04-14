@@ -473,21 +473,20 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         SELECT
           project_id,
           trace_id,
-          -- Numeric scores: concat 'name:avg_value' strings (collect_list does not support struct)
-          -- Filter NULLs to match ClickHouse groupArrayIf behavior
-          array_except(
-            collect_list(
-              CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN 
-                CONCAT(name, ':', CAST(avg_value AS STRING))
-              ELSE NULL END
-            ), 
-            [NULL]
+          -- Numeric scores: Array<Struct(name, avg_value)> matching CK's
+          -- Array<Tuple> so NumberObjectFilter (size(array_filter(...)) > 0)
+          -- OR-matches over all evaluator rows for the same score name.
+          -- collect_list skips NULLs automatically (for struct rows).
+          collect_list(
+            CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN
+              struct(name, avg_value)
+            END
           ) AS scores_avg,
-          -- Categorical scores: build name:value string array (consistent with ClickHouse)
-          -- Filter NULLs to match ClickHouse groupArrayIf behavior
+          -- Categorical scores: Array<"name:value"> for CategoryOptionsFilter
+          -- which uses arrays_overlap(column, array(...)).
           array_except(
             collect_list(
-              CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN 
+              CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN
                 CONCAT(name, ':', string_value)
               ELSE NULL END
             ),
@@ -548,8 +547,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     TracesTableMetricsDorisReturnType,
     "scores_avg" | "score_categories" | "usage_details" | "cost_details"
   > & {
-    scores_avg: string | Array<string>; // Doris format: JSON string or array
-    score_categories: string | Array<string>; // JSON string or array
+    // scores_avg: Array of struct objects ({col1, col2} from Doris struct), or JSON string
+    scores_avg: string | Array<Record<string, unknown>>;
+    score_categories: string | Array<string>; // Array<"name:value"> or JSON string
     usage_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
     cost_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
   };
@@ -634,32 +634,37 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           return {};
         };
 
-        // Convert Doris string array format to ClickHouse object array format
+        // Convert Doris struct array format to ClickHouse object array format.
+        // Doris SQL now produces Array<Struct(name, avg_value)>. The mysql driver
+        // serializes struct elements as {"col1": name, "col2": avg_value}.
+        // We convert to {name, avg_value} to match CK's Array<Tuple> output shape.
         const parsedScoresAvg: Array<{ name: string; avg_value: number }> = [];
 
-        // Handle scores_avg - could be string or array
-        let scoresAvgArray: string[] = [];
+        let scoresAvgRaw: unknown[] = [];
         if (typeof row.scores_avg === "string") {
           try {
-            scoresAvgArray = JSON.parse(row.scores_avg);
+            scoresAvgRaw = JSON.parse(row.scores_avg);
           } catch {
-            scoresAvgArray = [];
+            scoresAvgRaw = [];
           }
         } else if (Array.isArray(row.scores_avg)) {
-          scoresAvgArray = row.scores_avg;
+          scoresAvgRaw = row.scores_avg;
         }
 
-        scoresAvgArray
-          .filter((s) => s && s.includes(":"))
-          .forEach((scoreStr) => {
-            const [name, value] = scoreStr.split(":");
-            if (name && value) {
+        scoresAvgRaw.forEach((entry) => {
+          if (entry && typeof entry === "object") {
+            const e = entry as Record<string, unknown>;
+            // Doris struct fields: col1=name, col2=avg_value (positional)
+            const name = e.col1 ?? e.name;
+            const avg_value = e.col2 ?? e.avg_value;
+            if (typeof name === "string" && name.length > 0) {
               parsedScoresAvg.push({
-                name: name,
-                avg_value: parseFloat(value) || 0,
+                name,
+                avg_value: Number(avg_value) || 0,
               });
             }
-          });
+          }
+        });
 
         // Handle score_categories - could be string or array
         let scoreCategoriesArray: string[] = [];

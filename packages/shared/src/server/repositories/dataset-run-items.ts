@@ -316,20 +316,26 @@ const getDatasetRunsTableInternal = async <T>(
     datasetRunsTableUiColumnDefinitions,
   );
 
+  // Doris: Array<Struct(name, avg_value)> mirrors CK's Array<Tuple>.
+  // NumberObjectFilter uses array_filter + struct_element to OR-match.
+  // UNIQUE KEY model auto-dedupes; no FINAL needed.
   const scoresCte = `
    WITH scores_aggregated AS (
       SELECT
         dri.dataset_run_id,
         dri.project_id,
-        -- For numeric scores, use tuples of (name, avg_value)
-        groupArrayIf(
-          tuple(s.name, s.avg_value),
-          s.data_type IN ('NUMERIC', 'BOOLEAN')
+        collect_list(
+          CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+            struct(s.name, s.avg_value)
+          END
         ) AS scores_avg,
-        -- For categorical scores, use name:value format for improved query performance
-        groupArrayIf(
-          concat(s.name, ':', s.string_value),
-          s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+        array_except(
+          collect_list(
+            CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+              CONCAT(s.name, ':', s.string_value)
+            ELSE NULL END
+          ),
+          [NULL]
         ) AS score_categories
       FROM dataset_run_items_rmt dri
       LEFT JOIN (
@@ -340,7 +346,7 @@ const getDatasetRunsTableInternal = async <T>(
           data_type,
           string_value,
           avg(value) as avg_value
-        FROM scores s FINAL
+        FROM scores s
         WHERE ${appliedScoresFilter.query}
         GROUP BY
           project_id,
@@ -627,6 +633,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
       : "dataset_item_id";
 
   // Build the intersection query
+  // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = hasScoresFilter
     ? `
   WITH scores_aggregated AS (
@@ -634,15 +641,18 @@ const getQualifyingDatasetItems = async <T>(opts: {
        dri.dataset_run_id,
        dri.project_id,
        dri.trace_id,
-       -- For numeric scores, use tuples of (name, avg_value)
-       groupArrayIf(
-         tuple(s.name, s.avg_value),
-         s.data_type IN ('NUMERIC', 'BOOLEAN')
+       collect_list(
+         CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+           struct(s.name, s.avg_value)
+         END
        ) AS scores_avg,
-       -- For categorical scores, use name:value format for improved query performance
-       groupArrayIf(
-         concat(s.name, ':', s.string_value),
-         s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+       array_except(
+         collect_list(
+           CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+             CONCAT(s.name, ':', s.string_value)
+           ELSE NULL END
+         ),
+         [NULL]
        ) AS score_categories
      FROM dataset_run_items_rmt dri
      LEFT JOIN (
@@ -653,7 +663,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
          data_type,
          string_value,
          avg(value) as avg_value
-       FROM scores s FINAL
+       FROM scores s
        WHERE ${appliedScoresFilter.query}
        GROUP BY
          project_id,
@@ -807,21 +817,25 @@ const getDatasetRunItemsTableInternal = async <
     datasetRunItemsTableUiColumnDefinitions,
   );
 
+  // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = `
   WITH scores_aggregated AS (
      SELECT
        dri.dataset_run_id,
        dri.project_id,
        dri.trace_id,
-       -- For numeric scores, use tuples of (name, avg_value)
-       groupArrayIf(
-         tuple(s.name, s.avg_value),
-         s.data_type IN ('NUMERIC', 'BOOLEAN')
+       collect_list(
+         CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+           struct(s.name, s.avg_value)
+         END
        ) AS scores_avg,
-       -- For categorical scores, use name:value format for improved query performance
-       groupArrayIf(
-         concat(s.name, ':', s.string_value),
-         s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+       array_except(
+         collect_list(
+           CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+             CONCAT(s.name, ':', s.string_value)
+           ELSE NULL END
+         ),
+         [NULL]
        ) AS score_categories
      FROM dataset_run_items_rmt dri
      LEFT JOIN (
@@ -832,7 +846,7 @@ const getDatasetRunItemsTableInternal = async <
          data_type,
          string_value,
          avg(value) as avg_value
-       FROM scores s FINAL
+       FROM scores s
        WHERE ${appliedScoresFilter.query}
        GROUP BY
          project_id,
