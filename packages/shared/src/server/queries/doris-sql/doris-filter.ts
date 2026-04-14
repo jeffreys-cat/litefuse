@@ -469,9 +469,13 @@ export class NumberObjectFilter implements Filter {
     const column = `${this.tablePrefix ? this.tablePrefix + "." : ""}${this.field}`;
     const escapedKey = this.key.replace(/'/g, "''");
 
-    // 使用 Doris 的 MAP 访问语法进行数字比较
+    // Doris version uses struct arrays for scores_avg, matching ClickHouse's
+    // Array<Tuple(name, value)> semantics. array_filter iterates over the
+    // array and OR-matches: row matches if ANY struct satisfies name=key
+    // AND value operator threshold. struct_element(x, N) accesses struct
+    // fields positionally (1=name, 2=value), equivalent to CK's x.1 / x.2.
     return {
-      query: `CAST(${column}['${escapedKey}'] AS DECIMAL(20,6)) ${this.operator} ${this.value}`,
+      query: `size(array_filter(x -> struct_element(x, 1) = '${escapedKey}' AND CAST(struct_element(x, 2) AS DECIMAL(20,6)) ${this.operator} ${this.value}, ${column})) > 0`,
       params: {},
     };
   }

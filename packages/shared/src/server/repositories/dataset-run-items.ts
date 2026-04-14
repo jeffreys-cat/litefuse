@@ -316,20 +316,26 @@ const getDatasetRunsTableInternal = async <T>(
     datasetRunsTableUiColumnDefinitions,
   );
 
+  // Doris: Array<Struct(name, avg_value)> mirrors CK's Array<Tuple>.
+  // NumberObjectFilter uses array_filter + struct_element to OR-match.
+  // UNIQUE KEY model auto-dedupes; no FINAL needed.
   const scoresCte = `
    WITH scores_aggregated AS (
       SELECT
         dri.dataset_run_id,
         dri.project_id,
-        -- For numeric scores, use tuples of (name, avg_value)
-        groupArrayIf(
-          tuple(s.name, s.avg_value),
-          s.data_type IN ('NUMERIC', 'BOOLEAN')
+        collect_list(
+          CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+            struct(s.name, s.avg_value)
+          END
         ) AS scores_avg,
-        -- For categorical scores, use name:value format for improved query performance
-        groupArrayIf(
-          concat(s.name, ':', s.string_value),
-          s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+        array_except(
+          collect_list(
+            CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+              CONCAT(s.name, ':', s.string_value)
+            ELSE NULL END
+          ),
+          [NULL]
         ) AS score_categories
       FROM dataset_run_items_rmt dri
       LEFT JOIN (
@@ -340,7 +346,7 @@ const getDatasetRunsTableInternal = async <T>(
           data_type,
           string_value,
           avg(value) as avg_value
-        FROM scores s FINAL
+        FROM scores s
         WHERE ${appliedScoresFilter.query}
         GROUP BY
           project_id,
@@ -381,8 +387,7 @@ const getDatasetRunsTableInternal = async <T>(
           FROM dataset_run_items_rmt dri 
           WHERE ${baseFilter.query}
         )
-      ORDER BY o.event_ts DESC
-      LIMIT 1 by id, project_id
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY o.event_ts DESC) = 1
     ),
   `;
 
@@ -391,8 +396,7 @@ const getDatasetRunsTableInternal = async <T>(
       SELECT *
       FROM dataset_run_items_rmt dri
       WHERE ${baseFilter.query}
-      ORDER BY dri.created_at DESC
-      LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1
     ),
   `;
 
@@ -404,7 +408,7 @@ const getDatasetRunsTableInternal = async <T>(
         dri.dataset_id,
         dri.dataset_run_id,
         dri.dataset_item_id,
-        dateDiff('millisecond', min(of.start_time), max(of.end_time)) as latency_ms,
+        milliseconds_diff(max(of.end_time), min(of.start_time)) as latency_ms,
         sum(of.total_cost) as total_cost
       FROM dataset_run_items_deduped dri
       JOIN observations_filtered of ON dri.trace_id = of.trace_id
@@ -432,7 +436,7 @@ const getDatasetRunsTableInternal = async <T>(
 
         -- Observation-level metrics
         AVG(CASE WHEN dri.observation_id IS NOT NULL THEN
-          dateDiff('millisecond', of.start_time, of.end_time) / 1000.0
+          milliseconds_diff(of.end_time, of.start_time) / 1000.0
         ELSE NULL END) as obs_avg_latency,
         AVG(CASE WHEN dri.observation_id IS NOT NULL THEN tm.total_cost ELSE NULL END) as obs_avg_cost,
         SUM(CASE WHEN dri.observation_id IS NOT NULL THEN tm.total_cost ELSE NULL END) as obs_total_cost
@@ -627,6 +631,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
       : "dataset_item_id";
 
   // Build the intersection query
+  // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = hasScoresFilter
     ? `
   WITH scores_aggregated AS (
@@ -634,15 +639,18 @@ const getQualifyingDatasetItems = async <T>(opts: {
        dri.dataset_run_id,
        dri.project_id,
        dri.trace_id,
-       -- For numeric scores, use tuples of (name, avg_value)
-       groupArrayIf(
-         tuple(s.name, s.avg_value),
-         s.data_type IN ('NUMERIC', 'BOOLEAN')
+       collect_list(
+         CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+           struct(s.name, s.avg_value)
+         END
        ) AS scores_avg,
-       -- For categorical scores, use name:value format for improved query performance
-       groupArrayIf(
-         concat(s.name, ':', s.string_value),
-         s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+       array_except(
+         collect_list(
+           CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+             CONCAT(s.name, ':', s.string_value)
+           ELSE NULL END
+         ),
+         [NULL]
        ) AS score_categories
      FROM dataset_run_items_rmt dri
      LEFT JOIN (
@@ -653,7 +661,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
          data_type,
          string_value,
          avg(value) as avg_value
-       FROM scores s FINAL
+       FROM scores s
        WHERE ${appliedScoresFilter.query}
        GROUP BY
          project_id,
@@ -806,22 +814,29 @@ const getDatasetRunItemsTableInternal = async <
     orderByArray,
     datasetRunItemsTableUiColumnDefinitions,
   );
+  // Inner ORDER BY expressions for use inside QUALIFY window function
+  // (strip leading "ORDER BY "). QUALIFY replaces CK's `LIMIT 1 BY` dedup.
+  const orderByExprs = orderByClause.replace(/^\s*ORDER BY\s+/i, "").trim();
 
+  // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = `
   WITH scores_aggregated AS (
      SELECT
        dri.dataset_run_id,
        dri.project_id,
        dri.trace_id,
-       -- For numeric scores, use tuples of (name, avg_value)
-       groupArrayIf(
-         tuple(s.name, s.avg_value),
-         s.data_type IN ('NUMERIC', 'BOOLEAN')
+       collect_list(
+         CASE WHEN s.data_type IN ('NUMERIC', 'BOOLEAN') THEN
+           struct(s.name, s.avg_value)
+         END
        ) AS scores_avg,
-       -- For categorical scores, use name:value format for improved query performance
-       groupArrayIf(
-         concat(s.name, ':', s.string_value),
-         s.data_type = 'CATEGORICAL' AND notEmpty(s.string_value)
+       array_except(
+         collect_list(
+           CASE WHEN s.data_type = 'CATEGORICAL' AND s.string_value IS NOT NULL AND s.string_value != '' THEN
+             CONCAT(s.name, ':', s.string_value)
+           ELSE NULL END
+         ),
+         [NULL]
        ) AS score_categories
      FROM dataset_run_items_rmt dri
      LEFT JOIN (
@@ -832,7 +847,7 @@ const getDatasetRunItemsTableInternal = async <
          data_type,
          string_value,
          avg(value) as avg_value
-       FROM scores s FINAL
+       FROM scores s
        WHERE ${appliedScoresFilter.query}
        GROUP BY
          project_id,
@@ -851,16 +866,13 @@ const getDatasetRunItemsTableInternal = async <
     opts.select === "rows"
       ? `
     ${scoresCte}
-    SELECT *
-    FROM (
-      SELECT
-        ${selectString}
-      FROM dataset_run_items_rmt dri 
-      ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
-      WHERE ${appliedFilter.query}
-      ${orderByClause}
-      LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id
-    ) AS deduplicated
+    SELECT
+      ${selectString}
+    FROM dataset_run_items_rmt dri
+    ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
+    WHERE ${appliedFilter.query}
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) = 1
+    ${orderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`
       : `
     ${scoresCte}
@@ -1012,9 +1024,9 @@ export const getDatasetItemIdsByTraceIdCh = async (
     dri.dataset_item_id as dataset_item_id,
     dri.observation_id as observation_id,
     dri.dataset_id as dataset_id
-  FROM dataset_run_items_rmt dri 
+  FROM dataset_run_items_rmt dri
   WHERE ${appliedFilter.query}
-  LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id;`;
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1;`;
 
   const res = await queryDoris<{
     dataset_item_id: string;

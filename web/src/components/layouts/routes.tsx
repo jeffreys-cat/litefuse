@@ -179,7 +179,6 @@ export const ROUTES: Route[] = [
     productModule: "datasets",
     group: RouteGroup.Evaluation,
     section: RouteSection.Main,
-    hidden: true,
   },
   {
     title: "Experiments",

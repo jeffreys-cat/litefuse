@@ -450,18 +450,39 @@ async function getObservationsFromEventsTableInternal<T>(
     `
     : dorisSelect;
 
-  // Build scores CTE for Doris
+  // Build scores CTE for Doris. See comment in observations.ts for format details.
+  // scores_avg: Array<Struct(name, avg_value)> for NumberObjectFilter.
+  // score_categories: Array<"name:value"> for CategoryOptionsFilter.
+  // Inner subquery averages duplicate score values per (trace, obs, name, ...)
+  // before aggregating into the final array.
   const scoresCte = hasScoresFilter
     ? `WITH scores_agg AS (
       SELECT
         trace_id,
         observation_id,
         collect_list(CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN
-          CONCAT(name, ':', CAST(avg_value AS STRING)) ELSE NULL END) AS scores_avg,
+          struct(name, avg_value) END) AS scores_avg,
         collect_list(CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN
           CONCAT(name, ':', string_value) ELSE NULL END) AS score_categories
-      FROM scores
-      WHERE project_id = {projectId: String}
+      FROM (
+        SELECT
+          trace_id,
+          observation_id,
+          name,
+          avg(value) as avg_value,
+          string_value,
+          data_type,
+          comment
+        FROM scores
+        WHERE project_id = {projectId: String}
+        GROUP BY
+          trace_id,
+          observation_id,
+          name,
+          string_value,
+          data_type,
+          comment
+      ) tmp
       GROUP BY
         trace_id,
         observation_id
