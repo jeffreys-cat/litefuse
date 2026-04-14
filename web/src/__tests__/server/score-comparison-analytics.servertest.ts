@@ -436,7 +436,6 @@ describe("Score Comparison Analytics tRPC", () => {
       expect(
         result.samplingMetadata.preflightEstimates?.estimatedMatchedCount,
       ).toBeGreaterThan(90_000);
-
     }, 120000); // 2 minute timeout for large data insertion
 
     // Test 6: Large dataset - Doris UNIQUE KEY auto-merges, no FINAL needed

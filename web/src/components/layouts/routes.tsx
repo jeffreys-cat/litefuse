@@ -135,7 +135,7 @@ export const ROUTES: Route[] = [
     productModule: "prompt-management",
     group: RouteGroup.PromptManagement,
     section: RouteSection.Main,
-    hidden: true,
+    hidden: false,
   },
   {
     title: "Playground",
@@ -144,7 +144,7 @@ export const ROUTES: Route[] = [
     productModule: "playground",
     group: RouteGroup.PromptManagement,
     section: RouteSection.Main,
-    hidden: true,
+    hidden: false,
   },
   {
     title: "Scores",
