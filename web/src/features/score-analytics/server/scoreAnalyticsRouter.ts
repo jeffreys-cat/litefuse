@@ -248,11 +248,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
           objectType,
         }));
 
-      // Doris UNIQUE KEY (merge-on-write) always returns deduplicated data,
-      // so FINAL is never needed. Kept as a named constant for signature
-      // parity with CK and potential future engines.
-      const shouldUseFinal = false;
-
       // Hash-based sampling decision: Sample when either score table exceeds threshold
       const shouldSample =
         estimates.score1Count > SAMPLING_THRESHOLD ||
@@ -298,7 +293,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         interval,
         nBins,
         objectType,
-        shouldUseFinal,
         shouldSample,
         samplingPercent,
         isIdenticalScores,

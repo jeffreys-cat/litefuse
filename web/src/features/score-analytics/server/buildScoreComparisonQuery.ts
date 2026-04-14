@@ -56,7 +56,6 @@ export function buildScoreComparisonQuery(params: {
   interval: IntervalConfig;
   nBins: number;
   objectType: string;
-  shouldUseFinal: boolean;
   shouldSample: boolean;
   samplingPercent: number;
   isIdenticalScores: boolean;
@@ -66,7 +65,6 @@ export function buildScoreComparisonQuery(params: {
 }): string {
   const {
     objectType,
-    shouldUseFinal,
     shouldSample,
     samplingPercent,
     isIdenticalScores,
@@ -392,16 +390,14 @@ export function buildScoreComparisonQuery(params: {
 
       -- CTE 1: Filter score 1
       -- Doris: PREWHERE not supported, merged into WHERE clause
-      -- Doris UNIQUE KEY (merge-on-write) always returns deduplicated data,
-      -- so shouldUseFinal is always false on Doris (retained for signature
-      -- parity / future engines; FINAL is never emitted below).
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       score1_filtered AS (
         SELECT
           id, value, string_value,
           trace_id, observation_id, session_id, dataset_run_id as run_id,
           timestamp
-        FROM scores ${shouldUseFinal ? "FINAL" : ""}
+        FROM scores
         WHERE project_id = {projectId: String}
           AND name = {score1Name: String}
           AND source = {score1Source: String}
@@ -415,7 +411,7 @@ export function buildScoreComparisonQuery(params: {
 
       -- CTE 2: Filter score 2
       -- Doris: PREWHERE not supported, merged into WHERE clause
-      -- See CTE 1 note on shouldUseFinal (always false on Doris).
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       -- Special case: When comparing identical scores, reuse score1_filtered to ensure perfect correlation
       score2_filtered AS (
@@ -426,7 +422,7 @@ export function buildScoreComparisonQuery(params: {
                  id, value, string_value,
                  trace_id, observation_id, session_id, dataset_run_id as run_id,
                  timestamp
-               FROM scores ${shouldUseFinal ? "FINAL" : ""}
+               FROM scores
                WHERE project_id = {projectId: String}
                  AND name = {score2Name: String}
                  AND source = {score2Source: String}
