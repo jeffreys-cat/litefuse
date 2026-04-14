@@ -387,8 +387,7 @@ const getDatasetRunsTableInternal = async <T>(
           FROM dataset_run_items_rmt dri 
           WHERE ${baseFilter.query}
         )
-      ORDER BY o.event_ts DESC
-      LIMIT 1 by id, project_id
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY o.event_ts DESC) = 1
     ),
   `;
 
@@ -397,8 +396,7 @@ const getDatasetRunsTableInternal = async <T>(
       SELECT *
       FROM dataset_run_items_rmt dri
       WHERE ${baseFilter.query}
-      ORDER BY dri.created_at DESC
-      LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1
     ),
   `;
 
@@ -410,7 +408,7 @@ const getDatasetRunsTableInternal = async <T>(
         dri.dataset_id,
         dri.dataset_run_id,
         dri.dataset_item_id,
-        dateDiff('millisecond', min(of.start_time), max(of.end_time)) as latency_ms,
+        milliseconds_diff(max(of.end_time), min(of.start_time)) as latency_ms,
         sum(of.total_cost) as total_cost
       FROM dataset_run_items_deduped dri
       JOIN observations_filtered of ON dri.trace_id = of.trace_id
@@ -438,7 +436,7 @@ const getDatasetRunsTableInternal = async <T>(
 
         -- Observation-level metrics
         AVG(CASE WHEN dri.observation_id IS NOT NULL THEN
-          dateDiff('millisecond', of.start_time, of.end_time) / 1000.0
+          milliseconds_diff(of.end_time, of.start_time) / 1000.0
         ELSE NULL END) as obs_avg_latency,
         AVG(CASE WHEN dri.observation_id IS NOT NULL THEN tm.total_cost ELSE NULL END) as obs_avg_cost,
         SUM(CASE WHEN dri.observation_id IS NOT NULL THEN tm.total_cost ELSE NULL END) as obs_total_cost
@@ -816,6 +814,9 @@ const getDatasetRunItemsTableInternal = async <
     orderByArray,
     datasetRunItemsTableUiColumnDefinitions,
   );
+  // Inner ORDER BY expressions for use inside QUALIFY window function
+  // (strip leading "ORDER BY "). QUALIFY replaces CK's `LIMIT 1 BY` dedup.
+  const orderByExprs = orderByClause.replace(/^\s*ORDER BY\s+/i, "").trim();
 
   // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = `
@@ -865,16 +866,13 @@ const getDatasetRunItemsTableInternal = async <
     opts.select === "rows"
       ? `
     ${scoresCte}
-    SELECT *
-    FROM (
-      SELECT
-        ${selectString}
-      FROM dataset_run_items_rmt dri 
-      ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
-      WHERE ${appliedFilter.query}
-      ${orderByClause}
-      LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id
-    ) AS deduplicated
+    SELECT
+      ${selectString}
+    FROM dataset_run_items_rmt dri
+    ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
+    WHERE ${appliedFilter.query}
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) = 1
+    ${orderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`
       : `
     ${scoresCte}
@@ -1026,9 +1024,9 @@ export const getDatasetItemIdsByTraceIdCh = async (
     dri.dataset_item_id as dataset_item_id,
     dri.observation_id as observation_id,
     dri.dataset_id as dataset_id
-  FROM dataset_run_items_rmt dri 
+  FROM dataset_run_items_rmt dri
   WHERE ${appliedFilter.query}
-  LIMIT 1 BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id;`;
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1;`;
 
   const res = await queryDoris<{
     dataset_item_id: string;
