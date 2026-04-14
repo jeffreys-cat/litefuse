@@ -26,9 +26,17 @@ if [ -z "${DORIS_USER}" ]; then
     export DORIS_USER="root"
 fi
 
-# Parse DORIS_FE_HTTP_URL to extract host using POSIX-compatible method
-# Remove protocol (http:// or https://)
-url_without_protocol=$(echo "${DORIS_FE_HTTP_URL}" | sed 's|^http://||' | sed 's|^https://||')
+# Parse DORIS_FE_HTTP_URL to extract protocol and host using POSIX-compatible methods.
+case "${DORIS_FE_HTTP_URL}" in
+    *://*)
+        DORIS_HTTP_PROTOCOL=$(echo "${DORIS_FE_HTTP_URL}" | sed 's|^\([a-zA-Z][a-zA-Z0-9+.-]*\)://.*|\1|')
+        url_without_protocol=$(echo "${DORIS_FE_HTTP_URL}" | sed 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||')
+        ;;
+    *)
+        DORIS_HTTP_PROTOCOL="http"
+        url_without_protocol="${DORIS_FE_HTTP_URL}"
+        ;;
+esac
 
 # Extract host (everything before the first colon or slash)
 DORIS_HOST=$(echo "${url_without_protocol}" | sed 's|[:/].*||')
@@ -36,11 +44,11 @@ DORIS_HOST=$(echo "${url_without_protocol}" | sed 's|[:/].*||')
 # Use DORIS_FE_QUERY_PORT for MySQL protocol connections
 DORIS_PORT="${DORIS_FE_QUERY_PORT}"
 
-echo "Connecting to Doris at ${DORIS_HOST}:${DORIS_PORT} with database ${DORIS_DB}"
+echo "Connecting to Doris at ${DORIS_HTTP_PROTOCOL}://${DORIS_HOST}:${DORIS_PORT} with database ${DORIS_DB}"
 echo "Debug: DORIS_USER=${DORIS_USER}, DORIS_PASSWORD=${DORIS_PASSWORD}"
 
 # Build MySQL connection arguments
-MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP"
+MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP --ssl=0"
 if [ -n "${DORIS_PASSWORD}" ]; then
     MYSQL_ARGS="${MYSQL_ARGS} -p${DORIS_PASSWORD}"
 fi
