@@ -56,7 +56,6 @@ export function buildScoreComparisonQuery(params: {
   interval: IntervalConfig;
   nBins: number;
   objectType: string;
-  shouldUseFinal: boolean;
   shouldSample: boolean;
   samplingPercent: number;
   isIdenticalScores: boolean;
@@ -66,7 +65,6 @@ export function buildScoreComparisonQuery(params: {
 }): string {
   const {
     objectType,
-    shouldUseFinal,
     shouldSample,
     samplingPercent,
     isIdenticalScores,
@@ -392,14 +390,14 @@ export function buildScoreComparisonQuery(params: {
 
       -- CTE 1: Filter score 1
       -- Doris: PREWHERE not supported, merged into WHERE clause
-      -- Adaptive FINAL: Only use FINAL for small datasets (<100k) to balance accuracy vs performance
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       score1_filtered AS (
         SELECT
           id, value, string_value,
           trace_id, observation_id, session_id, dataset_run_id as run_id,
           timestamp
-        FROM scores ${shouldUseFinal ? "FINAL" : ""}
+        FROM scores
         WHERE project_id = {projectId: String}
           AND name = {score1Name: String}
           AND source = {score1Source: String}
@@ -413,7 +411,7 @@ export function buildScoreComparisonQuery(params: {
 
       -- CTE 2: Filter score 2
       -- Doris: PREWHERE not supported, merged into WHERE clause
-      -- Adaptive FINAL: Only use FINAL for small datasets (<100k)
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       -- Special case: When comparing identical scores, reuse score1_filtered to ensure perfect correlation
       score2_filtered AS (
@@ -424,7 +422,7 @@ export function buildScoreComparisonQuery(params: {
                  id, value, string_value,
                  trace_id, observation_id, session_id, dataset_run_id as run_id,
                  timestamp
-               FROM scores ${shouldUseFinal ? "FINAL" : ""}
+               FROM scores
                WHERE project_id = {projectId: String}
                  AND name = {score2Name: String}
                  AND source = {score2Source: String}
@@ -621,11 +619,9 @@ export function buildScoreComparisonQuery(params: {
           ${
             isIdenticalScores
               ? "NULL"
-              : `if(
-            (SELECT is_safe FROM correlation_check),
-            CAST(NULL AS DOUBLE),
-            NULL
-          )`
+              : `-- Spearman correlation: Doris has no rankCorr function.
+          -- TODO: implement with RANK() window functions if Spearman is required.
+          CAST(NULL AS DOUBLE)`
           } as spearman_correlation`
               : `-- Categorical/boolean scores: statistical metrics are not meaningful
           NULL as mean1,

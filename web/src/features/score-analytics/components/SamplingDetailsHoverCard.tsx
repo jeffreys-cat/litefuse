@@ -12,10 +12,6 @@ interface SamplingMetadata {
     score2Count: number;
     estimatedMatchedCount: number;
   };
-  adaptiveFinal?: {
-    usedFinal: boolean;
-    reason: string;
-  };
 }
 
 interface SamplingDetailsHoverCardProps {
@@ -101,16 +97,6 @@ export function SamplingDetailsHoverCard({
                   (hash-based)
                 </dd>
               </div>
-              {samplingMetadata.adaptiveFinal && (
-                <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Deduplication:</dt>
-                  <dd className="font-medium">
-                    {samplingMetadata.adaptiveFinal.usedFinal
-                      ? "Enabled"
-                      : "Skipped for performance"}
-                  </dd>
-                </div>
-              )}
             </dl>
           </div>
 

@@ -61,7 +61,6 @@ export interface EstimateData {
   score2Count: number;
   estimatedMatchedCount: number;
   willSample: boolean;
-  willSkipFinal: boolean;
   estimatedQueryTime: string;
   mode: "single" | "two";
 }
