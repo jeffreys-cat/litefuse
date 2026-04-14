@@ -152,6 +152,29 @@ export class DorisClient {
 
       this.connectionPool = mysql.createPool(poolConfig);
 
+      // Attach a pool-level 'error' listener. mysql2 emits this for
+      // connection-level failures that happen OUTSIDE of a query promise —
+      // e.g. handshake rejection ("Reach limit of connections"), background
+      // keep-alive probe failures, server-initiated FIN on idle connections.
+      // Without a listener, Node's EventEmitter treats 'error' as an
+      // uncaught exception and crashes the worker process (Docker then
+      // restarts the container). Logging + swallowing is safe because every
+      // call path (query / commandWithParams / queryWithParams / streamLoad)
+      // has its own try/catch that surfaces the failure through the Promise.
+      // mysql2's public Pool.on() type only exposes 'enqueue'. The
+      // underlying EventEmitter still emits 'error' for
+      // connection-acquire/keep-alive failures, so we cast to attach a
+      // listener. Without this, Doris rejecting a new connection
+      // ("Reach limit of connections") crashes the worker process.
+      (
+        this.connectionPool as unknown as import("events").EventEmitter
+      ).on("error", (err: unknown) => {
+        logger.error("Doris MySQL pool emitted error event (swallowed)", {
+          error: err instanceof Error ? err.message : String(err),
+          code: (err as { code?: string } | undefined)?.code,
+        });
+      });
+
       logger.debug("Doris MySQL connection pool initialized", {
         host,
         port: this.config.feQueryPort,
