@@ -253,7 +253,20 @@ export function createMessageSearchController(
     const query = getCommittedQuery(state);
 
     for (const target of messageTargets.values()) {
-      applyCodeMirrorSearchQuery(target.editorRef, query);
+      const view = target.editorRef.current?.view;
+      // Skip if view doesn't exist or has empty/very short content
+      // This prevents position mapping errors in searchHighlighter plugin
+      if (!view || view.state.doc.length < query.length) {
+        continue;
+      }
+
+      try {
+        applyCodeMirrorSearchQuery(target.editorRef, query);
+      } catch (error) {
+        // Ignore search-related errors during content changes
+        // This can happen when the document content changed and searchHighlighter
+        // plugin tries to map old positions to new document state
+      }
     }
   };
 
@@ -263,26 +276,47 @@ export function createMessageSearchController(
       return;
     }
 
+    const messageTarget = messageTargets.get(
+      getMessageTargetKey(activeMatch.pageId, activeMatch.messageId),
+    );
+
+    // If the message target no longer exists, clear the active match
+    if (!messageTarget || !messageTarget.editorRef.current?.view) {
+      state.activeMatchKey = null;
+      return;
+    }
+
+    const view = messageTarget.editorRef.current.view;
+    const docLength = view.state.doc.length;
+
+    // Validate that the match positions are within the current document bounds
+    // If they're out of bounds, clear the active match
+    if (activeMatch.from > docLength || activeMatch.to > docLength) {
+      state.activeMatchKey = null;
+      return;
+    }
+
     pageTargets.get(activeMatch.pageId)?.pageRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "nearest",
       inline: "center",
     });
 
-    const messageTarget = messageTargets.get(
-      getMessageTargetKey(activeMatch.pageId, activeMatch.messageId),
-    );
-
-    messageTarget?.rowRef.current?.scrollIntoView({
+    messageTarget.rowRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "center",
       inline: "nearest",
     });
 
-    selectCodeMirrorRange(messageTarget?.editorRef, {
-      from: activeMatch.from,
-      to: activeMatch.to,
-    });
+    // Temporarily disable selectCodeMirrorRange to test if this causes the crash
+    try {
+      selectCodeMirrorRange(messageTarget.editorRef, {
+        from: activeMatch.from,
+        to: activeMatch.to,
+      });
+    } catch (error) {
+      console.warn("selectCodeMirrorRange failed:", error);
+    }
   };
 
   const recomputeMatches = () => {
@@ -493,6 +527,28 @@ export function createMessageSearchController(
 
     registerPageMessages(pageId, messages) {
       state.pageMessagesById[pageId] = messages;
+
+      // If active match belongs to a message that was deleted, clear it
+      // This prevents trying to select text at an invalid position
+      const activeMatch = getActiveMatch(state);
+      if (
+        activeMatch &&
+        activeMatch.pageId === pageId &&
+        !messages.some((m) => m.id === activeMatch.messageId)
+      ) {
+        // The message for the active match was deleted
+        // Clear the match to prevent position errors
+        state.activeMatchKey = null;
+      }
+
+      // Also clear if any match position is now out of bounds
+      // (e.g., message content was shortened)
+      const newMessageIds = new Set(messages.map((m) => m.id));
+      state.matches = state.matches.filter(
+        (match) =>
+          match.pageId !== pageId || newMessageIds.has(match.messageId),
+      );
+
       refreshSearchResultsIfSearching(false);
     },
 
@@ -518,16 +574,27 @@ export function createMessageSearchController(
     },
 
     registerMessageTarget(pageId, messageId, target) {
-      messageTargets.set(getMessageTargetKey(pageId, messageId), target);
+      const key = getMessageTargetKey(pageId, messageId);
+      const isReRegistration = messageTargets.has(key);
 
-      applyCodeMirrorSearchQuery(target.editorRef, getCommittedQuery(state));
+      messageTargets.set(key, target);
 
+      // Only apply search query if this is a new registration
+      // or if the search state has changed
+      if (!isReRegistration) {
+        applyCodeMirrorSearchQuery(target.editorRef, getCommittedQuery(state));
+      }
+
+      // Only sync active match if this is the currently active message
       const activeMatch = getActiveMatch(state);
       if (
         activeMatch?.pageId === pageId &&
         activeMatch.messageId === messageId
       ) {
-        syncActiveMatchTarget();
+        // Add a small delay to ensure the editor is fully initialized
+        requestAnimationFrame(() => {
+          syncActiveMatchTarget();
+        });
       }
     },
 

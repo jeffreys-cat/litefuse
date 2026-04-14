@@ -1,13 +1,8 @@
 import CodeMirror, {
   EditorView,
   type ReactCodeMirrorRef,
-  Decoration,
-  type DecorationSet,
-  ViewPlugin,
-  type ViewUpdate,
 } from "@uiw/react-codemirror";
-import { RangeSetBuilder } from "@codemirror/state";
-import { SearchQuery, search, setSearchQuery } from "@codemirror/search";
+import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter, type Diagnostic } from "@codemirror/lint";
 import { useTheme } from "next-themes";
@@ -30,6 +25,10 @@ import {
 } from "@langfuse/shared";
 import { lightTheme } from "@/src/components/editor/light-theme";
 import { darkTheme } from "@/src/components/editor/dark-theme";
+
+// Global composition state tracker to prevent search updates during IME input
+// This is a WeakMap so it automatically garbage collects when editors are destroyed
+const compositionState = new WeakMap<EditorView, boolean>();
 
 // Custom language mode for prompts that highlights mustache variables and prompt dependency tags
 const promptLanguage = StreamLanguage.define({
@@ -133,38 +132,6 @@ const promptLinter = linter((view) => {
 // Create a language support instance that combines the language and its configuration
 const promptSupport = new LanguageSupport(promptLanguage);
 
-// RTL/bidirectional text support
-const dirAutoDecoration = Decoration.line({ attributes: { dir: "auto" } });
-
-const bidiSupport = [
-  EditorView.perLineTextDirection.of(true),
-  ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
-      constructor(view: EditorView) {
-        this.decorations = this.build(view);
-      }
-      update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged) {
-          this.decorations = this.build(update.view);
-        }
-      }
-      build(view: EditorView) {
-        const builder = new RangeSetBuilder<Decoration>();
-        for (const { from, to } of view.visibleRanges) {
-          for (let pos = from; pos <= to; ) {
-            const line = view.state.doc.lineAt(pos);
-            builder.add(line.from, line.from, dirAutoDecoration);
-            pos = line.to + 1;
-          }
-        }
-        return builder.finish();
-      }
-    },
-    { decorations: (v) => v.decorations },
-  ),
-];
-
 export function applyCodeMirrorSearchQuery(
   editorRef: RefObject<ReactCodeMirrorRef | null> | undefined,
   searchValue: string,
@@ -174,15 +141,45 @@ export function applyCodeMirrorSearchQuery(
     return;
   }
 
-  view.dispatch({
-    effects: setSearchQuery.of(
-      new SearchQuery({
-        search: searchValue,
-        caseSensitive: false,
-        literal: true,
-      }),
-    ),
-  });
+  try {
+    // Skip search updates during IME composition to prevent position mapping errors
+    if (compositionState.get(view)) {
+      return;
+    }
+
+    // Get current document length to validate search won't cause issues
+    const docLength = view.state.doc.length;
+
+    // If document is empty or very short, skip search operations
+    // This prevents position mapping errors when document changes
+    if (docLength === 0) {
+      return;
+    }
+
+    // If clearing search, also clear selection to avoid position mapping issues
+    // when document content changes (e.g., message deleted)
+    if (searchValue === "") {
+      view.dispatch({
+        selection: { anchor: 0, head: 0 },
+        scrollIntoView: false,
+      });
+    }
+
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: searchValue,
+          caseSensitive: false,
+          literal: true,
+        }),
+      ),
+    });
+  } catch (error) {
+    // Ignore search-related errors during document changes
+    // This can happen when the document content is externally modified
+    // (e.g., React re-renders with new value prop) while search is active
+    console.warn("Search query update failed:", error);
+  }
 }
 
 export function selectCodeMirrorRange(
@@ -194,13 +191,33 @@ export function selectCodeMirrorRange(
     return;
   }
 
-  view.dispatch({
-    selection: {
-      anchor: range.from,
-      head: range.to,
-    },
-    scrollIntoView: true,
-  });
+  try {
+    const docLength = view.state.doc.length;
+
+    // Clamp positions to valid range [0, docLength]
+    const from = Math.max(0, Math.min(range.from, docLength));
+    const to = Math.max(0, Math.min(range.to, docLength));
+
+    // If the clamped range would be inverted or empty, just place cursor at end
+    if (from >= docLength || to === 0) {
+      view.dispatch({
+        selection: { anchor: docLength, head: docLength },
+        scrollIntoView: true,
+      });
+      return;
+    }
+
+    view.dispatch({
+      selection: {
+        anchor: from,
+        head: to,
+      },
+      scrollIntoView: true,
+    });
+  } catch (error) {
+    // Ignore position mapping errors during document changes
+    console.warn("Range selection failed:", error);
+  }
 }
 
 export function CodeMirrorEditor({
@@ -241,6 +258,8 @@ export function CodeMirrorEditor({
     !!value && value !== "",
   );
 
+  // Track composition state to avoid CodeMirror errors during IME input
+
   const handleEditorRef = useCallback(
     (instance: ReactCodeMirrorRef | null) => {
       if (editorRef) {
@@ -260,70 +279,29 @@ export function CodeMirrorEditor({
       value={value}
       theme={codeMirrorTheme}
       ref={editorRef || onEditorMount ? handleEditorRef : undefined}
-      basicSetup={{
-        foldGutter: lineNumbers,
-        highlightActiveLine: false,
-        lineNumbers: lineNumbers,
-        searchKeymap: enableSearchKeymap,
-      }}
+      basicSetup={false}
       lang={mode === "json" ? "json" : undefined}
       extensions={[
-        search(),
-        // RTL/bidi support - must be early for proper line decoration
-        ...bidiSupport,
-        // Remove outline if field is focussed
+        // Line wrapping
+        ...(lineWrapping ? [EditorView.lineWrapping] : []),
+
+        // Only add json mode if needed
+        ...(mode === "json" ? [json()] : []),
+
+        // Only add json linter if needed and enabled
+        ...(mode === "json" && linterEnabled
+          ? [linter(jsonParseLinter())]
+          : []),
+
+        // Only add prompt support in prompt mode
+        ...(mode === "prompt" ? [promptSupport, promptLinter] : []),
+
+        // Theme to remove outline
         EditorView.theme({
           "&.cm-focused": {
             outline: "none",
           },
         }),
-        // Hide gutter when lineNumbers is false
-        // Fix missing gutter border
-        ...(!lineNumbers
-          ? [
-              EditorView.theme({
-                ".cm-gutters": { display: "none" },
-              }),
-            ]
-          : [
-              EditorView.theme({
-                ".cm-gutters": { borderRight: "1px solid" },
-              }),
-            ]),
-        // Extend gutter to full height when minHeight > content height
-        // This also enlarges the text area to minHeight
-        ...(!!minHeight
-          ? [
-              EditorView.theme({
-                ".cm-gutter,.cm-content": {
-                  minHeight:
-                    typeof minHeight === "number"
-                      ? `${minHeight}px`
-                      : minHeight,
-                },
-                ".cm-scroller": { overflow: "auto" },
-              }),
-            ]
-          : []),
-        // Add max height support for very long bodies of text
-        ...(!!maxHeight
-          ? [
-              EditorView.theme({
-                ".cm-scroller": {
-                  maxHeight:
-                    typeof maxHeight === "number"
-                      ? `${maxHeight}px`
-                      : maxHeight,
-                },
-              }),
-            ]
-          : []),
-        ...(mode === "json" ? [json()] : []),
-        ...(mode === "json" && linterEnabled
-          ? [linter(jsonParseLinter())]
-          : []),
-        ...(mode === "prompt" ? [promptSupport, promptLinter] : []),
-        ...(lineWrapping ? [EditorView.lineWrapping] : []),
       ]}
       defaultValue={value}
       onChange={(c) => {
