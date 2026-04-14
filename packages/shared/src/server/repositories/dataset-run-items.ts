@@ -186,10 +186,17 @@ const getProjectDatasetIdDefaultFilter = (
   datasetId?: string,
   runIds?: string[],
 ) => {
+  // IMPORTANT: every caller applies this filter inside a multi-table-join
+  // context where `dataset_run_items_rmt` is aliased as `dri` (or a CTE
+  // derived from it, also aliased as `dri`). Other joined tables
+  // (observations `of`, scores `s`, trace_metrics `tm`) also have
+  // `project_id`, so we must qualify the column with `dri.` to avoid
+  // "project_id is ambiguous" from the Nereids optimizer.
   return {
     datasetRunItemsFilter: new FilterList([
       new DorisStringFilter({
         table: "dataset_run_items",
+        tablePrefix: "dri",
         field: "project_id",
         operator: "=",
         value: projectId,
@@ -198,6 +205,7 @@ const getProjectDatasetIdDefaultFilter = (
         ? [
             new DorisStringFilter({
               table: "dataset_run_items",
+              tablePrefix: "dri",
               field: "dataset_id",
               operator: "=",
               value: datasetId,
@@ -208,6 +216,7 @@ const getProjectDatasetIdDefaultFilter = (
         ? [
             new DorisStringOptionsFilter({
               table: "dataset_run_items",
+              tablePrefix: "dri",
               field: "dataset_run_id",
               operator: "any of",
               values: runIds,
@@ -239,20 +248,30 @@ const getDatasetRunsTableInternal = async <T>(
       `;
       break;
     case "metrics":
+      // NOTE: `dataset_run_created_at` is intentionally projected here even
+      // though it is not consumed by `convertDatasetRunsMetricsRecord`. The
+      // outer query is `SELECT DISTINCT ... ORDER BY drm.dataset_run_created_at`
+      // (default order added below for metrics). ClickHouse allows ORDER BY
+      // columns outside the DISTINCT projection, but Doris Nereids enforces
+      // standard SQL — the ORDER BY column must appear in SELECT DISTINCT,
+      // otherwise it raises "dataset_run_created_at should be grouped by".
+      // Adding the column is a no-op for row uniqueness because `drm` already
+      // groups by `dataset_run_created_at` upstream (one created_at per run).
       select = `
         drm.project_id as project_id,
         drm.dataset_id as dataset_id,
         drm.dataset_run_id as dataset_run_id,
         drm.dataset_run_name as dataset_run_name,
+        drm.dataset_run_created_at as dataset_run_created_at,
         drm.count_run_items as count_run_items,
-        
+
         -- Latency metrics (priority: trace > observation - matching old PostgreSQL behavior)
         CASE
           WHEN drm.trace_avg_latency IS NOT NULL THEN drm.trace_avg_latency
           ELSE drm.obs_avg_latency
         END as avg_latency_seconds,
-        
-        -- Cost metrics (priority: trace > observation - matching old PostgreSQL behavior)  
+
+        -- Cost metrics (priority: trace > observation - matching old PostgreSQL behavior)
         CASE
           WHEN drm.trace_avg_cost IS NOT NULL THEN drm.trace_avg_cost
           ELSE COALESCE(drm.obs_avg_cost, 0)
@@ -294,9 +313,20 @@ const getDatasetRunsTableInternal = async <T>(
     filter,
     datasetRunsTableUiColumnDefinitions,
   );
-  datasetRunItemsFilter.push(...userFilters);
 
-  const appliedFilter = datasetRunItemsFilter.apply();
+  // NOTE: user filters are applied at the OUTER SELECT only. We must not
+  // push them into datasetRunItemsFilter because baseFilter is reused inside
+  // several CTEs (observations_filtered, dataset_run_items_deduped,
+  // dataset_run_metrics) where user-filter columns (agg_scores_avg /
+  // agg_score_categories) do not exist.
+  //
+  // Also: we don't re-apply baseFilter (project_id/dataset_id) at the outer
+  // WHERE — project_id/dataset_id are already constrained via hardcoded
+  // `drm.project_id = {projectId}` / `drm.dataset_id = {datasetId}` below.
+  // Re-applying the unprefixed baseFilter would alias-conflict with
+  // `sa.project_id` from the scores_aggregated join and raise
+  // "project_id is ambiguous".
+  const appliedUserFilter = new FilterList(userFilters).apply();
 
   const orderByArray: OrderByState[] = [];
   // Build ORDER BY array - conditionally add dataset_run_created_at ASC for rows
@@ -466,7 +496,7 @@ const getDatasetRunsTableInternal = async <T>(
     FROM dataset_run_metrics drm
     LEFT JOIN scores_aggregated sa ON drm.dataset_run_id = sa.dataset_run_id AND drm.project_id = sa.project_id
     WHERE drm.project_id = {projectId: String} AND drm.dataset_id = {datasetId: String}
-    ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
+    ${appliedUserFilter.query ? `AND ${appliedUserFilter.query}` : ""}
     ${orderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
 
@@ -478,7 +508,7 @@ const getDatasetRunsTableInternal = async <T>(
       ...(runIds && runIds.length > 0 ? { runIds } : {}),
       ...appliedScoresFilter.params,
       ...baseFilter.params,
-      ...appliedFilter.params,
+      ...appliedUserFilter.params,
       ...(limit !== undefined && offset !== undefined ? { limit, offset } : {}),
     },
     tags: {
