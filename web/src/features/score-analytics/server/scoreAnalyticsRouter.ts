@@ -11,13 +11,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { buildEstimateQuery } from "./buildEstimateQuery";
 import { buildScoreComparisonQuery } from "./buildScoreComparisonQuery";
-
-/**
- * Adaptive FINAL threshold
- * - Use FINAL for datasets < 100k to ensure accuracy
- * - Skip FINAL for datasets >= 100k to improve query performance
- */
-const ADAPTIVE_FINAL_THRESHOLD = 100_000;
+import { buildSamplingExpression } from "./queryHelpers";
 
 /**
  * Hash-based sampling thresholds
@@ -107,14 +101,10 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         objectType,
       });
 
-      // Determine if sampling and FINAL will be used
+      // Determine if sampling will be used
       const willSample =
         estimates.score1Count > SAMPLING_THRESHOLD ||
         estimates.score2Count > SAMPLING_THRESHOLD;
-
-      const willSkipFinal =
-        estimates.score1Count >= ADAPTIVE_FINAL_THRESHOLD ||
-        estimates.score2Count >= ADAPTIVE_FINAL_THRESHOLD;
 
       // Estimate query time based on dataset size
       const estimatedQueryTime =
@@ -131,7 +121,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         score2Count: estimates.score2Count,
         estimatedMatchedCount: estimates.estimatedMatchedCount,
         willSample,
-        willSkipFinal,
         estimatedQueryTime,
         mode: input.mode ?? "two", // Echo back the mode from frontend
       };
@@ -259,12 +248,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
           objectType,
         }));
 
-      // Adaptive FINAL logic: Only use FINAL for small datasets to avoid expensive merge
-      // For large datasets, skip FINAL to improve performance (scores can be updated, so accuracy matters for recent data)
-      const shouldUseFinal =
-        estimates.score1Count < ADAPTIVE_FINAL_THRESHOLD &&
-        estimates.score2Count < ADAPTIVE_FINAL_THRESHOLD;
-
       // Hash-based sampling decision: Sample when either score table exceeds threshold
       const shouldSample =
         estimates.score1Count > SAMPLING_THRESHOLD ||
@@ -277,15 +260,9 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         : 1.0;
       const samplingPercent = Math.round(samplingRate * 100); // Convert to 0-100 for modulo
 
-      // Sampling expression using cityHash64 on composite key (trace_id, observation_id, session_id, dataset_run_id)
-      // This ensures deterministic pseudo-random sampling that preserves matched pairs
+      // Reuse the shared sampling expression builder (Doris-compatible)
       const samplingExpression = shouldSample
-        ? `cityHash64(
-            coalesce(trace_id, ''),
-            coalesce(observation_id, ''),
-            coalesce(session_id, ''),
-            coalesce(dataset_run_id, '')
-          ) % 100 < ${samplingPercent}`
+        ? buildSamplingExpression(samplingPercent)
         : null;
 
       // Determine if this is a single-score or two-score query
@@ -316,7 +293,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
         interval,
         nBins,
         objectType,
-        shouldUseFinal,
         shouldSample,
         samplingPercent,
         isIdenticalScores,
@@ -538,13 +514,6 @@ export const scoreAnalyticsRouter = createTRPCRouter({
             score1Count: estimates.score1Count,
             score2Count: estimates.score2Count,
             estimatedMatchedCount: estimates.estimatedMatchedCount,
-          },
-          // Include adaptive FINAL decision for testing and transparency
-          adaptiveFinal: {
-            usedFinal: shouldUseFinal,
-            reason: shouldUseFinal
-              ? "Small dataset - using FINAL for accuracy"
-              : "Large dataset - skipping FINAL for performance",
           },
         },
         // Metadata about query mode and score comparison

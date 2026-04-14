@@ -56,7 +56,6 @@ export function buildScoreComparisonQuery(params: {
   interval: IntervalConfig;
   nBins: number;
   objectType: string;
-  shouldUseFinal: boolean;
   shouldSample: boolean;
   samplingPercent: number;
   isIdenticalScores: boolean;
@@ -66,7 +65,6 @@ export function buildScoreComparisonQuery(params: {
 }): string {
   const {
     objectType,
-    shouldUseFinal,
     shouldSample,
     samplingPercent,
     isIdenticalScores,
@@ -96,7 +94,7 @@ export function buildScoreComparisonQuery(params: {
       distribution1 AS (
         SELECT
           floor((s.value - b.global_min) /
-                ((b.global_max - b.global_min + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.global_max - b.global_min + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM score1_filtered s
         CROSS JOIN bounds b
@@ -105,11 +103,11 @@ export function buildScoreComparisonQuery(params: {
     : `-- CTE 9: Distribution for score1 (categorical/boolean or cross-type)
       distribution1 AS (
         SELECT
-          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value, toString(value))) - 1) as bin_index,
+          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value, CAST(value AS STRING))) - 1) as bin_index,
           count() as count
         FROM score1_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
-        GROUP BY COALESCE(string_value, toString(value))
+        GROUP BY COALESCE(string_value, CAST(value AS STRING))
         ORDER BY bin_index
       )`;
 
@@ -118,7 +116,7 @@ export function buildScoreComparisonQuery(params: {
       distribution2 AS (
         SELECT
           floor((s.value - b.global_min) /
-                ((b.global_max - b.global_min + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.global_max - b.global_min + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM score2_filtered s
         CROSS JOIN bounds b
@@ -127,11 +125,11 @@ export function buildScoreComparisonQuery(params: {
     : `-- CTE 10: Distribution for score2 (categorical/boolean or cross-type)
       distribution2 AS (
         SELECT
-          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value, toString(value))) - 1) as bin_index,
+          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value, CAST(value AS STRING))) - 1) as bin_index,
           count() as count
         FROM score2_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
-        GROUP BY COALESCE(string_value, toString(value))
+        GROUP BY COALESCE(string_value, CAST(value AS STRING))
         ORDER BY bin_index
       )`;
 
@@ -142,7 +140,7 @@ export function buildScoreComparisonQuery(params: {
         SELECT
           ${getDorisTimeBucketFunction("timestamp", normalizedInterval)} as ts,
           avg(value) as avg1,
-          CAST(NULL AS Nullable(Float64)) as avg2,
+          CAST(NULL AS DOUBLE) as avg2,
           count() as count
         FROM score1_filtered
         WHERE value IS NOT NULL
@@ -186,7 +184,7 @@ export function buildScoreComparisonQuery(params: {
       distribution1_matched AS (
         SELECT
           floor((m.value1 - b.global_min) /
-                ((b.global_max - b.global_min + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.global_max - b.global_min + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM matched_scores m
         CROSS JOIN bounds b
@@ -195,11 +193,11 @@ export function buildScoreComparisonQuery(params: {
     : `-- CTE 11: Distribution for score1 (categorical/boolean or cross-type, matched only)
       distribution1_matched AS (
         SELECT
-          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value1, toString(value1))) - 1) as bin_index,
+          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value1, CAST(value1 AS STRING))) - 1) as bin_index,
           count() as count
         FROM matched_scores
         WHERE string_value1 IS NOT NULL OR value1 IS NOT NULL
-        GROUP BY COALESCE(string_value1, toString(value1))
+        GROUP BY COALESCE(string_value1, CAST(value1 AS STRING))
         ORDER BY bin_index
       )`;
 
@@ -208,7 +206,7 @@ export function buildScoreComparisonQuery(params: {
       distribution2_matched AS (
         SELECT
           floor((m.value2 - b.global_min) /
-                ((b.global_max - b.global_min + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.global_max - b.global_min + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM matched_scores m
         CROSS JOIN bounds b
@@ -217,11 +215,11 @@ export function buildScoreComparisonQuery(params: {
     : `-- CTE 12: Distribution for score2 (categorical/boolean or cross-type, matched only)
       distribution2_matched AS (
         SELECT
-          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value2, toString(value2))) - 1) as bin_index,
+          (ROW_NUMBER() OVER (ORDER BY COALESCE(string_value2, CAST(value2 AS STRING))) - 1) as bin_index,
           count() as count
         FROM matched_scores
         WHERE string_value2 IS NOT NULL OR value2 IS NOT NULL
-        GROUP BY COALESCE(string_value2, toString(value2))
+        GROUP BY COALESCE(string_value2, CAST(value2 AS STRING))
         ORDER BY bin_index
       )`;
 
@@ -231,7 +229,7 @@ export function buildScoreComparisonQuery(params: {
       distribution1_individual AS (
         SELECT
           floor((s.value - b.min1) /
-                ((b.max1 - b.min1 + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.max1 - b.min1 + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM score1_filtered s
         CROSS JOIN bounds b
@@ -249,7 +247,7 @@ export function buildScoreComparisonQuery(params: {
       distribution2_individual AS (
         SELECT
           floor((s.value - b.min2) /
-                ((b.max2 - b.min2 + 0.0001) / {nBins: UInt8})) as bin_index,
+                ((b.max2 - b.min2 + 0.0001) / {nBins: TINYINT})) as bin_index,
           count() as count
         FROM score2_filtered s
         CROSS JOIN bounds b
@@ -269,7 +267,7 @@ export function buildScoreComparisonQuery(params: {
         SELECT
           ${getDorisTimeBucketFunction("timestamp1", normalizedInterval)} as ts,
           avg(value1) as avg1,
-          CAST(NULL AS Nullable(Float64)) as avg2,
+          CAST(NULL AS DOUBLE) as avg2,
           count() as count
         FROM matched_scores
         WHERE value1 IS NOT NULL
@@ -295,7 +293,7 @@ export function buildScoreComparisonQuery(params: {
       timeseries_categorical1 AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp", normalizedInterval)} as ts,
-          COALESCE(string_value, toString(value)) as category,
+          COALESCE(string_value, CAST(value AS STRING)) as category,
           count() as count
         FROM score1_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
@@ -306,7 +304,7 @@ export function buildScoreComparisonQuery(params: {
       timeseries_categorical1 AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp", normalizedInterval)} as ts,
-          COALESCE(string_value, toString(value)) as category,
+          COALESCE(string_value, CAST(value AS STRING)) as category,
           count() as count
         FROM score1_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
@@ -318,16 +316,16 @@ export function buildScoreComparisonQuery(params: {
     ? `-- CTE 17: Categorical time series for score2 (not needed in single score mode)
       timeseries_categorical2 AS (
         SELECT
-          CAST(NULL AS Nullable(DateTime)) as ts,
-          CAST(NULL AS Nullable(String)) as category,
-          CAST(NULL AS Nullable(UInt64)) as count
+          CAST(NULL AS DateTime) as ts,
+          CAST(NULL AS String) as category,
+          CAST(NULL AS BIGINT) as count
         WHERE 1 = 0
       )`
     : `-- CTE 17: Categorical time series for score2 (two score mode)
       timeseries_categorical2 AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp", normalizedInterval)} as ts,
-          COALESCE(string_value, toString(value)) as category,
+          COALESCE(string_value, CAST(value AS STRING)) as category,
           count() as count
         FROM score2_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
@@ -340,7 +338,7 @@ export function buildScoreComparisonQuery(params: {
       timeseries_categorical1_matched AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp1", normalizedInterval)} as ts,
-          COALESCE(string_value1, toString(value1)) as category,
+          COALESCE(string_value1, CAST(value1 AS STRING)) as category,
           count() as count
         FROM matched_scores
         WHERE string_value1 IS NOT NULL OR value1 IS NOT NULL
@@ -351,7 +349,7 @@ export function buildScoreComparisonQuery(params: {
       timeseries_categorical1_matched AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp1", normalizedInterval)} as ts,
-          COALESCE(string_value1, toString(value1)) as category,
+          COALESCE(string_value1, CAST(value1 AS STRING)) as category,
           count() as count
         FROM matched_scores
         WHERE string_value1 IS NOT NULL OR value1 IS NOT NULL
@@ -363,16 +361,16 @@ export function buildScoreComparisonQuery(params: {
     ? `-- CTE 19: Categorical time series for score2 (not needed in single score mode)
       timeseries_categorical2_matched AS (
         SELECT
-          CAST(NULL AS Nullable(DateTime)) as ts,
-          CAST(NULL AS Nullable(String)) as category,
-          CAST(NULL AS Nullable(UInt64)) as count
+          CAST(NULL AS DateTime) as ts,
+          CAST(NULL AS String) as category,
+          CAST(NULL AS BIGINT) as count
         WHERE 1 = 0
       )`
     : `-- CTE 19: Categorical time series for score2 (two scores, matched only)
       timeseries_categorical2_matched AS (
         SELECT
           ${getDorisTimeBucketFunction("timestamp1", normalizedInterval)} as ts,
-          COALESCE(string_value2, toString(value2)) as category,
+          COALESCE(string_value2, CAST(value2 AS STRING)) as category,
           count() as count
         FROM matched_scores
         WHERE string_value2 IS NOT NULL OR value2 IS NOT NULL
@@ -391,19 +389,18 @@ export function buildScoreComparisonQuery(params: {
       -- ============================================
 
       -- CTE 1: Filter score 1
-      -- PREWHERE optimization: Apply most selective filters (project_id, name) early
-      -- to reduce data read from disk before applying other filters
-      -- Adaptive FINAL: Only use FINAL for small datasets (<100k) to balance accuracy vs performance
+      -- Doris: PREWHERE not supported, merged into WHERE clause
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       score1_filtered AS (
         SELECT
           id, value, string_value,
           trace_id, observation_id, session_id, dataset_run_id as run_id,
           timestamp
-        FROM scores ${shouldUseFinal ? "FINAL" : ""}
-        PREWHERE project_id = {projectId: String}
+        FROM scores
+        WHERE project_id = {projectId: String}
           AND name = {score1Name: String}
-        WHERE source = {score1Source: String}
+          AND source = {score1Source: String}
           AND data_type = {dataType1: String}
           AND timestamp >= {fromTimestamp: DateTime64(3)}
           AND timestamp <= {toTimestamp: DateTime64(3)}
@@ -413,8 +410,8 @@ export function buildScoreComparisonQuery(params: {
       ),
 
       -- CTE 2: Filter score 2
-      -- PREWHERE optimization: Apply most selective filters (project_id, name) early
-      -- Adaptive FINAL: Only use FINAL for small datasets (<100k)
+      -- Doris: PREWHERE not supported, merged into WHERE clause
+      -- Doris UNIQUE KEY model auto-merges duplicates, no FINAL needed
       -- Hash-based sampling: Applied when estimated matched count exceeds threshold
       -- Special case: When comparing identical scores, reuse score1_filtered to ensure perfect correlation
       score2_filtered AS (
@@ -425,10 +422,10 @@ export function buildScoreComparisonQuery(params: {
                  id, value, string_value,
                  trace_id, observation_id, session_id, dataset_run_id as run_id,
                  timestamp
-               FROM scores ${shouldUseFinal ? "FINAL" : ""}
-               PREWHERE project_id = {projectId: String}
+               FROM scores
+               WHERE project_id = {projectId: String}
                  AND name = {score2Name: String}
-               WHERE source = {score2Source: String}
+                 AND source = {score2Source: String}
                  AND data_type = {dataType2: String}
                  AND timestamp >= {fromTimestamp: DateTime64(3)}
                  AND timestamp <= {toTimestamp: DateTime64(3)}
@@ -508,8 +505,8 @@ export function buildScoreComparisonQuery(params: {
       -- CTE 5: Heatmap (numeric only, NxN grid using independent bounds per score)
       heatmap AS (
         SELECT
-          floor((m.value1 - b.min1) / ((b.max1 - b.min1 + 0.0001) / {nBins: UInt8})) as bin_x,
-          floor((m.value2 - b.min2) / ((b.max2 - b.min2 + 0.0001) / {nBins: UInt8})) as bin_y,
+          floor((m.value1 - b.min1) / ((b.max1 - b.min1 + 0.0001) / {nBins: TINYINT})) as bin_x,
+          floor((m.value2 - b.min2) / ((b.max2 - b.min2 + 0.0001) / {nBins: TINYINT})) as bin_y,
           count() as count,
           b.global_min, b.global_max,
           b.min1, b.max1, b.min2, b.max2
@@ -521,8 +518,8 @@ export function buildScoreComparisonQuery(params: {
       -- CTE 6: Confusion matrix (categorical/boolean and cross-type)
       confusion AS (
         SELECT
-          COALESCE(string_value1, toString(value1)) as row_category,
-          COALESCE(string_value2, toString(value2)) as col_category,
+          COALESCE(string_value1, CAST(value1 AS STRING)) as row_category,
+          COALESCE(string_value2, CAST(value2 AS STRING)) as col_category,
           count() as count
         FROM matched_scores
         GROUP BY row_category, col_category
@@ -534,8 +531,8 @@ export function buildScoreComparisonQuery(params: {
       score1_with_score2 AS (
         SELECT
           -- Use string_value for categorical/boolean, convert value to string for numeric
-          COALESCE(s1.string_value, toString(s1.value)) as score1_category,
-          COALESCE(s2.string_value, toString(s2.value)) as score2_category
+          COALESCE(s1.string_value, CAST(s1.value AS STRING)) as score1_category,
+          COALESCE(s2.string_value, CAST(s2.value AS STRING)) as score2_category
         FROM score1_filtered s1
         LEFT JOIN score2_filtered s2
           ON ifNull(s1.trace_id, '') = ifNull(s2.trace_id, '')
@@ -559,7 +556,7 @@ export function buildScoreComparisonQuery(params: {
 
       -- CTE 6c: All score2 categories for legend
       score2_categories AS (
-        SELECT DISTINCT COALESCE(string_value, toString(value)) as category
+        SELECT DISTINCT COALESCE(string_value, CAST(value AS STRING)) as category
         FROM score2_filtered
         WHERE string_value IS NOT NULL OR value IS NOT NULL
         ORDER BY category
@@ -568,8 +565,8 @@ export function buildScoreComparisonQuery(params: {
       -- CTE 6d: Stacked distribution (matched only - no __unmatched__)
       stacked_distribution_matched AS (
         SELECT
-          COALESCE(string_value1, toString(value1)) as score1_category,
-          COALESCE(string_value2, toString(value2)) as score2_stack,
+          COALESCE(string_value1, CAST(value1 AS STRING)) as score1_category,
+          COALESCE(string_value2, CAST(value2 AS STRING)) as score2_stack,
           count() as count
         FROM matched_scores
         WHERE (string_value1 IS NOT NULL OR value1 IS NOT NULL)
@@ -586,8 +583,8 @@ export function buildScoreComparisonQuery(params: {
       correlation_check AS (
         SELECT
           count() >= 2
-            AND stddevPop(value1) > 0
-            AND stddevPop(value2) > 0 as is_safe
+            AND stddev_pop(value1) > 0
+            AND stddev_pop(value2) > 0 as is_safe
         FROM matched_scores
       ),
 
@@ -603,8 +600,8 @@ export function buildScoreComparisonQuery(params: {
               ? `-- Individual score statistics from filtered tables (not matched pairs)
           (SELECT avg(value) FROM score1_filtered) as mean1,
           (SELECT avg(value) FROM score2_filtered) as mean2,
-          (SELECT stddevPop(value) FROM score1_filtered) as std1,
-          (SELECT stddevPop(value) FROM score2_filtered) as std2,
+          (SELECT stddev_pop(value) FROM score1_filtered) as std1,
+          (SELECT stddev_pop(value) FROM score2_filtered) as std2,
           -- Comparison metrics require matched pairs
           (SELECT avg(abs(value1 - value2)) FROM matched_scores) as mae,
           (SELECT sqrt(avg(pow(value1 - value2, 2))) FROM matched_scores) as rmse,
@@ -622,9 +619,20 @@ export function buildScoreComparisonQuery(params: {
           ${
             isIdenticalScores
               ? "NULL"
-              : `if(
+              : `-- Spearman correlation: Doris has no rankCorr, but Spearman is defined
+          -- as Pearson correlation on average-ranks (with tie correction).
+          -- Implementation: row_number() gives positions 1..n; avg() OVER
+          -- (PARTITION BY value) collapses tied positions to the average rank,
+          -- matching the textbook Spearman formula exactly.
+          if(
             (SELECT is_safe FROM correlation_check),
-            (SELECT rankCorr(value1, value2) FROM matched_scores),
+            (SELECT corr(avg_rank1, avg_rank2) FROM (
+              SELECT
+                avg(row_number() OVER (ORDER BY value1)) OVER (PARTITION BY value1) as avg_rank1,
+                avg(row_number() OVER (ORDER BY value2)) OVER (PARTITION BY value2) as avg_rank2
+              FROM matched_scores
+              WHERE value1 IS NOT NULL AND value2 IS NOT NULL
+            ) ranked),
             NULL
           )`
           } as spearman_correlation`
@@ -669,33 +677,33 @@ export function buildScoreComparisonQuery(params: {
     -- ============================================
     SELECT
       'counts' as result_type,
-      CAST((SELECT count() FROM score1_filtered) AS Float64) as col1,
-      CAST((SELECT count() FROM score2_filtered) AS Float64) as col2,
-      CAST((SELECT cnt FROM matched_count) AS Float64) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST((SELECT count() FROM score1_filtered) AS DOUBLE) as col1,
+      CAST((SELECT count() FROM score2_filtered) AS DOUBLE) as col2,
+      CAST((SELECT cnt FROM matched_count) AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
 
     UNION ALL
 
     SELECT
       'heatmap' as result_type,
-      CAST(bin_x AS Float64) as col1,
-      CAST(bin_y AS Float64) as col2,
-      CAST(count AS Float64) as col3,
+      CAST(bin_x AS DOUBLE) as col1,
+      CAST(bin_y AS DOUBLE) as col2,
+      CAST(count AS DOUBLE) as col3,
       min1 as col4,          -- Individual bounds for score1
       max1 as col5,
       min2 as col6,          -- Individual bounds for score2
       max2 as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
       global_min as col11,   -- Global bounds for comparison
       global_max as col12
     FROM heatmap
@@ -704,25 +712,25 @@ export function buildScoreComparisonQuery(params: {
 
     SELECT
       'confusion' as result_type,
-      CAST(count AS Float64) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(count AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       row_category as col9,
       col_category as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM confusion
 
     UNION ALL
 
     SELECT
       'stats' as result_type,
-      CAST(matched_count AS Float64) as col1,
+      CAST(matched_count AS DOUBLE) as col1,
       mean1 as col2,
       mean2 as col3,
       std1 as col4,
@@ -730,9 +738,9 @@ export function buildScoreComparisonQuery(params: {
       pearson_correlation as col6,
       mae as col7,
       rmse as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
       spearman_correlation as col12
     FROM stats
 
@@ -740,54 +748,54 @@ export function buildScoreComparisonQuery(params: {
 
     SELECT
       'timeseries' as result_type,
-      CAST(toUnixTimestamp(ts) AS Float64) as col1,
-      CAST(avg1 AS Nullable(Float64)) as col2,
-      CAST(avg2 AS Nullable(Float64)) as col3,
-      CAST(count AS Float64) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(avg1 AS DOUBLE) as col2,
+      CAST(avg2 AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries
 
     UNION ALL
 
     SELECT
       'distribution1' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution1
 
     UNION ALL
 
     SELECT
       'distribution2' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution2
 
     ${
@@ -797,54 +805,54 @@ export function buildScoreComparisonQuery(params: {
 
     SELECT
       'stacked' as result_type,
-      CAST(count AS Float64) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(count AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       score1_category as col9,
       score2_stack as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM stacked_distribution
 
     UNION ALL
 
     SELECT
       'score2_categories' as result_type,
-      CAST(NULL AS Nullable(Float64)) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(NULL AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       category as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM score2_categories
 
     UNION ALL
 
     SELECT
       'stacked_matched' as result_type,
-      CAST(count AS Float64) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(count AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       score1_category as col9,
       score2_stack as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM stacked_distribution_matched`
         : ""
     }
@@ -853,162 +861,162 @@ export function buildScoreComparisonQuery(params: {
 
     SELECT
       'distribution1_matched' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution1_matched
 
     UNION ALL
 
     SELECT
       'distribution2_matched' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution2_matched
 
     UNION ALL
 
     SELECT
       'distribution1_individual' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution1_individual
 
     UNION ALL
 
     SELECT
       'distribution2_individual' as result_type,
-      CAST(bin_index AS Float64) as col1,
-      CAST(count AS Float64) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(NULL AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(bin_index AS DOUBLE) as col1,
+      CAST(count AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(NULL AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM distribution2_individual
 
     UNION ALL
 
     SELECT
       'timeseries_matched' as result_type,
-      CAST(toUnixTimestamp(ts) AS Float64) as col1,
-      CAST(avg1 AS Nullable(Float64)) as col2,
-      CAST(avg2 AS Nullable(Float64)) as col3,
-      CAST(count AS Float64) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
-      CAST(NULL AS Nullable(String)) as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(avg1 AS DOUBLE) as col2,
+      CAST(avg2 AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
+      CAST(NULL AS String) as col9,
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries_matched
 
     UNION ALL
 
     SELECT
       'timeseries_categorical1' as result_type,
-      CAST(toUnixTimestamp(ts) AS Nullable(Float64)) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(count AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       category as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries_categorical1
 
     UNION ALL
 
     SELECT
       'timeseries_categorical2' as result_type,
-      CAST(toUnixTimestamp(ts) AS Nullable(Float64)) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(count AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       category as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries_categorical2
 
     UNION ALL
 
     SELECT
       'timeseries_categorical1_matched' as result_type,
-      CAST(toUnixTimestamp(ts) AS Nullable(Float64)) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(count AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       category as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries_categorical1_matched
 
     UNION ALL
 
     SELECT
       'timeseries_categorical2_matched' as result_type,
-      CAST(toUnixTimestamp(ts) AS Nullable(Float64)) as col1,
-      CAST(NULL AS Nullable(Float64)) as col2,
-      CAST(NULL AS Nullable(Float64)) as col3,
-      CAST(count AS Nullable(Float64)) as col4,
-      CAST(NULL AS Nullable(Float64)) as col5,
-      CAST(NULL AS Nullable(Float64)) as col6,
-      CAST(NULL AS Nullable(Float64)) as col7,
-      CAST(NULL AS Nullable(Float64)) as col8,
+      CAST(unix_timestamp(ts) AS DOUBLE) as col1,
+      CAST(NULL AS DOUBLE) as col2,
+      CAST(NULL AS DOUBLE) as col3,
+      CAST(count AS DOUBLE) as col4,
+      CAST(NULL AS DOUBLE) as col5,
+      CAST(NULL AS DOUBLE) as col6,
+      CAST(NULL AS DOUBLE) as col7,
+      CAST(NULL AS DOUBLE) as col8,
       category as col9,
-      CAST(NULL AS Nullable(String)) as col10,
-      CAST(NULL AS Nullable(Float64)) as col11,
-      CAST(NULL AS Nullable(Float64)) as col12
+      CAST(NULL AS String) as col10,
+      CAST(NULL AS DOUBLE) as col11,
+      CAST(NULL AS DOUBLE) as col12
     FROM timeseries_categorical2_matched
   `;
 }

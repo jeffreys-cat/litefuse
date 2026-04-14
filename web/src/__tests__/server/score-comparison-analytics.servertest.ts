@@ -303,13 +303,6 @@ describe("Score Comparison Analytics tRPC", () => {
       expect(result.counts).toBeDefined();
       expect(result.counts.matchedCount).toBe(1);
 
-      // Verify adaptive FINAL decision via samplingMetadata
-      expect(result.samplingMetadata.adaptiveFinal).toBeDefined();
-      expect(result.samplingMetadata.adaptiveFinal?.usedFinal).toBe(true);
-      expect(result.samplingMetadata.adaptiveFinal?.reason).toContain(
-        "Small dataset - using FINAL for accuracy",
-      );
-
       // Verify preflight estimates are included
       expect(result.samplingMetadata.preflightEstimates).toBeDefined();
       expect(
@@ -330,7 +323,7 @@ describe("Score Comparison Analytics tRPC", () => {
       const scoreName2 = `test-large-score2-${v4()}`;
 
       // Create 101k scores for score1 and 101k for score2
-      // This exceeds ADAPTIVE_FINAL_THRESHOLD (100k)
+      // Large dataset (>100k) - Doris UNIQUE KEY auto-merges, no FINAL needed
       const score1Batch: ReturnType<typeof createTraceScore>[] = [];
       const score2Batch: ReturnType<typeof createTraceScore>[] = [];
       const tracesBatch: ReturnType<typeof createTrace>[] = [];
@@ -444,21 +437,11 @@ describe("Score Comparison Analytics tRPC", () => {
         result.samplingMetadata.preflightEstimates?.estimatedMatchedCount,
       ).toBeGreaterThan(90_000);
 
-      // Verify adaptive FINAL decision via samplingMetadata
-      expect(result.samplingMetadata.adaptiveFinal).toBeDefined();
-      // The decision logic should evaluate based on estimates
-      // If estimates are >= 100k threshold, usedFinal = false
-      // If estimates are < 100k threshold, usedFinal = true
-      // Both outcomes are valid for this test - what matters is the query completes successfully
-      expect(typeof result.samplingMetadata.adaptiveFinal?.usedFinal).toBe(
-        "boolean",
-      );
-      expect(result.samplingMetadata.adaptiveFinal?.reason).toBeDefined();
     }, 120000); // 2 minute timeout for large data insertion
 
-    // Test 6: Adaptive FINAL with 150k scores - should definitively skip FINAL
+    // Test 6: Large dataset - Doris UNIQUE KEY auto-merges, no FINAL needed
     // skipped because flakey in the CI
-    it.skip("should skip FINAL for 150k+ scores with high confidence", async () => {
+    it.skip("should complete query with 150k+ scores", async () => {
       const now = new Date();
       const fromTimestamp = new Date(now.getTime() - 3600000);
       const toTimestamp = new Date(now.getTime() + 3600000);
@@ -467,7 +450,7 @@ describe("Score Comparison Analytics tRPC", () => {
       const scoreName2 = `test-xlarge-score2-${v4()}`;
 
       // Create 150k scores for score1 and 150k for score2
-      // This is well above ADAPTIVE_FINAL_THRESHOLD (100k)
+      // 150k+ rows - well above sampling threshold (100k)
       // Even with 1% sampling variance, should reliably estimate >100k
       const score1Batch: ReturnType<typeof createTraceScore>[] = [];
       const score2Batch: ReturnType<typeof createTraceScore>[] = [];
@@ -581,12 +564,6 @@ describe("Score Comparison Analytics tRPC", () => {
 
       // Verify adaptive FINAL decision via samplingMetadata
       // For 150k scores, should definitively skip FINAL for performance
-      expect(result.samplingMetadata.adaptiveFinal).toBeDefined();
-      expect(result.samplingMetadata.adaptiveFinal?.usedFinal).toBe(false);
-      expect(result.samplingMetadata.adaptiveFinal?.reason).toContain(
-        "Large dataset - skipping FINAL for performance",
-      );
-
       // Verify sampling was applied (150k > 100k threshold)
       expect(result.samplingMetadata.isSampled).toBe(true);
       expect(result.samplingMetadata.samplingMethod).toBe("hash");

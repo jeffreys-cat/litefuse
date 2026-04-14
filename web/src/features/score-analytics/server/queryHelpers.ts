@@ -59,10 +59,13 @@ export function buildObjectTypeFilter(objectType: string): string {
  * ```
  */
 export function buildSamplingExpression(samplingPercent: number): string {
-  return `cityHash64(
+  // Doris: cityHash64 not available, use murmur_hash3_64 on concatenated key.
+  // abs() is required because murmur_hash3_64 returns a signed bigint and
+  // `<negative> % 100` would give a negative remainder.
+  return `abs(murmur_hash3_64(concat_ws('|',
     coalesce(trace_id, ''),
     coalesce(observation_id, ''),
     coalesce(session_id, ''),
     coalesce(dataset_run_id, '')
-  ) % 100 < ${samplingPercent}`;
+  ))) % 100 < ${samplingPercent}`;
 }

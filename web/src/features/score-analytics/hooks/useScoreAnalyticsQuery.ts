@@ -149,11 +149,6 @@ export interface SamplingMetadata {
     score2Count: number;
     estimatedMatchedCount: number;
   };
-  // Adaptive FINAL optimization decision
-  adaptiveFinal?: {
-    usedFinal: boolean;
-    reason: string;
-  };
 }
 
 /**
