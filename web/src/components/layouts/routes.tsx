@@ -161,7 +161,7 @@ export const ROUTES: Route[] = [
     group: RouteGroup.Evaluation,
     section: RouteSection.Main,
     pathname: `/project/[projectId]/evals`,
-    hidden: true,
+    hidden: false,
   },
   {
     title: "Human Annotation",
@@ -170,7 +170,6 @@ export const ROUTES: Route[] = [
     group: RouteGroup.Evaluation,
     section: RouteSection.Main,
     icon: ClipboardPen,
-    hidden: true,
   },
   {
     title: "Datasets",
