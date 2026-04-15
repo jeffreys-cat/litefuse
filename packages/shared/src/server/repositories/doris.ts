@@ -240,10 +240,18 @@ export async function* queryDorisStream<T>(opts: {
 /**
  * Parse Doris date format to match ClickHouse format
  */
-export function parseDorisUTCDateTimeFormat(dateString: string): Date {
+export function parseDorisUTCDateTimeFormat(dateString: string | Date): Date {
+  // If it's already a Date object, return it directly
+  if ((dateString as any) instanceof Date) {
+    return dateString as Date;
+  }
   // Handle both formats:
   // - MySQL format from Doris: "YYYY-MM-DD HH:MM:SS"
   // - ISO format (already converted by queryDoris): "YYYY-MM-DDTHH:MM:SS.000Z"
+  if (typeof dateString !== "string") {
+    // If it's not a string or Date (e.g., number timestamp), convert to Date
+    return new Date(dateString as any);
+  }
   if (dateString.endsWith("Z") || dateString.includes("T")) {
     return new Date(dateString);
   }
