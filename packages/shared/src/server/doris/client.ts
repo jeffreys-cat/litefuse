@@ -166,14 +166,15 @@ export class DorisClient {
       // connection-acquire/keep-alive failures, so we cast to attach a
       // listener. Without this, Doris rejecting a new connection
       // ("Reach limit of connections") crashes the worker process.
-      (
-        this.connectionPool as unknown as import("events").EventEmitter
-      ).on("error", (err: unknown) => {
-        logger.error("Doris MySQL pool emitted error event (swallowed)", {
-          error: err instanceof Error ? err.message : String(err),
-          code: (err as { code?: string } | undefined)?.code,
-        });
-      });
+      (this.connectionPool as unknown as import("events").EventEmitter).on(
+        "error",
+        (err: unknown) => {
+          logger.error("Doris MySQL pool emitted error event (swallowed)", {
+            error: err instanceof Error ? err.message : String(err),
+            code: (err as { code?: string } | undefined)?.code,
+          });
+        },
+      );
 
       logger.debug("Doris MySQL connection pool initialized", {
         host,
