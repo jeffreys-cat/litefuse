@@ -6,6 +6,7 @@ import {
   AggregatableScoreDataType,
 } from "../../domain/scores";
 import { env } from "../../env";
+import { logger } from "../logger";
 import { FilterList } from "../queries";
 import { FilterCondition, FilterState, TimeFilter } from "../../types";
 import { OrderByState } from "../../interfaces/orderBy";
@@ -251,6 +252,11 @@ export const getScoresForSessions = async <
     includeHasMetadata = false,
   } = props;
 
+  // Return early if sessionIds is empty to avoid "IN (NULL)" query issue
+  if (sessionIds.length === 0) {
+    return [];
+  }
+
   const select = formatMetadataSelect(excludeMetadata, includeHasMetadata);
 
   const query = `
@@ -300,6 +306,11 @@ export const getScoresForDatasetRuns = async <
     includeHasMetadata = false,
   } = props;
 
+  // Return early if runIds is empty to avoid "IN (NULL)" query issue
+  if (runIds.length === 0) {
+    return [];
+  }
+
   const select = formatMetadataSelect(excludeMetadata, includeHasMetadata);
 
   const query = `
@@ -343,9 +354,50 @@ export const getTraceScoresForDatasetRuns = async (
 ): Promise<Array<{ dataset_run_id: string } & any>> => {
   if (datasetRunIds.length === 0) return [];
 
-  // Doris does not have the dataset_run_items_rmt table.
-  // Dataset run items are managed via PostgreSQL; return empty for now.
-  return [];
+  // Query scores linked to dataset runs via dataset_run_items_rmt
+  // Scores are associated with traces via trace_id, and dataset_run_items_rmt maps trace_id to dataset_run_id
+  const scoreRows = await queryDoris<{
+    dataset_run_id: string;
+    trace_id: string;
+    id: string;
+    name: string;
+    value: number;
+    data_type: string;
+    string_value: string | null;
+    comment: string | null;
+    metadata: Record<string, unknown>;
+    has_metadata: 0 | 1;
+    timestamp: string;
+  }>({
+    query: `
+      SELECT
+        dri.dataset_run_id,
+        s.trace_id,
+        s.id,
+        s.name,
+        s.value,
+        s.data_type,
+        s.string_value,
+        s.comment,
+        s.metadata,
+        CASE WHEN s.metadata IS NOT NULL AND length(s.metadata) > 0 THEN 1 ELSE 0 END as has_metadata,
+        s.timestamp
+      FROM scores s
+      INNER JOIN (
+        SELECT DISTINCT dataset_run_id, trace_id, project_id
+        FROM dataset_run_items_rmt
+        WHERE project_id = {projectId: String}
+          AND dataset_run_id IN ({datasetRunIds: Array(String)})
+      ) dri ON s.trace_id = dri.trace_id AND s.project_id = dri.project_id
+      WHERE s.project_id = {projectId: String}
+        AND s.data_type IN ('NUMERIC', 'BOOLEAN')
+      ORDER BY s.event_ts DESC
+    `,
+    params: { projectId, datasetRunIds },
+    tags: { feature: "scores", type: "read" },
+  });
+
+  return scoreRows;
 };
 
 const getScoresForTracesInternal = async <
@@ -367,6 +419,11 @@ const getScoresForTracesInternal = async <
     excludeMetadata = false,
     includeHasMetadata = false,
   } = props;
+
+  // Return early if traceIds is empty to avoid "IN (NULL)" query issue
+  if (traceIds.length === 0) {
+    return [];
+  }
 
   // Use the same formatMetadataSelect function for consistency across all score queries
   const select = formatMetadataSelect(excludeMetadata, includeHasMetadata);
@@ -482,6 +539,11 @@ export const getScoresForObservations = async <
     includeHasMetadata = false,
   } = props;
 
+  // Return early if observationIds is empty to avoid "IN (NULL)" query issue
+  if (observationIds.length === 0) {
+    return [];
+  }
+
   // Use the same formatMetadataSelect function for consistency
   const select = formatMetadataSelect(excludeMetadata, includeHasMetadata);
 
@@ -541,12 +603,35 @@ export const getScoresGroupedByNameSourceType = async ({
   toTimestamp?: Date;
 }) => {
   const dorisScoresFilter = new FilterList();
-  dorisScoresFilter.push(
-    ...createDorisFilterFromFilterState(
-      filter,
-      scoresColumnsTableUiColumnDefinitionsForDoris,
-    ),
-  );
+
+  // Filter out columns that don't exist in the Doris scores table
+  // Scores table doesn't have: dataset_id, dataset_item_id
+  // These filters would require JOINs which getScoresGroupedByNameSourceType doesn't support
+  const supportedFilter = filter.filter((f) => {
+    const unsupportedColumns = ["datasetId", "datasetItemIds"];
+    if (unsupportedColumns.includes(f.column)) {
+      logger.warn(
+        `Filter column ${f.column} is not supported in getScoresGroupedByNameSourceType for Doris scores table. Skipping.`,
+      );
+      return false;
+    }
+    return true;
+  });
+
+  try {
+    dorisScoresFilter.push(
+      ...createDorisFilterFromFilterState(
+        supportedFilter,
+        scoresColumnsTableUiColumnDefinitionsForDoris,
+      ),
+    );
+  } catch (error) {
+    // If createDorisFilterFromFilterState throws, log and continue with empty filter
+    logger.warn(
+      `Some filters could not be applied: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   const dorisScoresFilterRes = dorisScoresFilter.apply();
 
   const query = `

@@ -37,6 +37,8 @@ export const getDorisEntityType = (eventType: string): IngestionEntityTypes => {
       return "score";
     case eventTypes.SDK_LOG:
       return "sdk_log";
+    case eventTypes.DATASET_RUN_ITEM_CREATE:
+      return "dataset_run_item";
     default:
       throw new LangfuseNotFoundError(`Unknown event type: ${eventType}`);
   }

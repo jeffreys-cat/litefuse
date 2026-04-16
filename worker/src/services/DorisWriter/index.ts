@@ -73,7 +73,9 @@ export class DorisWriter {
 
       this.isIntervalFlushInProgress = true;
 
-      logger.debug("Flush interval elapsed, flushing all Doris queues...");
+      logger.info(
+        "[DorisWriter] Flush interval elapsed, flushing all Doris queues...",
+      );
 
       this.flushAll().finally(() => {
         this.isIntervalFlushInProgress = false;
@@ -107,6 +109,7 @@ export class DorisWriter {
           this.flush(TableName.Scores, fullQueue),
           this.flush(TableName.Observations, fullQueue),
           this.flush(TableName.BlobStorageFileLog, fullQueue),
+          this.flush(TableName.DatasetRunItems, fullQueue),
         ]).catch((err) => {
           logger.error("DorisWriter.flushAll", err);
         });
@@ -118,6 +121,9 @@ export class DorisWriter {
     const entityQueue = this.queue[tableName];
     if (entityQueue.length === 0) return;
 
+    logger.info(
+      `[DorisWriter.flush] Flushing ${tableName}, queue length: ${entityQueue.length}, batch size: ${this.batchSize}`,
+    );
     const queueItems = entityQueue.splice(
       0,
       fullQueue ? entityQueue.length : this.batchSize,
@@ -155,8 +161,8 @@ export class DorisWriter {
         },
       );
 
-      logger.debug(
-        `Flushed ${queueItems.length} records to Doris ${tableName}. New queue length: ${entityQueue.length}`,
+      logger.info(
+        `[DorisWriter.flush] Flushed ${queueItems.length} records to Doris ${tableName}. New queue length: ${entityQueue.length}`,
       );
 
       recordGauge("ingestion_doris_insert_queue_length", entityQueue.length, {
@@ -196,8 +202,13 @@ export class DorisWriter {
       data,
     });
 
+    logger.info(
+      `[DorisWriter.addToQueue] Added record to ${tableName}, queue length now: ${entityQueue.length}`,
+    );
     if (entityQueue.length >= this.batchSize) {
-      logger.debug(`Queue is full. Flushing ${tableName}...`);
+      logger.info(
+        `[DorisWriter.addToQueue] Queue is full. Flushing ${tableName}...`,
+      );
 
       this.flush(tableName).catch((err: any) => {
         logger.error("DorisWriter.addToQueue flush", err);

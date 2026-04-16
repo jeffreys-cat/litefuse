@@ -466,6 +466,9 @@ export class IngestionService {
     datasetRunItemEventList: DatasetRunItemEventType[];
   }) {
     const { projectId, entityId, datasetRunItemEventList } = params;
+    logger.info(
+      `[IngestionService] processDatasetRunItemEventList called for project ${projectId}, entityId ${entityId}, events count: ${datasetRunItemEventList.length}`,
+    );
     if (datasetRunItemEventList.length === 0) return;
 
     const finalDatasetRunItemRecords: DatasetRunItemRecordInsertType[] = (
@@ -546,14 +549,16 @@ export class IngestionService {
       )
     ).flat();
 
-    finalDatasetRunItemRecords.forEach((record) => {
-      if (record) {
-        // DatasetRunItems table is not supported in Doris - skip writing
-        logger.debug(
-          "DatasetRunItemRecords would be written but DatasetRunItems table is not supported in Doris, skipping",
-        );
+    if (finalDatasetRunItemRecords.length > 0) {
+      // Write DatasetRunItem records to Doris
+      logger.info(
+        `[IngestionService] Adding ${finalDatasetRunItemRecords.length} DatasetRunItem records to DorisWriter`,
+      );
+      const writer = DorisWriter.getInstance();
+      for (const record of finalDatasetRunItemRecords) {
+        writer.addToQueue(TableName.DatasetRunItems, record);
       }
-    });
+    }
   }
 
   private async processScoreEventList(params: {

@@ -55,7 +55,8 @@ export const scoresColumnsTableUiColumnDefinitions: UiColumnMappings = [
 
 // Doris-specific column definitions for scores columns table.
 // Uses plain column names without double-quoted identifiers (which Doris doesn't support).
-// Excludes dataset_run_items_rmt joins since that table doesn't exist in Doris.
+// Note: dataset_run_items_rmt columns are mapped to scores table equivalents since
+// the rmt table doesn't exist in Doris - use scores.dataset_run_id directly.
 export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
   {
     uiTableName: "Timestamp",
@@ -76,6 +77,27 @@ export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "datasetRunIds",
     tableName: "scores",
     select: "dataset_run_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Dataset Run Item Run IDs",
+    uiTableId: "datasetRunItemRunIds",
+    tableName: "scores",
+    select: "dataset_run_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Dataset ID",
+    uiTableId: "datasetId",
+    tableName: "scores",
+    select: "dataset_id",
+    queryPrefix: "s",
+  },
+  {
+    uiTableName: "Dataset Item IDs",
+    uiTableId: "datasetItemIds",
+    tableName: "scores",
+    select: "dataset_item_id",
     queryPrefix: "s",
   },
   {

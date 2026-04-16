@@ -9,6 +9,12 @@ export const datasetRunItemsTableUiColumnDefinitions: UiColumnMappings = [
     select: "dri.`dataset_run_id`",
   },
   {
+    uiTableName: "Dataset Run IDs",
+    uiTableId: "datasetRunItemRunIds",
+    tableName: "dataset_run_items_rmt",
+    select: "dri.`dataset_run_id`",
+  },
+  {
     uiTableName: "Created At",
     uiTableId: "createdAt",
     tableName: "dataset_run_items_rmt",
