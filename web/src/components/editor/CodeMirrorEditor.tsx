@@ -296,10 +296,23 @@ export function CodeMirrorEditor({
         // Only add prompt support in prompt mode
         ...(mode === "prompt" ? [promptSupport, promptLinter] : []),
 
-        // Theme to remove outline
+        // Theme to remove outline and set content styles
         EditorView.theme({
           "&.cm-focused": {
             outline: "none",
+          },
+          ".cm-content": {
+            ...(minHeight
+              ? {
+                  minHeight:
+                    typeof minHeight === "number"
+                      ? `${minHeight}px`
+                      : minHeight,
+                }
+              : {}),
+          },
+          ".cm-scroller": {
+            overflow: "auto",
           },
         }),
       ]}

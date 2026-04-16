@@ -38,6 +38,9 @@ export const ingestionQueueProcessorBuilder = (
 
   return async (job: Job<TQueueJobTypes[QueueName.IngestionQueue]>) => {
     try {
+      logger.info(
+        `[ingestionQueue] Received ingestion job, id: ${job.data.id}, type: ${job.data.payload?.data?.type}, eventBodyId: ${job.data.payload?.data?.eventBodyId}`,
+      );
       const span = getCurrentSpan();
       if (span) {
         span.setAttribute("messaging.bullmq.job.input.id", job.data.id);
@@ -277,6 +280,9 @@ export const ingestionQueueProcessorBuilder = (
         env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
       // Use Doris only
+      logger.info(
+        `[ingestionQueue] Calling mergeAndWrite for type ${getDorisEntityType(events[0].type)}, project ${job.data.payload.authCheck.scope.projectId}, eventBodyId ${job.data.payload.data.eventBodyId}, events count: ${events.length}`,
+      );
       await new IngestionService(
         redis,
         prisma,
@@ -289,6 +295,9 @@ export const ingestionQueueProcessorBuilder = (
         firstS3WriteTime,
         events,
         forwardToEventsTable,
+      );
+      logger.info(
+        `[ingestionQueue] mergeAndWrite completed for type ${getDorisEntityType(events[0].type)}, eventBodyId ${job.data.payload.data.eventBodyId}`,
       );
     } catch (e) {
       // Check if this is a SlowDown error and mark the project for secondary queue

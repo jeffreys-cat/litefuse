@@ -146,6 +146,28 @@ export type EnrichedDatasetRunItem = {
   scores: ScoreAggregate;
 };
 
+// Helper to convert Doris struct array [{col1, col2}] to Array<[string, number]>
+const convertDorisScoresAvg = (scoresAvg: unknown): Array<[string, number]> => {
+  if (!Array.isArray(scoresAvg)) return [];
+  return scoresAvg
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const e = entry as Record<string, unknown>;
+      // Doris struct fields: col1=name, col2=avg_value (positional)
+      const name = e.col1 ?? e.name;
+      const value = e.col2 ?? e.avg_value;
+      if (
+        typeof name === "string" &&
+        name.length > 0 &&
+        typeof value === "number"
+      ) {
+        return [name, value] as [string, number];
+      }
+      return null;
+    })
+    .filter((item): item is [string, number] => item !== null);
+};
+
 const convertDatasetRunsMetricsRecord = (
   record: DatasetRunsMetricsRecordType,
 ): DatasetRunsMetrics => {
@@ -162,7 +184,7 @@ const convertDatasetRunsMetricsRecord = (
       ? new Decimal(record.total_cost)
       : new Decimal(0),
     avgLatency: record.avg_latency_seconds ?? 0,
-    aggScoresAvg: record.agg_scores_avg ?? [],
+    aggScoresAvg: convertDorisScoresAvg(record.agg_scores_avg),
     aggScoreCategories: record.agg_score_categories ?? [],
   };
 };

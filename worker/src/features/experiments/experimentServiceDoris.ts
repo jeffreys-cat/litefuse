@@ -105,6 +105,9 @@ async function processItem(
     },
   );
 
+  logger.info(
+    `[experimentServiceDoris] processEventBatch completed for dataset item ${datasetItem.id}, successes: ${ingestionResult.successes.length}, errors: ${ingestionResult.errors.length}`,
+  );
   if (ingestionResult.errors.length > 0) {
     const error = ingestionResult.errors[0];
     logger.error(
