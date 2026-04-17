@@ -4,31 +4,15 @@
 -- This version preserves the original order of hash references in the input array.
 -- It uses POSEXPLODE to capture element positions and GROUP_CONCAT with ORDER BY.
 --
--- Steps:
--- 1. Rename the existing observations table to observation_source (if it's a TABLE, not VIEW)
--- 2. Create a view "observations" that:
+-- Note: The base table observation_source is created in 0002_observations.up.sql.
+-- This migration creates a view "observations" that:
 --    - For GENERATION type: resolves input hashes to actual content via content_dict (ORDER PRESERVED)
 --    - For non-GENERATION type: passes through input directly
 
--- Step 1: Check if observations exists as a TABLE (not VIEW) before renaming
--- Only rename if it's a base table, not if it's already a view or doesn't exist
-DROP PROCEDURE IF EXISTS safe_rename_observations;
-
-DELIMITER //
-CREATE PROCEDURE safe_rename_observations()
-BEGIN
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
-    ALTER TABLE observations RENAME observation_source;
-END//
-DELIMITER ;
-
-CALL safe_rename_observations();
-DROP PROCEDURE IF EXISTS safe_rename_observations;
-
--- Step 2: Drop existing observations view if it exists (idempotent)
+-- Step 1: Drop existing observations view if it exists (idempotent)
 DROP VIEW IF EXISTS observations;
 
--- Step 3: Create the observations view using LEFT JOIN for input resolution
+-- Step 2: Create the observations view using LEFT JOIN for input resolution
 -- This approach avoids CAST on output field which was causing escape sequence issues (\n -> n)
 CREATE VIEW observations AS
 
