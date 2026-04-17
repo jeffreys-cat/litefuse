@@ -69,6 +69,14 @@ const EnvSchema = z.object({
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
+  LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
+    .number()
+    .positive()
+    .default(1000),
+  LANGFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS: z.coerce
+    .number()
+    .positive()
+    .default(200),
   LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
     .enum(["true", "false"])
     .default("false"),
@@ -112,7 +120,7 @@ const EnvSchema = z.object({
   ENABLE_AWS_CLOUDWATCH_METRIC_PUBLISHING: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_CONCURRENT_WRITES: z.coerce.number().positive().default(50),
+  LANGFUSE_S3_CONCURRENT_WRITES: z.coerce.number().positive().default(1000),
   LANGFUSE_S3_UPLOAD_ENABLE_BUFFERED: z
     .enum(["true", "false"])
     .default("false"),

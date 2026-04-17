@@ -87,15 +87,11 @@ const EnvSchema = z.object({
   LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE: z.coerce
     .number()
     .positive()
-    .default(10000),
+    .default(1000),
   LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
     .number()
     .positive()
     .default(1000),
-  LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
-    .number()
-    .positive()
-    .default(3),
 
   // Analytics backend selection
   LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
