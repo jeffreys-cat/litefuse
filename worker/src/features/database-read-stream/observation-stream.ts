@@ -166,19 +166,29 @@ export const getObservationStream = async (props: {
         SELECT
           trace_id,
           observation_id,
-          -- For numeric scores, use JSON format for compatibility
-          GROUP_CONCAT(
-            DISTINCT CONCAT(
-              '{"name":"', name, '","value":', avg_value, ',"dataType":"', data_type, '","stringValue":"', COALESCE(string_value, ''), '"}'
-            )
-          ) AS scores_avg,
-          -- For categorical scores, concatenate name:string_value pairs
+          CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('name', name, 'value', avg_val, 'dataType', data_type, 'stringValue', COALESCE(string_value, ''))), ']') AS scores_avg,
           GROUP_CONCAT(
             DISTINCT CONCAT(name, ':', COALESCE(string_value, ''))
-          ) AS score_categories
-        FROM scores
-        WHERE project_id = {projectId: String}
-        GROUP BY trace_id, observation_id, name, data_type, string_value
+          ) AS score_categories,
+          CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('name', name, 'stringValue', string_value)), ']') AS score_categories_tuples
+        FROM (
+          SELECT
+            trace_id,
+            observation_id,
+            name,
+            avg(value) as avg_val,
+            data_type,
+            string_value
+          FROM scores
+          WHERE ${appliedScoresFilter.query}
+          GROUP BY
+            trace_id,
+            observation_id,
+            name,
+            data_type,
+            string_value
+        ) tmp
+        GROUP BY trace_id, observation_id
       )
       SELECT
         o.id,
@@ -227,16 +237,9 @@ export const getObservationStream = async (props: {
 
   const asyncGenerator = queryDorisStream<
     ObservationRecordReadType & {
-      scores_avg:
-        | {
-            name: string;
-            value: number;
-            dataType: ScoreDataTypeType;
-            stringValue: string;
-          }[]
-        | undefined;
-      score_categories: string[] | undefined;
-      score_categories_tuples: [string, string | null][] | undefined;
+      scores_avg: string | undefined;
+      score_categories: string | undefined;
+      score_categories_tuples: string | undefined;
     } & {
       traceName: string;
       traceTags: string[];
@@ -268,16 +271,9 @@ export const getObservationStream = async (props: {
   );
 
   type ObservationRow = ObservationRecordReadType & {
-    scores_avg:
-      | {
-          name: string;
-          value: number;
-          dataType: ScoreDataTypeType;
-          stringValue: string;
-        }[]
-      | undefined;
-    score_categories: string[] | undefined;
-    score_categories_tuples: [string, string | null][] | undefined;
+    scores_avg: string | undefined;
+    score_categories: string | undefined;
+    score_categories_tuples: string | undefined;
   } & {
     traceName: string;
     traceTags: string[];
@@ -293,23 +289,27 @@ export const getObservationStream = async (props: {
     const model = await modelCache.getModel(bufferedRow.internal_model_id);
     const modelData = enrichObservationWithModelData(model);
 
-    // Process numeric/boolean scores (tuples from Doris)
-    const numericScores = (bufferedRow.scores_avg ?? []).map((score: any) => ({
-      name: score[0],
-      value: score[1],
-      dataType: score[2],
-      stringValue: score[3],
+    // Process numeric/boolean scores (JSON from Doris)
+    const numericScores = (
+      bufferedRow.scores_avg ? JSON.parse(bufferedRow.scores_avg) : []
+    ).map((score: any) => ({
+      name: score.name,
+      value: score.value,
+      dataType: score.dataType,
+      stringValue: score.stringValue,
     }));
 
-    // Process categorical scores (tuples from Doris)
-    const categoricalScores = (bufferedRow.score_categories_tuples ?? []).map(
-      (cat) => ({
-        name: cat[0],
-        value: null,
-        dataType: ScoreDataTypeEnum.CATEGORICAL,
-        stringValue: cat[1],
-      }),
-    );
+    // Process categorical scores (JSON from Doris)
+    const categoricalScores = (
+      bufferedRow.score_categories_tuples
+        ? JSON.parse(bufferedRow.score_categories_tuples)
+        : []
+    ).map((cat: any) => ({
+      name: cat.name,
+      value: null,
+      dataType: ScoreDataTypeEnum.CATEGORICAL,
+      stringValue: cat.stringValue,
+    }));
 
     const outputScores: Record<string, string[] | number[]> =
       prepareScoresForOutput([...numericScores, ...categoricalScores]);

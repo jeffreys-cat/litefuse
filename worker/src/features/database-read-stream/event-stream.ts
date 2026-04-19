@@ -116,19 +116,28 @@ export const getEventsStream = async (props: {
       SELECT
         trace_id,
         observation_id,
-        -- For numeric scores, use JSON format for compatibility
-        GROUP_CONCAT(
-          DISTINCT CONCAT(
-            '{"name":"', name, '","value":', avg_value, ',"dataType":"', data_type, '","stringValue":"', COALESCE(string_value, ''), '"}'
-          )
-        ) AS scores_avg,
-        -- For categorical scores, concatenate name:string_value pairs
+        CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('name', name, 'value', avg_val, 'dataType', data_type, 'stringValue', COALESCE(string_value, ''))), ']') AS scores_avg,
         GROUP_CONCAT(
           DISTINCT CONCAT(name, ':', COALESCE(string_value, ''))
         ) AS score_categories
-      FROM scores
-      WHERE project_id = {projectId: String}
-      GROUP BY trace_id, observation_id, name, data_type, string_value
+      FROM (
+        SELECT
+          trace_id,
+          observation_id,
+          name,
+          avg(value) as avg_val,
+          data_type,
+          string_value
+        FROM scores
+        WHERE project_id = {projectId: String}
+        GROUP BY
+          trace_id,
+          observation_id,
+          name,
+          data_type,
+          string_value
+      ) tmp
+      GROUP BY trace_id, observation_id
     )
     SELECT
       e.id,
@@ -216,16 +225,9 @@ export const getEventsStream = async (props: {
     release: string | null;
     trace_name: string | null;
     parent_observation_id: string | null;
-    scores_avg:
-      | {
-          name: string;
-          value: number;
-          dataType: ScoreDataTypeType;
-          stringValue: string;
-        }[]
-      | undefined;
-    score_categories: string[] | undefined;
-    score_categories_tuples: [string, string | null][] | undefined;
+    scores_avg: string | undefined;
+    score_categories: string | undefined;
+    score_categories_tuples: string | undefined;
   };
 
   const asyncGenerator = queryDorisStream<EventRow>({
@@ -244,23 +246,27 @@ export const getEventsStream = async (props: {
     bufferedRow: EventRow,
     commentsByEvent: Map<string, any[]>,
   ) => {
-    // Process numeric/boolean scores (tuples from Doris)
-    const numericScores = (bufferedRow.scores_avg ?? []).map((score: any) => ({
-      name: score[0],
-      value: score[1],
-      dataType: score[2],
-      stringValue: score[3],
+    // Process numeric/boolean scores (JSON from Doris)
+    const numericScores = (
+      bufferedRow.scores_avg ? JSON.parse(bufferedRow.scores_avg) : []
+    ).map((score: any) => ({
+      name: score.name,
+      value: score.value,
+      dataType: score.dataType,
+      stringValue: score.stringValue,
     }));
 
-    // Process categorical scores (tuples from Doris)
-    const categoricalScores = (bufferedRow.score_categories_tuples ?? []).map(
-      (cat) => ({
-        name: cat[0],
-        value: null,
-        dataType: ScoreDataTypeEnum.CATEGORICAL,
-        stringValue: cat[1],
-      }),
-    );
+    // Process categorical scores (JSON from Doris)
+    const categoricalScores = (
+      bufferedRow.score_categories_tuples
+        ? JSON.parse(bufferedRow.score_categories_tuples)
+        : []
+    ).map((cat: any) => ({
+      name: cat.name,
+      value: null,
+      dataType: ScoreDataTypeEnum.CATEGORICAL,
+      stringValue: cat.stringValue,
+    }));
 
     const outputScores: Record<string, string[] | number[]> =
       prepareScoresForOutput([...numericScores, ...categoricalScores]);
