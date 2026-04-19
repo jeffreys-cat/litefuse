@@ -13,7 +13,8 @@ import {
   DatasetRunItemRecordInsertType,
 } from "@langfuse/shared/src/server";
 
-import { env } from "../../env";
+import { env as sharedEnv } from "@langfuse/shared/src/env";
+import { env as workerEnv } from "../../env";
 import { logger } from "@langfuse/shared/src/server";
 import { instrumentAsync } from "@langfuse/shared/src/server";
 import { SpanKind } from "@opentelemetry/api";
@@ -30,9 +31,9 @@ export class DorisWriter {
   intervalId: NodeJS.Timeout | null = null;
 
   private constructor() {
-    this.batchSize = env.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
-    this.writeInterval = env.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
-    this.maxAttempts = env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
+    this.batchSize = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
+    this.writeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
+    this.maxAttempts = sharedEnv.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
 
     this.isIntervalFlushInProgress = false;
 

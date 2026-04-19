@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from "axios";
+import http from "http";
+import https from "https";
 import mysql from "mysql2/promise";
 import { env } from "../../env";
 import { getCurrentSpan } from "../instrumentation";
@@ -42,6 +44,7 @@ export interface DorisClientConfig {
   retryDelay?: number;
   headers?: Record<string, string>;
   maxOpenConnections?: number;
+  maxSockets?: number;
 }
 
 export type DorisClientType = DorisClient;
@@ -56,6 +59,9 @@ export class DorisClient {
   private connectionPool: mysql.Pool | null = null;
 
   constructor(config: DorisClientConfig = {}) {
+    const maxSockets =
+      config.maxSockets ?? env.LANGFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS ?? 100;
+
     this.config = {
       feHttpUrl: config.feHttpUrl ?? env.DORIS_FE_HTTP_URL,
       feQueryPort: config.feQueryPort ?? env.DORIS_FE_QUERY_PORT,
@@ -63,16 +69,23 @@ export class DorisClient {
       username: config.username ?? env.DORIS_USER ?? "root",
       password: config.password ?? env.DORIS_PASSWORD,
       timeout: config.timeout ?? env.DORIS_REQUEST_TIMEOUT_MS,
-      maxRetries: config.maxRetries ?? 3,
+      maxRetries:
+        config.maxRetries ?? env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS ?? 3,
       retryDelay: config.retryDelay ?? 1000,
       headers: config.headers || {},
       maxOpenConnections:
         config.maxOpenConnections ?? env.DORIS_MAX_OPEN_CONNECTIONS,
-    };
+      maxSockets,
+    } as Required<DorisClientConfig>;
+
+    const httpAgent = new http.Agent({ maxSockets });
+    const httpsAgent = new https.Agent({ maxSockets });
 
     this.httpClient = axios.create({
       baseURL: this.config.feHttpUrl,
       timeout: this.config.timeout,
+      httpAgent,
+      httpsAgent,
       auth: {
         username: this.config.username,
         password: this.config.password,
@@ -449,6 +462,7 @@ export class DorisClient {
       logger.debug("Stream load completed successfully", {
         table,
         recordCount: data.length,
+        dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
         loadLabel,
         loadedRows: result.NumberLoadedRows,
         filteredRows: result.NumberFilteredRows,
@@ -492,6 +506,13 @@ export class DorisClient {
       logger.error("Stream load failed", {
         table,
         recordCount: data.length,
+        dataSizeKB: (
+          data.reduce(
+            (acc, item) =>
+              acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
+            0,
+          ) / 1024
+        ).toFixed(2),
         loadLabel,
         error: errorMessage,
       });
@@ -536,8 +557,14 @@ export class DorisClient {
     }
 
     // All retries failed
+    // Safely calculate size by iterating instead of JSON.stringify (avoids ~374MB temp alloc for 2000×96KB)
+    const dataSizeKB =
+      data.reduce(
+        (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
+        0,
+      ) / 1024;
     throw new Error(
-      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message}`,
+      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message} | table=${table}, recordCount=${data.length}, dataSizeKB=${dataSizeKB.toFixed(2)}`,
     );
   }
 
