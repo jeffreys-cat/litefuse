@@ -12,6 +12,7 @@
 import { memo, useMemo } from "react";
 import {
   type TraceDomain,
+  type ScoreDomain,
   AnnotationQueueObjectType,
   LangfuseInternalTraceEnvironment,
 } from "@langfuse/shared";
@@ -23,6 +24,7 @@ import { LocalIsoDate } from "@/src/components/LocalIsoDate";
 import { CopyIdsPopover } from "@/src/components/trace2/components/_shared/CopyIdsPopover";
 import { NewDatasetItemFromExistingObject } from "@/src/features/datasets/components/NewDatasetItemFromExistingObject";
 import { CreateNewAnnotationQueueItem } from "@/src/features/annotation-queues/components/CreateNewAnnotationQueueItem";
+import { AnnotateDrawer } from "@/src/features/scores/components/AnnotateDrawer";
 import { CommentDrawerButton } from "@/src/features/comments/CommentDrawerButton";
 import {
   SessionBadge,
@@ -49,6 +51,7 @@ export interface TraceDetailViewHeaderProps {
   observations: ObservationReturnTypeWithMetadata[];
   parsedMetadata: unknown;
   projectId: string;
+  scores: WithStringifiedMetadata<ScoreDomain>[];
   commentCount: number | undefined;
   // Inline comment props
   pendingSelection?: SelectionData | null;
@@ -62,6 +65,7 @@ export const TraceDetailViewHeader = memo(function TraceDetailViewHeader({
   observations,
   parsedMetadata,
   projectId,
+  scores,
   commentCount,
   pendingSelection,
   onSelectionUsed,
@@ -103,7 +107,20 @@ export const TraceDetailViewHeader = memo(function TraceDetailViewHeader({
             size="sm"
           />
           <div className="flex items-start">
-            {/* AnnotateDrawer hidden: score feature not supported */}
+            <AnnotateDrawer
+              key={"annotation-drawer-" + trace.id}
+              projectId={projectId}
+              scoreTarget={{
+                type: "trace",
+                traceId: trace.id,
+              }}
+              scores={scores}
+              scoreMetadata={{
+                projectId: projectId,
+                environment: trace.environment,
+              }}
+              size="sm"
+            />
             <CreateNewAnnotationQueueItem
               projectId={projectId}
               objectId={trace.id}
