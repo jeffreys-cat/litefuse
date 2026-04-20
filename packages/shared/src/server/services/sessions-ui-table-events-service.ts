@@ -3,6 +3,7 @@ import { FilterState } from "../../types";
 import { sessionColsForDoris } from "../tableMappings/mapSessionTable";
 import { parseDorisUTCDateTimeFormat } from "../repositories/doris";
 import { convertDateToAnalyticsDateTime } from "../repositories/analytics";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 
 // Doris imports
 import { queryDoris } from "../repositories";
@@ -129,9 +130,15 @@ export const getSessionsTableFromEvents = async (props: {
       tags: { kind: "list" },
     });
 
+  // Doris returns ARRAY columns as JSON-encoded strings; normalize the
+  // collect_set() outputs so downstream consumers can rely on the declared
+  // string[] types (e.g. `.length`, `.filter`). See dorisArrays.ts.
   return rows.map((row) => ({
     ...row,
     trace_count: Number(row.trace_count),
+    trace_ids: parseDorisStringArray(row.trace_ids),
+    user_ids: parseDorisStringArray(row.user_ids),
+    trace_tags: parseDorisStringArray(row.trace_tags),
   }));
 };
 
