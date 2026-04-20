@@ -862,13 +862,28 @@ const getDatasetRunItemsTableInternal = async <
     });
   }
 
-  const orderByClause = orderByToDorisSQL(
+  // Inner ORDER BY runs inside the QUALIFY window function; base-table
+  // alias is in scope, so we emit fully-qualified refs ("dri.`created_at`").
+  const innerOrderByClause = orderByToDorisSQL(
     orderByArray,
     datasetRunItemsTableUiColumnDefinitions,
+    { scope: "inner" },
   );
-  // Inner ORDER BY expressions for use inside QUALIFY window function
-  // (strip leading "ORDER BY "). QUALIFY replaces CK's `LIMIT 1 BY` dedup.
-  const orderByExprs = orderByClause.replace(/^\s*ORDER BY\s+/i, "").trim();
+  // QUALIFY ROW_NUMBER() OVER(... ORDER BY <exprs>) expects the expressions
+  // without the leading "ORDER BY " keyword.
+  const orderByExprs = innerOrderByClause
+    .replace(/^\s*ORDER BY\s+/i, "")
+    .trim();
+  // Outer ORDER BY runs on the subquery wrapper below. After Doris Nereids
+  // applies the inner QUALIFY filter, the `dri` / `sa` base-table aliases
+  // go out of scope; only the SELECT projection aliases are resolvable.
+  // Emit "`created_at` DESC" rather than "dri.`created_at` DESC" for the
+  // outer clause.
+  const outerOrderByClause = orderByToDorisSQL(
+    orderByArray,
+    datasetRunItemsTableUiColumnDefinitions,
+    { scope: "projection" },
+  );
 
   // See top-level comment in getDatasetRunsTableInternal for scores_avg format.
   const scoresCte = `
@@ -918,13 +933,15 @@ const getDatasetRunItemsTableInternal = async <
     opts.select === "rows"
       ? `
     ${scoresCte}
-    SELECT
-      ${selectString}
-    FROM dataset_run_items_rmt dri
-    ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
-    WHERE ${appliedFilter.query}
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) = 1
-    ${orderByClause}
+    SELECT * FROM (
+      SELECT
+        ${selectString}
+      FROM dataset_run_items_rmt dri
+      ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
+      WHERE ${appliedFilter.query}
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) = 1
+    ) deduped
+    ${outerOrderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`
       : `
     ${scoresCte}
