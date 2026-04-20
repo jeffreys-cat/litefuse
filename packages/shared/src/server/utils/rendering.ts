@@ -31,28 +31,39 @@ export const DEFAULT_RENDERING_PROPS: RenderingProps = {
  * Transform input/output fields based on rendering properties.
  */
 export const applyInputOutputRendering = (
-  io: string | null | undefined,
+  io: string | null | undefined | object,
   renderingProps: RenderingProps,
 ): JsonNested | string | null => {
   if (!io) return null;
-  let result: JsonNested | string = io;
+
+  // If io is an object (not a string), stringify it first
+  // This can happen when data comes from Doris JSON columns that return parsed objects
+  let result: JsonNested | string;
+  if (typeof io === "object" && io !== null) {
+    result = JSON.stringify(io);
+  } else {
+    result = io;
+  }
 
   if (
     renderingProps.truncated &&
-    io.length > env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
+    typeof result === "string" &&
+    result.length > env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
     result =
-      io.slice(0, env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT) + "...[truncated]";
+      result.slice(0, env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT) +
+      "...[truncated]";
   }
 
   if (
     renderingProps.truncated &&
-    io.length === env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
+    typeof result === "string" &&
+    result.length === env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
-    result = io + "...[truncated]";
+    result = result + "...[truncated]";
   }
 
-  return renderingProps.shouldJsonParse
+  return renderingProps.shouldJsonParse && typeof result === "string"
     ? (parseJsonPrioritised(result) ?? null)
     : result;
 };
