@@ -91,6 +91,15 @@ services:
       - "3030:3030"
     environment:
       <<: *langfuse-web-env
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: true
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_PREFIX: exports/
+      LANGFUSE_S3_BATCH_EXPORT_REGION: us-east-1
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: http://localhost:19090
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: true
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep 'node worker/dist/index.js' | grep -v grep || exit 1"]

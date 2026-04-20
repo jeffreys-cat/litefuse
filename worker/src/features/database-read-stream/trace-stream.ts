@@ -102,6 +102,8 @@ export const getTraceStream = async (props: {
     hasTracesJoin: false,
   });
 
+  // Doris doesn't have FINAL modifier or LIMIT 1 BY, so we use ROW_NUMBER() for deduplication
+  // Note: release is a Doris reserved word, so we use trace_release as alias
   const query = `
     WITH scores_agg AS (
       SELECT
@@ -130,7 +132,8 @@ export const getTraceStream = async (props: {
           string_value
       ) tmp
       GROUP BY project_id, trace_id
-    )
+    ),
+traces_with_rn AS (
       SELECT
         t.id as id,
         t.project_id as project_id,
@@ -138,7 +141,7 @@ export const getTraceStream = async (props: {
         t.name as name,
         t.user_id as user_id,
         t.session_id as session_id,
-        t.release as release,
+        t.\`release\` as \`release\`,
         t.version as version,
         t.environment as environment,
         t.tags as tags,
@@ -149,14 +152,36 @@ export const getTraceStream = async (props: {
         t.metadata as metadata,
         s.scores_avg as scores_avg,
         s.score_categories as score_categories,
-        s.score_categories_tuples as score_categories_tuples
+        s.score_categories_tuples as score_categories_tuples,
+        ROW_NUMBER() OVER (PARTITION BY t.id, t.project_id ORDER BY t.timestamp DESC) as rn
       FROM traces t
         LEFT JOIN scores_agg s ON s.trace_id = t.id AND s.project_id = t.project_id
       WHERE t.project_id = {projectId: String}
         ${appliedTracesFilter.query ? `AND ${appliedTracesFilter.query}` : ""}
         ${search.query}
-      LIMIT 1 BY id, project_id
-      LIMIT {rowLimit: Int64}
+    )
+    SELECT
+      id,
+      project_id,
+      timestamp,
+      name,
+      user_id,
+      session_id,
+      \`release\`,
+      version,
+      environment,
+      tags,
+      bookmarked,
+      public,
+      input,
+      output,
+      metadata,
+      scores_avg,
+      score_categories,
+      score_categories_tuples
+    FROM traces_with_rn
+    WHERE rn = 1
+    LIMIT {rowLimit: Int64}
     `;
 
   const asyncGenerator = queryDorisStream<{
