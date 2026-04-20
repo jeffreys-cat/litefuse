@@ -12,6 +12,7 @@ import {
 } from "../queries/doris-sql/factory";
 import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 
 export type SessionDataReturnType = {
   session_id: string;
@@ -385,25 +386,6 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     },
   });
 
-  // Doris MySQL protocol returns ARRAY columns as JSON strings, need to parse them
-  const parseArrayField = (
-    field: string[] | string | null | undefined,
-  ): string[] => {
-    if (Array.isArray(field))
-      return field.filter((v) => v !== null && v !== "");
-    if (typeof field === "string") {
-      try {
-        const parsed = JSON.parse(field);
-        return Array.isArray(parsed)
-          ? parsed.filter((v: unknown) => v !== null && v !== "")
-          : [];
-      } catch {
-        return field ? [field] : [];
-      }
-    }
-    return [];
-  };
-
   const parseDetailsField = (
     details: string | Record<string, number>,
   ): Record<string, number> => {
@@ -488,9 +470,9 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         session_usage_details: parseDetails(row.session_usage_details),
         session_cost_details: parseDetails(row.session_cost_details),
         // Ensure array fields are always arrays and filter out null values
-        trace_tags: parseArrayField(row.trace_tags as any),
-        user_ids: parseArrayField(row.user_ids as any),
-        trace_ids: parseArrayField(row.trace_ids as any),
+        trace_tags: parseDorisStringArray(row.trace_tags as any),
+        user_ids: parseDorisStringArray(row.user_ids as any),
+        trace_ids: parseDorisStringArray(row.trace_ids as any),
       } as SessionWithMetricsReturnType;
     });
 
@@ -505,39 +487,15 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           trace_tags: string[] | string | null;
         }
       >
-    ).map((row) => {
-      // Ensure trace_tags is always an array
-      let processedTraceTags: string[] = [];
-
-      if (Array.isArray(row.trace_tags)) {
-        processedTraceTags = row.trace_tags.filter(
-          (tag) => tag !== null && tag !== "",
-        );
-      } else if (typeof row.trace_tags === "string") {
-        try {
-          // Try to parse as JSON array
-          const parsed = JSON.parse(row.trace_tags);
-          processedTraceTags = Array.isArray(parsed)
-            ? parsed.filter((tag) => tag !== null && tag !== "")
-            : [row.trace_tags];
-        } catch {
-          // If parsing fails, treat as single tag
-          processedTraceTags = row.trace_tags ? [row.trace_tags] : [];
-        }
-      } else if (row.trace_tags == null) {
-        processedTraceTags = [];
-      } else {
-        // Convert any other type to empty array
-        processedTraceTags = [];
-      }
-
-      return {
-        ...row,
-        trace_tags: processedTraceTags,
-        user_ids: parseArrayField(row.user_ids as any),
-        trace_ids: parseArrayField(row.trace_ids as any),
-      } as SessionDataReturnType;
-    });
+    ).map(
+      (row) =>
+        ({
+          ...row,
+          trace_tags: parseDorisStringArray(row.trace_tags),
+          user_ids: parseDorisStringArray(row.user_ids),
+          trace_ids: parseDorisStringArray(row.trace_ids),
+        }) as SessionDataReturnType,
+    );
 
     return processedRes as T[];
   }

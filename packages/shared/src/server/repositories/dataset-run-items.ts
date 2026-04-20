@@ -15,6 +15,7 @@ import { DatasetRunItemRecord } from "./definitions";
 import Decimal from "decimal.js";
 import { convertDateToAnalyticsDateTime } from "./analytics";
 import { ScoreAggregate } from "../../features/scores";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 
 type DatasetItemIdsByTraceIdQuery = {
   projectId: string;
@@ -185,7 +186,9 @@ const convertDatasetRunsMetricsRecord = (
       : new Decimal(0),
     avgLatency: record.avg_latency_seconds ?? 0,
     aggScoresAvg: convertDorisScoresAvg(record.agg_scores_avg),
-    aggScoreCategories: record.agg_score_categories ?? [],
+    // Doris returns ARRAY columns as JSON-encoded strings; normalize so the
+    // declared string[] holds at runtime. See dorisArrays.ts.
+    aggScoreCategories: parseDorisStringArray(record.agg_score_categories),
   };
 };
 

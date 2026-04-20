@@ -23,6 +23,7 @@ import { SCORE_TO_TRACE_OBSERVATIONS_INTERVAL } from "./constants";
 import { ScoreRecordReadType } from "./definitions";
 import { _handleGetScoreById, _handleGetScoresByIds } from "./scores-utils";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 import { recordDistribution } from "../instrumentation";
 import { scoresColumnsTableUiColumnDefinitionsForDoris } from "../tableMappings/mapScoresColumnsTable";
 import { scoresTableCols } from "../../tableDefinitions/scoresTable";
@@ -763,9 +764,14 @@ export const getCategoricalScoresGroupedByName = async (
       LIMIT 1000;
     `;
 
+  // Doris ARRAY<STRING> columns (collect_set result) are transmitted over
+  // the MySQL protocol as JSON-formatted strings (e.g. '["cat1","cat2"]'),
+  // not as native arrays. mysql2 does not auto-parse these. Normalize here
+  // so the return type `values: string[]` holds at runtime and downstream
+  // callers (e.g. traces.tsx categorical filter) can safely iterate.
   const rows = await queryDoris<{
     label: string;
-    values: string[];
+    values: string | string[] | null;
   }>({
     query: query,
     params: {
@@ -780,7 +786,10 @@ export const getCategoricalScoresGroupedByName = async (
     },
   });
 
-  return rows;
+  return rows.map((row) => ({
+    label: row.label,
+    values: parseDorisStringArray(row.values),
+  }));
 };
 
 export const getScoresUiCount = async (props: {
@@ -1553,7 +1562,7 @@ export const getScoresForAnalyticsIntegrations = async function* (
       langfuse_project_id: projectId,
       langfuse_user_id: record.trace_user_id || "langfuse_unknown_user",
       langfuse_release: record.trace_release,
-      langfuse_tags: record.trace_tags,
+      langfuse_tags: parseDorisStringArray(record.trace_tags),
       langfuse_event_version: "1.0.0",
       $session_id: record.posthog_session_id ?? null,
       $set: {

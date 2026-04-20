@@ -18,6 +18,7 @@ import {
 import { env } from "../../env";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 import { logger } from "../logger";
 import {
   queryDoris,
@@ -1171,7 +1172,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
       langfuse_latency: record.latency,
       langfuse_release: record.release,
       langfuse_version: record.version,
-      langfuse_tags: record.tags,
+      langfuse_tags: parseDorisStringArray(record.tags),
       langfuse_event_version: "1.0.0",
       $session_id: record.posthog_session_id ?? null,
       $set: {
