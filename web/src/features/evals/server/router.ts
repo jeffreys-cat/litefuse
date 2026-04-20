@@ -1332,8 +1332,21 @@ export const evalRouter = createTRPCRouter({
         scope: "evalJobExecution:read",
       });
 
+      // Separate scoreValue filters from other filters since EVAL scores are stored in Doris, not PostgreSQL
+      // The LEFT JOIN in generateExecutionsQuery uses PostgreSQL scores table which doesn't have EVAL scores
+      const scoreValueFilters: typeof input.filter = [];
+      const otherFilters: typeof input.filter = [];
+
+      for (const f of input.filter) {
+        if (f.column === "scoreValue" && f.type === "number") {
+          scoreValueFilters.push(f);
+        } else {
+          otherFilters.push(f);
+        }
+      }
+
       const filterCondition = tableColumnsToSqlFilterAndPrefix(
-        input.filter,
+        otherFilters,
         evalExecutionsFilterCols,
         "job_executions",
       );
@@ -1398,11 +1411,52 @@ export const evalRouter = createTRPCRouter({
           ? await getScoresByIds(input.projectId, scoreIds)
           : [];
 
+      // Map scores to job executions
+      let executionsWithScores = jobExecutions.map((je) => ({
+        ...je,
+        score: scores.find((s) => s?.id === je.jobOutputScoreId),
+      }));
+
+      // Apply scoreValue filters in memory using Doris scores
+      if (scoreValueFilters.length > 0) {
+        const minFilter = scoreValueFilters.find(
+          (f) => f.operator === ">=" || f.operator === ">",
+        );
+        const maxFilter = scoreValueFilters.find(
+          (f) => f.operator === "<=" || f.operator === "<",
+        );
+
+        const minValue =
+          minFilter && typeof minFilter.value === "number"
+            ? minFilter.value
+            : null;
+        const maxValue =
+          maxFilter && typeof maxFilter.value === "number"
+            ? maxFilter.value
+            : null;
+
+        // Strict comparison for > vs >=
+        const minStrict = minFilter?.operator === ">" ? true : false;
+        const maxStrict = maxFilter?.operator === "<" ? true : false;
+
+        executionsWithScores = executionsWithScores.filter((je) => {
+          const scoreValue = je.score?.value;
+          if (typeof scoreValue !== "number") return false;
+
+          if (minValue !== null) {
+            if (minStrict ? scoreValue <= minValue : scoreValue < minValue)
+              return false;
+          }
+          if (maxValue !== null) {
+            if (maxStrict ? scoreValue >= maxValue : scoreValue > maxValue)
+              return false;
+          }
+          return true;
+        });
+      }
+
       return {
-        data: jobExecutions.map((je) => ({
-          ...je,
-          score: scores.find((s) => s?.id === je.jobOutputScoreId),
-        })),
+        data: executionsWithScores,
         totalCount: count.length > 0 ? Number(count[0]?.totalCount) : 0,
       };
     }),
