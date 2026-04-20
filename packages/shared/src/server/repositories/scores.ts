@@ -230,7 +230,7 @@ const formatMetadataSelect = (
   return [
     selectColumns.join(", "),
     includeHasMetadata
-      ? "CASE WHEN metadata IS NULL THEN 0 WHEN array_size(map_keys(metadata)) > 0 THEN 1 ELSE 0 END AS has_metadata"
+      ? "CASE WHEN metadata IS NOT NULL AND map_size(metadata) > 0 THEN 1 ELSE 0 END AS has_metadata"
       : null,
   ]
     .filter((s) => s != null)
@@ -380,7 +380,7 @@ export const getTraceScoresForDatasetRuns = async (
         s.string_value,
         s.comment,
         s.metadata,
-        CASE WHEN s.metadata IS NOT NULL AND length(s.metadata) > 0 THEN 1 ELSE 0 END as has_metadata,
+        CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END as has_metadata,
         s.timestamp
       FROM scores s
       INNER JOIN (
@@ -936,7 +936,7 @@ const getScoresUiGeneric = async <T>(props: {
           t.user_id,
           t.name as trace_name,
           t.tags as trace_tags
-          ${includeHasMetadataFlag ? ",CASE WHEN s.metadata IS NULL THEN 0 WHEN array_size(map_keys(s.metadata)) > 0 THEN 1 ELSE 0 END AS has_metadata" : ""}
+          ${includeHasMetadataFlag ? ",CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata" : ""}
         `;
 
   const { scoresFilter } = getDorisProjectIdDefaultFilter(projectId, {
@@ -952,7 +952,7 @@ const getScoresUiGeneric = async <T>(props: {
     props.select === "rows" || scoresFilter.some((f) => f.table === "traces");
 
   const query = `
-        SELECT 
+        SELECT
             ${dorisSelect}
         FROM scores s
         ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
@@ -1301,7 +1301,7 @@ export const getAggregatedScoresForPrompts = async (
         s.source,
         s.data_type,
         s.comment,
-        array_size(map_keys(s.metadata)) > 0 AS has_metadata
+        CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata
       FROM scores s LEFT JOIN observations o 
         ON o.trace_id = s.trace_id 
         AND o.project_id = s.project_id 
