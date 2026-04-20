@@ -36,18 +36,20 @@ export const applyInputOutputRendering = (
 ): JsonNested | string | null => {
   if (!io) return null;
 
-  // If io is an object (not a string), stringify it first
-  // This can happen when data comes from Doris JSON columns that return parsed objects
-  let result: JsonNested | string;
+  // If io is an object (not a string), return as-is when shouldJsonParse is false.
+  // This preserves the original object returned from Doris JSON columns.
+  // When shouldJsonParse is true, we stringify and re-parse to normalize.
   if (typeof io === "object" && io !== null) {
-    result = JSON.stringify(io);
-  } else {
-    result = io;
+    return renderingProps.shouldJsonParse
+      ? (parseJsonPrioritised(JSON.stringify(io)) ?? null)
+      : (io as JsonNested);
   }
+
+  // For string input, handle truncation
+  let result: string = io;
 
   if (
     renderingProps.truncated &&
-    typeof result === "string" &&
     result.length > env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
     result =
@@ -57,7 +59,6 @@ export const applyInputOutputRendering = (
 
   if (
     renderingProps.truncated &&
-    typeof result === "string" &&
     result.length === env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
     result = result + "...[truncated]";

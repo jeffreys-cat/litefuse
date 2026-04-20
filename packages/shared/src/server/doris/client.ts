@@ -157,6 +157,20 @@ export class DorisClient {
         timeout: this.config.timeout,
         connectTimeout: this.config.timeout,
         timezone: "+00:00", // Doris stores UTC timestamps, tell mysql2 to interpret them as UTC
+        // Handle JSON columns: try to parse, but return raw string on failure
+        // This handles cases where Doris stores non-JSON strings in variant columns
+        // (e.g., "[<truncated due to size exceeding limit>]")
+        typeCast: function (field: any, next: () => any) {
+          if (field.type === "JSON") {
+            const str = field.string("utf8");
+            try {
+              return JSON.parse(str);
+            } catch {
+              return str;
+            }
+          }
+          return next();
+        },
       };
       // Only add database to config if it's not empty
       if (this.config.database && this.config.database.trim() !== "") {
@@ -370,6 +384,7 @@ export class DorisClient {
       strip_outer_array: loadOptions.strip_outer_array.toString(),
       read_json_by_line: loadOptions.read_json_by_line.toString(),
       timeout: loadOptions.timeout.toString(),
+      timezone: "UTC",
     };
 
     // Convert data to JSON string
