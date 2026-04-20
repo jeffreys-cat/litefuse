@@ -107,38 +107,27 @@ export const getTraceStream = async (props: {
       SELECT
         project_id,
         trace_id,
-        -- For numeric scores, use tuples of (name, avg_value, data_type, string_value)
-        groupArrayIf(
-          tuple(name, avg_value, data_type, string_value),
-          data_type IN ('NUMERIC', 'BOOLEAN')
-        ) AS scores_avg,
-        -- concat encoding for hasAny filter compatibility
-        groupArrayIf(
-          concat(name, ':', string_value),
-          data_type = 'CATEGORICAL' AND notEmpty(string_value)
+        CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('name', name, 'value', avg_val, 'dataType', data_type, 'stringValue', COALESCE(string_value, ''))), ']') AS scores_avg,
+        GROUP_CONCAT(
+          DISTINCT CONCAT(name, ':', COALESCE(string_value, ''))
         ) AS score_categories,
-        -- tuple encoding for accurate output parsing (names may contain colons)
-        groupArrayIf(
-          tuple(name, string_value),
-          data_type = 'CATEGORICAL' AND notEmpty(string_value)
-        ) AS score_categories_tuples
+        CONCAT('[', GROUP_CONCAT(DISTINCT JSON_OBJECT('name', name, 'stringValue', string_value)), ']') AS score_categories_tuples
       FROM (
         SELECT
           project_id,
           trace_id,
           name,
+          avg(value) as avg_val,
           data_type,
-          string_value,
-          avg(value) as avg_value
-        FROM scores FINAL
+          string_value
+        FROM scores
         WHERE ${appliedScoresFilter.query}
         GROUP BY
           project_id,
           trace_id,
           name,
           data_type,
-          string_value,
-          execution_trace_id
+          string_value
       ) tmp
       GROUP BY project_id, trace_id
     )
@@ -186,16 +175,9 @@ export const getTraceStream = async (props: {
     input: unknown;
     output: unknown;
     metadata: unknown;
-    scores_avg:
-      | {
-          name: string;
-          avg_value: number;
-          data_type: ScoreDataTypeType;
-          string_value: string;
-        }[]
-      | undefined;
-    score_categories: string[] | undefined;
-    score_categories_tuples: [string, string | null][] | undefined;
+    scores_avg: string | undefined;
+    score_categories: string | undefined;
+    score_categories_tuples: string | undefined;
   }>({
     query,
     params: {
@@ -218,23 +200,27 @@ export const getTraceStream = async (props: {
     bufferedRow: Awaited<ReturnType<typeof asyncGenerator.next>>["value"],
     commentsByTrace: Map<string, any[]>,
   ) => {
-    // Process numeric/boolean scores (tuples from Doris)
-    const numericScores = (bufferedRow.scores_avg ?? []).map((score: any) => ({
-      name: score[0],
-      value: score[1],
-      dataType: score[2],
-      stringValue: score[3],
+    // Process numeric/boolean scores (JSON from Doris)
+    const numericScores = (
+      bufferedRow.scores_avg ? JSON.parse(bufferedRow.scores_avg) : []
+    ).map((score: any) => ({
+      name: score.name,
+      value: score.value,
+      dataType: score.dataType,
+      stringValue: score.stringValue,
     }));
 
-    // Process categorical scores (tuples from Doris)
-    const categoricalScores = (bufferedRow.score_categories_tuples ?? []).map(
-      (cat: [string, string | null]) => ({
-        name: cat[0],
-        value: null,
-        dataType: ScoreDataTypeEnum.CATEGORICAL,
-        stringValue: cat[1],
-      }),
-    );
+    // Process categorical scores (JSON from Doris)
+    const categoricalScores = (
+      bufferedRow.score_categories_tuples
+        ? JSON.parse(bufferedRow.score_categories_tuples)
+        : []
+    ).map((cat: any) => ({
+      name: cat.name,
+      value: null,
+      dataType: ScoreDataTypeEnum.CATEGORICAL,
+      stringValue: cat.stringValue,
+    }));
 
     const outputScores: Record<string, string[] | number[]> =
       prepareScoresForOutput([...numericScores, ...categoricalScores]);
