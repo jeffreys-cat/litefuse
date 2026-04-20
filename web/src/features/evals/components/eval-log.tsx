@@ -16,7 +16,7 @@ import { useSidebarFilterState } from "@/src/features/filters/hooks/useSidebarFi
 import { evalLogFilterConfig } from "@/src/features/filters/config/eval-logs-config";
 import { type RouterOutputs, api } from "@/src/utils/api";
 import { safeExtract } from "@/src/utils/map-utils";
-import { type Prisma } from "@langfuse/shared";
+import { type Prisma, JobExecutionStatus } from "@langfuse/shared";
 import { createColumnHelper } from "@tanstack/react-table";
 import { useQueryParams, withDefault, NumberParam } from "use-query-params";
 
@@ -51,7 +51,11 @@ export default function EvalLogTable({
 
   const queryFilter = useSidebarFilterState(
     evalLogFilterConfig,
-    {}, // No dynamic options needed - status options are in column definition
+    {
+      status: Object.values(JobExecutionStatus)
+        .filter((value) => value !== JobExecutionStatus.CANCELLED)
+        .map((value) => ({ value })),
+    },
     {
       loading: false,
       sessionFilterContextId: projectId,
