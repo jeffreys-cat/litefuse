@@ -170,8 +170,7 @@ export function TraceDetailView({
   const isLogViewVirtualized =
     observations.length >= TRACE_VIEW_CONFIG.logView.virtualizationThreshold;
 
-  // Scores feature is not supported in this build
-  const showScoresTab = false;
+  const showScoresTab = true;
 
   // Handle tab change
   const handleTabChange = (value: string) => {
@@ -186,6 +185,7 @@ export function TraceDetailView({
         observations={observations}
         parsedMetadata={parsedMetadata}
         projectId={projectId}
+        scores={scores}
         commentCount={comments.get(trace.id)}
         pendingSelection={pendingSelection}
         onSelectionUsed={handleSelectionUsed}
