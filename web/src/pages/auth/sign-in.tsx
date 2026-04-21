@@ -52,6 +52,11 @@ const credentialAuthForm = z.object({
   }),
 });
 
+const DEMO_CREDENTIALS = {
+  email: "demo@litefuse.ai",
+  password: "password",
+};
+
 // Also used in src/pages/auth/sign-up.tsx
 export type PageProps = {
   authProviders: {
@@ -91,6 +96,8 @@ export type PageProps = {
   runningOnHuggingFaceSpaces: boolean;
   signUpDisabled: boolean;
 };
+
+type CredentialsSubmitAction = "standard" | "demo";
 
 // Also used in src/pages/auth/sign-up.tsx
 
@@ -573,6 +580,8 @@ export default function SignIn({
     !authProviders.sso,
   );
   const [continueLoading, setContinueLoading] = useState<boolean>(false);
+  const [activeCredentialsAction, setActiveCredentialsAction] =
+    useState<CredentialsSubmitAction | null>(null);
   const [lastUsedAuthMethod, setLastUsedAuthMethod] =
     useLocalStorage<NextAuthProvider | null>(
       "langfuse_last_used_auth_method",
@@ -605,6 +614,14 @@ export default function SignIn({
       password: "",
     },
   });
+
+  async function submitCredentials(action: CredentialsSubmitAction) {
+    setActiveCredentialsAction(action);
+    await credentialsForm.handleSubmit(onCredentialsSubmit, () => {
+      setActiveCredentialsAction(null);
+    })();
+  }
+
   async function onCredentialsSubmit(
     values: z.infer<typeof credentialAuthForm>,
   ) {
@@ -640,7 +657,27 @@ export default function SignIn({
       captureException(error);
       console.error(error);
       setCredentialsFormError("An unexpected error occurred.");
+    } finally {
+      setActiveCredentialsAction(null);
     }
+  }
+
+  async function handleDemoSignIn() {
+    setShowPasswordStep(true);
+    setCredentialsFormError(null);
+    credentialsForm.clearErrors();
+    credentialsForm.setValue("email", DEMO_CREDENTIALS.email, {
+      shouldDirty: true,
+      shouldTouch: true,
+      shouldValidate: true,
+    });
+    credentialsForm.setValue("password", DEMO_CREDENTIALS.password, {
+      shouldDirty: true,
+      shouldTouch: true,
+      shouldValidate: true,
+    });
+
+    await submitCredentials("demo");
   }
 
   /**
@@ -754,7 +791,10 @@ export default function SignIn({
                     className="space-y-6"
                     onSubmit={
                       showPasswordStep
-                        ? credentialsForm.handleSubmit(onCredentialsSubmit)
+                        ? (e) => {
+                            e.preventDefault();
+                            void submitCredentials("standard");
+                          }
                         : (e) => {
                             e.preventDefault();
                             void handleContinue();
@@ -814,7 +854,8 @@ export default function SignIn({
                       className="w-full"
                       loading={
                         showPasswordStep
-                          ? credentialsForm.formState.isSubmitting
+                          ? credentialsForm.formState.isSubmitting &&
+                            activeCredentialsAction === "standard"
                           : continueLoading
                       }
                       disabled={
@@ -825,6 +866,19 @@ export default function SignIn({
                       data-testid="submit-email-password-sign-in-form"
                     >
                       {showPasswordStep ? "Sign in" : "Continue"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => void handleDemoSignIn()}
+                      loading={
+                        credentialsForm.formState.isSubmitting &&
+                        activeCredentialsAction === "demo"
+                      }
+                      disabled={continueLoading}
+                    >
+                      Sign as Demo
                     </Button>
                   </form>
                 </Form>
