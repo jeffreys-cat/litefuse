@@ -23,7 +23,7 @@ events.csv ──► replay script ──► POST /api/admin/ingestion-replay
 - **Athena** configured to query the access logs (see [Initial setup](#1-initial-setup-one-time))
 - **Node.js 18+** with `npx tsx` available (no repo clone or `pnpm` needed)
 - **`events.csv`** exported from Athena (see [Export events](#2-export-events-from-athena))
-- **`LANGFUSE_HOST`** URL of the target Langfuse instance (e.g. `https://cloud.langfuse.com`)
+- **`LANGFUSE_HOST`** URL of the target Langfuse instance (e.g. `https://cloud.litefuse.ai`)
 - **`ADMIN_API_KEY`** for authenticating against the admin API
 - Network access from your machine to the Langfuse host
 
@@ -137,33 +137,33 @@ Download the result as CSV. The expected format:
 
 Two S3 key formats are supported:
 
-| Format | Pattern | Target queue |
-|--------|---------|-------------|
-| Standard | `{projectId}/{type}/{eventBodyId}/{eventId}.json` | `IngestionSecondaryQueue` |
-| OTEL | `otel/{projectId}/{yyyy}/{mm}/{dd}/{hh}/{mm}/{eventId}.json` | `OtelIngestionQueue` |
+| Format   | Pattern                                                      | Target queue              |
+| -------- | ------------------------------------------------------------ | ------------------------- |
+| Standard | `{projectId}/{type}/{eventBodyId}/{eventId}.json`            | `IngestionSecondaryQueue` |
+| OTEL     | `otel/{projectId}/{yyyy}/{mm}/{dd}/{hh}/{mm}/{eventId}.json` | `OtelIngestionQueue`      |
 
 Keys that don't match either pattern are skipped and logged.
 
 ## 3. Run the replay script
 
 ```bash
-LANGFUSE_HOST=https://cloud.langfuse.com \
+LANGFUSE_HOST=https://cloud.litefuse.ai \
 ADMIN_API_KEY=your-admin-api-key \
 npx tsx replay.ts --file events.csv
 ```
 
 ## Configuration
 
-| Flag / env var | Default | Description |
-|----------------|---------|-------------|
-| `--file` | `events.csv` | Path to the CSV file |
-| `--batch-size` | `500` | Number of keys per API request |
-| `--concurrency` | `4` | Maximum parallel API requests |
-| `--rate-limit` | `50` | Maximum requests per second |
-| `--dry-run` | `false` | Parse and validate without sending requests |
-| `--resume` | `false` | Resume from the last checkpoint (skips already-processed rows) |
-| `LANGFUSE_HOST` | - | Target Langfuse instance URL (required) |
-| `ADMIN_API_KEY` | - | Admin API key for authentication (required) |
+| Flag / env var  | Default      | Description                                                    |
+| --------------- | ------------ | -------------------------------------------------------------- |
+| `--file`        | `events.csv` | Path to the CSV file                                           |
+| `--batch-size`  | `500`        | Number of keys per API request                                 |
+| `--concurrency` | `4`          | Maximum parallel API requests                                  |
+| `--rate-limit`  | `50`         | Maximum requests per second                                    |
+| `--dry-run`     | `false`      | Parse and validate without sending requests                    |
+| `--resume`      | `false`      | Resume from the last checkpoint (skips already-processed rows) |
+| `LANGFUSE_HOST` | -            | Target Langfuse instance URL (required)                        |
+| `ADMIN_API_KEY` | -            | Admin API key for authentication (required)                    |
 
 ## Admin API endpoint
 
@@ -194,12 +194,12 @@ Accepts a batch of S3 keys and enqueues them for reprocessing.
 }
 ```
 
-| Status | Meaning |
-|--------|---------|
-| `200` | Batch accepted (check `skipped`/`errors` for partial failures) |
-| `401` | Missing or invalid `ADMIN_API_KEY` |
-| `400` | Malformed request body |
-| `429` | Rate limited, retry after backoff |
+| Status | Meaning                                                        |
+| ------ | -------------------------------------------------------------- |
+| `200`  | Batch accepted (check `skipped`/`errors` for partial failures) |
+| `401`  | Missing or invalid `ADMIN_API_KEY`                             |
+| `400`  | Malformed request body                                         |
+| `429`  | Rate limited, retry after backoff                              |
 
 ## Event transformation
 
@@ -249,10 +249,10 @@ Enqueued to `OtelIngestionQueue`.
 
 ## Differences from v1
 
-| | v1 | v2 |
-|-|----|----|
-| Infrastructure access | Redis, ClickHouse, PostgreSQL, S3 | Langfuse host URL only |
-| Setup | Full repo clone, `pnpm install`, `.env` file | `npx tsx` + env vars |
-| Event delivery | Direct BullMQ `addBulk` to Redis | HTTP POST to admin API |
-| Resume support | Manual (split files, rerun) | Built-in checkpoint/resume |
-| Rate limiting | None (can overwhelm Redis) | Client-side + server-side rate limiting |
+|                       | v1                                           | v2                                      |
+| --------------------- | -------------------------------------------- | --------------------------------------- |
+| Infrastructure access | Redis, ClickHouse, PostgreSQL, S3            | Langfuse host URL only                  |
+| Setup                 | Full repo clone, `pnpm install`, `.env` file | `npx tsx` + env vars                    |
+| Event delivery        | Direct BullMQ `addBulk` to Redis             | HTTP POST to admin API                  |
+| Resume support        | Manual (split files, rerun)                  | Built-in checkpoint/resume              |
+| Rate limiting         | None (can overwhelm Redis)                   | Client-side + server-side rate limiting |

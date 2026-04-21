@@ -29,7 +29,7 @@ export function CloudStatusMenu() {
   return (
     <SidebarMenuButton asChild tooltip="Status">
       <Link
-        href="https://status.langfuse.com"
+        href="https://status.langfuse.ai"
         target="_blank"
         rel="noopener noreferrer"
       >

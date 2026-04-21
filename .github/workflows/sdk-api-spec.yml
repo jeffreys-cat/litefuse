@@ -47,7 +47,7 @@ jobs:
           cd ../langfuse-python
 
           git config user.name "langfuse-bot"
-          git config user.email "langfuse-bot@langfuse.com"
+          git config user.email "langfuse-bot@litefuse.ai"
           echo "$GH_ACCESS_TOKEN" | gh auth login --with-token
           gh auth setup-git
 
@@ -100,7 +100,7 @@ jobs:
 
           # Configure git
           git config user.name "langfuse-bot"
-          git config user.email "langfuse-bot@langfuse.com"
+          git config user.email "langfuse-bot@litefuse.ai"
           echo "$GH_ACCESS_TOKEN" | gh auth login --with-token
           gh auth setup-git
 

@@ -734,7 +734,7 @@ export default function SignIn({
             If you are experiencing issues signing in, please force refresh this
             page (CMD + SHIFT + R) or clear your browser cache.{" "}
             <a
-              href="mailto:support@langfuse.com"
+              href="mailto:support@litefuse.ai"
               className="text-primary-accent hover:text-hover-primary-accent cursor-pointer text-xs font-medium whitespace-nowrap"
             >
               (contact us)

@@ -45,9 +45,9 @@ export const cloudStatusRouter = createTRPCRouter({
       }
 
       try {
-        // incident.io widget API for status.langfuse.com
+        // incident.io widget API for status.langfuse.ai
         const response = await fetch(
-          "https://status.langfuse.com/api/v1/summary",
+          "https://status.langfuse.ai/api/v1/summary",
         );
 
         if (!response.ok) {

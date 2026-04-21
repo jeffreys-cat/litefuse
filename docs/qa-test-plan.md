@@ -365,7 +365,7 @@ def compare_api_response(doris_resp, ck_resp, config):
 
 - langfuse-doris 环境已启动（`pnpm run dev`）
 - 已通过 SDK 写入足够的测试数据（来自第一部分）
-- 使用 demo 账号登录：`demo@langfuse.com` / `password`
+- 使用 demo 账号登录：`demo@litefuse.ai` / `password`
 - 打开浏览器开发者工具 Network + Console 面板，监控接口报错
 
 ### 3.3 测试用例

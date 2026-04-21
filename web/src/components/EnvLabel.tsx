@@ -8,7 +8,7 @@ export const EnvLabel = ({ className }: { className?: string }) => {
   const session = useSession();
   const { isLangfuseCloud, region } = useLangfuseCloudRegion();
   if (!isLangfuseCloud) return null;
-  if (!session.data?.user?.email?.endsWith("@langfuse.com")) return null;
+  if (!session.data?.user?.email?.endsWith("@langfuse.ai")) return null;
   if (isHidden) return null;
   return (
     <div

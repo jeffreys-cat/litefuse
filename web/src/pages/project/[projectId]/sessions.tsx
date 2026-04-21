@@ -53,7 +53,7 @@ export default function Sessions() {
               conversation or thread. To begin, add a sessionId to the trace.
               See{" "}
               <a
-                href="https://langfuse.com/docs/observability/features/sessions"
+                href="https://litefuse.ai/docs/observability/features/sessions"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="decoration-primary/30 hover:decoration-primary underline"
@@ -64,7 +64,7 @@ export default function Sessions() {
               to learn more.
             </>
           ),
-          href: "https://langfuse.com/docs/observability/features/sessions",
+          href: "https://litefuse.ai/docs/observability/features/sessions",
         },
       }}
       scrollable={showOnboarding}

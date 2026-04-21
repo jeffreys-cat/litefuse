@@ -14,7 +14,7 @@ We welcome contributions through GitHub pull requests. This document outlines ou
 
 We gratefully welcome improvements to documentation ([docs repo](https://github.com/selectdb/langfuse-doris-docs)), the core application (this repo) and the SDKs ([Python](https://github.com/selectdb/langfuse-doris-python), [JS](https://github.com/selectdb/langfuse-doris-js)).
 
-The maintainers are available on [Discord](https://langfuse.com/discord) in case you have any questions.
+The maintainers are available on [Discord](https://litefuse.ai/discord) in case you have any questions.
 
 > And if you like the project, but just don't have time to contribute code, that's fine. There are other easy ways to support the project and show your appreciation, which we would also be very happy about:
 >
@@ -57,7 +57,7 @@ We recommend checking out DeepWiki to familiarize yourself with the project:
 
 ### Architecture Overview
 
-See this [diagram](https://langfuse.com/self-hosting#architecture) for an overview of the architecture.
+See this [diagram](https://litefuse.ai/self-hosting#architecture) for an overview of the architecture.
 
 ### Network Overview
 
@@ -197,7 +197,7 @@ Notes:
    - [Demo project, http://localhost:3000/project/7a88fb47-b4e2-43b8-a06c-a5ce950dc53a](http://localhost:3000/project/7a88fb47-b4e2-43b8-a06c-a5ce950dc53a)
 
 7. Log in as a test user:
-   - Username: `demo@langfuse.com`
+   - Username: `demo@litefuse.ai`
    - Password: `password`
 
 To get comprehensive example data, you can use the `seed` command:
@@ -332,14 +332,14 @@ CD on `main`
 
 ## Staging environment
 
-We run a staging environment at [https://staging.langfuse.com](https://staging.langfuse.com) that is automatically deployed on every push to `main` branch.
+We run a staging environment at [https://staging.litefuse.ai](https://staging.litefuse.ai) that is automatically deployed on every push to `main` branch.
 
 The same environment is also used for preview deployments of pull requests. Limitations:
 
 - SSO is not available as dynamic domains are not supported by most SSO providers.
 - When making changes to the database, migrations to the staging database need to be applied manually by a maintainer. If you want to interactively test database changes in the staging environment, please reach out.
 
-You can use the staging environment end-to-end with the Langfuse integrations or SDKs (host: `https://staging.langfuse.com`). However, please note that the staging environment is not intended for production use and may be reset at any time.
+You can use the staging environment end-to-end with the Langfuse integrations or SDKs (host: `https://staging.litefuse.ai`). However, please note that the staging environment is not intended for production use and may be reset at any time.
 
 ## Production environment
 
@@ -473,6 +473,6 @@ npx fern-api generate --api organizations  # for the organizations API
 
 ## License
 
-Langfuse is MIT licensed, except for `ee/` folder. See [LICENSE](LICENSE) and [docs](https://langfuse.com/docs/open-source) for more details.
+Langfuse is MIT licensed, except for `ee/` folder. See [LICENSE](LICENSE) and [docs](https://litefuse.ai/docs/open-source) for more details.
 
 When contributing to the Langfuse codebase, you need to agree to the [Contributor License Agreement](https://cla-assistant.io/langfuse/langfuse). You only need to do this once and the CLA bot will remind you if you haven't signed it yet.

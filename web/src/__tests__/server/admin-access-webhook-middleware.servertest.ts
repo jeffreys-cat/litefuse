@@ -40,7 +40,7 @@ const createAdminSession = (
   expires: "1",
   user: {
     id: "admin-user-id",
-    email: "admin@langfuse.com",
+    email: "admin@litefuse.ai",
     canCreateOrganizations: true,
     name: "Admin User",
     organizations: [
@@ -156,7 +156,7 @@ describe("admin access webhook in tRPC authorization middleware", () => {
     const request = fetchSpy.mock.calls[0]?.[1] as RequestInit;
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
-      email: "admin@langfuse.com",
+      email: "admin@litefuse.ai",
       project: projectId,
       org: orgId,
     });
@@ -178,7 +178,7 @@ describe("admin access webhook in tRPC authorization middleware", () => {
     const request = fetchSpy.mock.calls[0]?.[1] as RequestInit;
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
-      email: "admin@langfuse.com",
+      email: "admin@litefuse.ai",
       project: projectId,
       org: null,
     });
@@ -210,7 +210,7 @@ describe("admin access webhook in tRPC authorization middleware", () => {
     const request = fetchSpy.mock.calls[0]?.[1] as RequestInit;
     const payload = JSON.parse(String(request.body));
     expect(payload).toMatchObject({
-      email: "admin@langfuse.com",
+      email: "admin@litefuse.ai",
       project: projectId,
       org: null,
     });

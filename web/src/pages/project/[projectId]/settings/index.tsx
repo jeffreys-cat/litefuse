@@ -292,7 +292,7 @@ const Integrations = (props: { projectId: string }) => {
             </ActionButton>
             <Button asChild variant="ghost">
               <Link
-                href="https://langfuse.com/integrations/analytics/posthog"
+                href="https://litefuse.ai/integrations/analytics/posthog"
                 target="_blank"
               >
                 Integration Docs ↗
@@ -317,7 +317,7 @@ const Integrations = (props: { projectId: string }) => {
             </ActionButton>
             <Button asChild variant="ghost">
               <Link
-                href="https://langfuse.com/integrations/analytics/mixpanel"
+                href="https://litefuse.ai/integrations/analytics/mixpanel"
                 target="_blank"
               >
                 Integration Docs ↗
@@ -344,7 +344,7 @@ const Integrations = (props: { projectId: string }) => {
             </ActionButton>
             <Button asChild variant="ghost">
               <Link
-                href="https://langfuse.com/docs/query-traces#blob-storage"
+                href="https://litefuse.ai/docs/query-traces#blob-storage"
                 target="_blank"
               >
                 Integration Docs ↗
