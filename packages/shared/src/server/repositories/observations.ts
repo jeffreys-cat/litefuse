@@ -771,7 +771,7 @@ const getObservationsTableInternal = async <T>(
   );
 
   const hasScoresFilter = filter.some((f) =>
-    f.column.toLowerCase().includes("scores"),
+    f.column.toLowerCase().includes("score"),
   );
 
   const orderByTraces = opts.orderBy

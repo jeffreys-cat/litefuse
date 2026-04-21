@@ -287,4 +287,16 @@ export const sessionColsForDoris: UiColumnMappings = [
     tableName: "traces",
     select: "session_id",
   },
+  {
+    uiTableName: "Scores (numeric)",
+    uiTableId: "scores_avg",
+    tableName: "scores",
+    select: "scores_avg",
+  },
+  {
+    uiTableName: "Scores (categorical)",
+    uiTableId: "score_categories",
+    tableName: "scores",
+    select: "score_categories",
+  },
 ];

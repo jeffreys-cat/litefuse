@@ -236,6 +236,13 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
 
   const selectMetrics = select === "metrics" || hasMetricsFilter;
 
+  const requiresScoresJoin =
+    tracesFilter.find((f) => f.table === "scores") !== undefined ||
+    sessionColsForDoris.find(
+      (c) =>
+        c.uiTableName === orderBy?.column || c.uiTableId === orderBy?.column,
+    )?.tableName === "scores";
+
   const dorisOrderBy = orderByToDorisSQL(
     orderBy ? [orderBy] : null,
     sessionColsForDoris,
@@ -310,6 +317,34 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           LATERAL VIEW EXPLODE_OUTER(t.tags) tag_exploded AS tag
           GROUP BY t.session_id
         ),
+        ${
+          requiresScoresJoin
+            ? `scores_agg AS (
+          SELECT
+            score_session_id,
+            any_value(project_id) as project_id,
+            collect_list(CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN
+              struct(name, avg_value) END) AS scores_avg,
+            collect_list(CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN
+              CONCAT(name, ':', string_value) ELSE NULL END) AS score_categories
+          FROM (
+            SELECT
+              t.session_id AS score_session_id,
+              s.project_id,
+              s.name,
+              avg(s.value) avg_value,
+              s.string_value,
+              s.data_type
+            FROM scores s
+            INNER JOIN filtered_traces t ON t.id = s.trace_id AND t.project_id = s.project_id
+            WHERE s.project_id = {projectId: String}
+              ${traceTimestampFilter ? `AND s.timestamp >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
+            GROUP BY t.session_id, s.project_id, s.name, s.string_value, s.data_type
+          ) tmp
+          GROUP BY score_session_id
+        ),`
+            : ""
+        }
         session_data AS (
             SELECT
                 t.session_id,
@@ -342,11 +377,24 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 sum(o.sum_total_usage) as session_total_usage`
                     : ""
                 }
+                ${
+                  requiresScoresJoin
+                    ? `,
+                any_value(sc.scores_avg) as scores_avg,
+                any_value(sc.score_categories) as score_categories`
+                    : ""
+                }
             FROM filtered_traces t
             ${
               selectMetrics
                 ? `LEFT JOIN observations_agg o
             ON t.id = o.trace_id AND t.project_id = o.project_id`
+                : ""
+            }
+            ${
+              requiresScoresJoin
+                ? `LEFT JOIN scores_agg sc
+            ON sc.score_session_id = t.session_id AND sc.project_id = t.project_id`
                 : ""
             }
             WHERE t.session_id IS NOT NULL
