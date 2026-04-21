@@ -728,7 +728,9 @@ const getObservationsTableInternal = async <T>(
         o.prompt_version as prompt_version,
         internal_model_id as internal_model_id,
         if(isNull(end_time), NULL, milliseconds_diff(end_time,start_time)) as latency,
-        if(isNull(completion_start_time), NULL,  milliseconds_diff(completion_start_time,start_time)) as time_to_first_token`;
+        if(isNull(completion_start_time), NULL,  milliseconds_diff(completion_start_time,start_time)) as time_to_first_token,
+        ifnull(map_size(o.tool_definitions), 0) as tool_definitions_count,
+        ifnull(size(o.tool_calls), 0) as tool_calls_count`;
 
   const { projectId, filter, selectIOAndMetadata, limit, offset, orderBy } =
     opts;
