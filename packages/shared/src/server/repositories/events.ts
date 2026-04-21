@@ -405,7 +405,7 @@ async function getObservationsFromEventsTableInternal<T>(
   });
 
   const hasScoresFilter = filter.some((f) =>
-    f.column.toLowerCase().includes("scores"),
+    f.column.toLowerCase().includes("score"),
   );
 
   // Build the base select for observations
