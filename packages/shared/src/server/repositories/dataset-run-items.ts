@@ -622,11 +622,15 @@ const getQualifyingDatasetItems = async <T>(opts: {
     const { runId, filters: filterState } = runFilter;
 
     // Create run ID condition
+    // tablePrefix "dri" is required: the outer run_qualified_items CTE joins
+    // scores_aggregated (aliased "sa"), which also exposes dataset_run_id, so
+    // an unqualified reference here becomes ambiguous under Doris Nereids.
     const runConditionFilter = new DorisStringFilter({
       table: "dataset_run_items",
       field: "dataset_run_id",
       operator: "=",
       value: runId,
+      tablePrefix: "dri",
     });
 
     // Create user filters for this run
@@ -652,6 +656,7 @@ const getQualifyingDatasetItems = async <T>(opts: {
         field: "dataset_run_id",
         operator: "=",
         value: runId,
+        tablePrefix: "dri",
       }),
     ]);
     runFilterResults.push(runConditionFilter.apply());
