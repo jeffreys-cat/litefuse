@@ -42,8 +42,8 @@ export function PromptSelectionDialog({
   const [selectedVersionOrLabel, setSelectedVersionOrLabel] =
     useState<string>("");
 
-  const copySelectedTag = useCallback(() => {
-    copyTextToClipboard(selectedTag);
+  const copySelectedTag = useCallback(async () => {
+    await copyTextToClipboard(selectedTag);
   }, [selectedTag]);
 
   useEffect(() => {
@@ -88,15 +88,15 @@ export function PromptSelectionDialog({
     (option) => option.name === selectedPromptName,
   );
 
-  const handleConfirm = useCallback(() => {
+  const handleConfirm = useCallback(async () => {
     if (!selectedTag) return;
     if (onSelect) {
       onSelect(selectedTag);
     } else {
-      copySelectedTag();
+      await copyTextToClipboard(selectedTag);
     }
     onClose();
-  }, [copySelectedTag, selectedTag, onSelect, onClose]);
+  }, [selectedTag, onSelect, onClose]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>

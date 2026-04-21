@@ -600,6 +600,7 @@ export const scoresRouter = createTRPCRouter({
         created_at: convertDateToAnalyticsDateTime(score.createdAt),
         updated_at: convertDateToAnalyticsDateTime(score.updatedAt),
         metadata: score.metadata as Record<string, string>,
+        is_deleted: 0,
       });
 
       await auditLog({
@@ -723,6 +724,7 @@ export const scoresRouter = createTRPCRouter({
           created_at: convertDateToAnalyticsDateTime(new Date()),
           updated_at: convertDateToAnalyticsDateTime(new Date()),
           metadata: {},
+          is_deleted: 0,
         });
 
         const baseScore = {
@@ -826,6 +828,7 @@ export const scoresRouter = createTRPCRouter({
           created_at: convertDateToAnalyticsDateTime(score.createdAt),
           updated_at: convertDateToAnalyticsDateTime(score.updatedAt),
           metadata: score.metadata as Record<string, string>,
+          is_deleted: 0,
         });
 
         const baseScore = {
@@ -1012,6 +1015,7 @@ export const scoresRouter = createTRPCRouter({
         updated_at: convertDateToAnalyticsDateTime(score.updatedAt),
         metadata: score.metadata as Record<string, string>,
         long_string_value: input.value,
+        is_deleted: 0,
       });
 
       await auditLog({
