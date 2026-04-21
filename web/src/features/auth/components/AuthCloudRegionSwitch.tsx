@@ -23,7 +23,7 @@ const regions =
     ? [
         {
           name: "STAGING",
-          hostname: "staging.langfuse.com",
+          hostname: "staging.litefuse.ai",
           flag: "🇪🇺",
         },
       ]
@@ -39,39 +39,39 @@ const regions =
         ? [
             {
               name: "JP",
-              hostname: "jp.cloud.langfuse.com",
+              hostname: "jp.cloud.litefuse.ai",
               flag: "️🇯🇵",
             },
             {
               name: "US",
-              hostname: "us.cloud.langfuse.com",
+              hostname: "us.cloud.litefuse.ai",
               flag: "🇺🇸",
             },
             {
               name: "EU",
-              hostname: "cloud.langfuse.com",
+              hostname: "cloud.litefuse.ai",
               flag: "🇪🇺",
             },
             {
               name: "HIPAA",
-              hostname: "hipaa.cloud.langfuse.com",
+              hostname: "hipaa.cloud.litefuse.ai",
               flag: "⚕️",
             },
           ]
         : [
             {
               name: "US",
-              hostname: "us.cloud.langfuse.com",
+              hostname: "us.cloud.litefuse.ai",
               flag: "🇺🇸",
             },
             {
               name: "EU",
-              hostname: "cloud.langfuse.com",
+              hostname: "cloud.litefuse.ai",
               flag: "🇪🇺",
             },
             {
               name: "HIPAA",
-              hostname: "hipaa.cloud.langfuse.com",
+              hostname: "hipaa.cloud.litefuse.ai",
               flag: "⚕️",
             },
           ];
@@ -140,7 +140,7 @@ export function CloudRegionSwitch({
               The Business Associate Agreement (BAA) is only effective on the
               Cloud Pro and Teams plans.{" "}
               <a
-                href="https://langfuse.com/security/hipaa"
+                href="https://litefuse.ai/security/hipaa"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary-accent hover:text-hover-primary-accent underline"
@@ -194,7 +194,7 @@ const DataRegionInfo = () => (
           <p>
             Learn more about{" "}
             <a
-              href="https://langfuse.com/security/data-regions"
+              href="https://litefuse.ai/security/data-regions"
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary-accent underline"
@@ -203,7 +203,7 @@ const DataRegionInfo = () => (
             </a>{" "}
             and{" "}
             <a
-              href="https://langfuse.com/docs/data-security-privacy"
+              href="https://litefuse.ai/docs/data-security-privacy"
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary-accent underline"

@@ -247,7 +247,7 @@ export const NewPromptForm: React.FC<NewPromptFormProps> = (props) => {
                       <a
                         target="_blank"
                         rel="noopener noreferrer"
-                        href="https://langfuse.com/docs/prompt-management/get-started#prompt-folders-for-organization"
+                        href="https://litefuse.ai/docs/prompt-management/get-started#prompt-folders-for-organization"
                       >
                         <i>folders</i>
                       </a>

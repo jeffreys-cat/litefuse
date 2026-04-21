@@ -6,11 +6,11 @@ import MembershipInvitationTemplate from "./MembershipInvitationEmailTemplate";
 import { logger } from "../../../logger";
 
 const langfuseUrls = {
-  US: "https://us.cloud.langfuse.com",
-  EU: "https://cloud.langfuse.com",
-  STAGING: "https://staging.langfuse.com",
-  HIPAA: "https://hipaa.cloud.langfuse.com",
-  JP: "https://jp.cloud.langfuse.com",
+  US: "https://us.cloud.litefuse.ai",
+  EU: "https://cloud.litefuse.ai",
+  STAGING: "https://staging.litefuse.ai",
+  HIPAA: "https://hipaa.cloud.litefuse.ai",
+  JP: "https://jp.cloud.litefuse.ai",
 };
 
 type SendMembershipInvitationParams = {

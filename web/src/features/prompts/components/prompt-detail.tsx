@@ -293,7 +293,7 @@ export const PromptDetail = ({
         help: {
           description:
             "You can use this prompt within your application through the Langfuse SDKs and integrations. Refer to the documentation for more information.",
-          href: "https://langfuse.com/docs/prompts",
+          href: "https://litefuse.ai/docs/prompts",
         },
         breadcrumb: [
           {
@@ -590,7 +590,7 @@ export const PromptDetail = ({
                 <p className="text-muted-foreground pl-1 text-xs">
                   See{" "}
                   <a
-                    href="https://langfuse.com/docs/prompts"
+                    href="https://litefuse.ai/docs/prompts"
                     className="underline"
                     target="_blank"
                     rel="noopener noreferrer"

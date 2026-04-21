@@ -53,13 +53,13 @@ async function main() {
     where: { id: seedUserId1 },
     update: {
       name: "Demo User",
-      email: "demo@langfuse.com",
+      email: "demo@litefuse.ai",
       password: await hash("password", 12),
     },
     create: {
       id: seedUserId1,
       name: "Demo User",
-      email: "demo@langfuse.com",
+      email: "demo@litefuse.ai",
       password: await hash("password", 12),
       image: "https://static.langfuse.com/langfuse-dev%2Fexample-avatar.png",
     },
@@ -68,13 +68,13 @@ async function main() {
     where: { id: seedUserId2 },
     update: {
       name: "Demo User 2",
-      email: "member@langfuse.com",
+      email: "member@litefuse.ai",
       password: await hash("password", 12),
     },
     create: {
       id: seedUserId2,
       name: "Demo User 2",
-      email: "member@langfuse.com",
+      email: "member@litefuse.ai",
       password: await hash("password", 12),
     },
   });

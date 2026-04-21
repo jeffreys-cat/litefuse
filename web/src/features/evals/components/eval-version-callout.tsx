@@ -40,7 +40,7 @@ const getCalloutContent = (
           Python SDK v3+. You can still configure this evaluator now—it will
           start running once you upgrade.{" "}
           <a
-            href="https://langfuse.com/docs/observability/sdk/upgrade-path"
+            href="https://litefuse.ai/docs/observability/sdk/upgrade-path"
             target="_blank"
             rel="noopener noreferrer"
             className="text-dark-blue font-medium hover:opacity-80"
@@ -65,7 +65,7 @@ const getCalloutContent = (
             You can still configure this evaluator now—it will start running
             once you upgrade.{" "}
             <a
-              href="https://langfuse.com/docs/evaluation/experiments/experiments-via-sdk#experiment-runner-sdk"
+              href="https://litefuse.ai/docs/evaluation/experiments/experiments-via-sdk#experiment-runner-sdk"
               target="_blank"
               rel="noopener noreferrer"
               className="text-dark-blue font-medium hover:opacity-80"
@@ -93,7 +93,7 @@ const getCalloutContent = (
           upgrading to the Experiment Runner SDK for improved performance and
           features.{" "}
           <a
-            href="https://langfuse.com/docs/evaluation/experiments/experiments-via-sdk#experiment-runner-sdk"
+            href="https://litefuse.ai/docs/evaluation/experiments/experiments-via-sdk#experiment-runner-sdk"
             target="_blank"
             rel="noopener noreferrer"
             className="text-dark-blue font-medium hover:opacity-80"
@@ -116,7 +116,7 @@ const getCalloutContent = (
           Observation evaluators provide more granular control and an easier
           workflow. We strongly recommend upgrading to observation evaluators.{" "}
           <a
-            href="https://langfuse.com/faq/all/llm-as-a-judge-migration"
+            href="https://litefuse.ai/faq/all/llm-as-a-judge-migration"
             target="_blank"
             rel="noopener noreferrer"
             className="text-dark-blue font-medium hover:opacity-80"

@@ -90,7 +90,7 @@ export function DatasetVersionHistoryPanel({
 
   const openDocumentation = () => {
     window.open(
-      "https://langfuse.com/docs/datasets/dataset-versioning",
+      "https://litefuse.ai/docs/datasets/dataset-versioning",
       "_blank",
     );
   };

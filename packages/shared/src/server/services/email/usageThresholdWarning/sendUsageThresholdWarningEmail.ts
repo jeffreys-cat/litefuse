@@ -60,7 +60,7 @@ export const sendUsageThresholdWarningEmail = async ({
         address: env.EMAIL_FROM_ADDRESS,
         name: "Langfuse",
       },
-      replyTo: "support@langfuse.com",
+      replyTo: "support@litefuse.ai",
       subject: emailSubject,
       html: emailHtml,
     };

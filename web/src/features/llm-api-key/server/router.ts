@@ -174,7 +174,7 @@ export const llmApiKeyRouter = createTRPCRouter({
             throw new TRPCError({
               code: "BAD_REQUEST",
               message:
-                "Missing environment variable: `ENCRYPTION_KEY`. Please consult our docs: https://langfuse.com/self-hosting",
+                "Missing environment variable: `ENCRYPTION_KEY`. Please consult our docs: https://litefuse.ai/self-hosting",
             });
           }
         }

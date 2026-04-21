@@ -157,7 +157,7 @@ export default function RemapEvaluatorPage() {
             Review your legacy evaluator on the left and configure the new eval
             settings on the right.{" "}
             <a
-              href="https://langfuse.com/faq/all/llm-as-a-judge-migration"
+              href="https://litefuse.ai/faq/all/llm-as-a-judge-migration"
               target="_blank"
               rel="noopener noreferrer"
               className="text-dark-blue font-medium hover:opacity-80"

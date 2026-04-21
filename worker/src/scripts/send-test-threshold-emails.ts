@@ -18,7 +18,7 @@ import { env } from "../env";
 
 const TEST_EMAILS: string[] = [
   // TODO ADD EMAILS HERE – these accounts will receive test emails
-  // email@langfuse.com
+  // email@litefuse.ai
 ];
 const TEST_ORG_NAME = "Test Organization";
 const BILLING_URL =
