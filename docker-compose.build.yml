@@ -16,8 +16,8 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
-    environment: &langfuse-web-env
-      # Docker injects HOSTNAME=<container-id>; override it so app servers bind on all interfaces.
+    environment:
+      &langfuse-web-env # Docker injects HOSTNAME=<container-id>; override it so app servers bind on all interfaces.
       HOSTNAME: 0.0.0.0
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/postgres}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret}
@@ -54,9 +54,18 @@ services:
       REDIS_TLS_CA: ${REDIS_TLS_CA:-/certs/ca.crt}
       REDIS_TLS_CERT: ${REDIS_TLS_CERT:-/certs/redis.crt}
       REDIS_TLS_KEY: ${REDIS_TLS_KEY:-/certs/redis.key}
+      AUTH_DEMO_SIGN_IN_ENABLED: ${AUTH_DEMO_SIGN_IN_ENABLED:-false}
     restart: always
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/public/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/api/public/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -74,7 +83,15 @@ services:
       <<: *langfuse-web-env
     restart: always
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3030/api/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3030/api/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

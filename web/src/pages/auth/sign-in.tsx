@@ -95,6 +95,7 @@ export type PageProps = {
   };
   runningOnHuggingFaceSpaces: boolean;
   signUpDisabled: boolean;
+  showDemoSignIn: boolean;
 };
 
 type CredentialsSubmitAction = "standard" | "demo";
@@ -180,6 +181,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
         sso,
       },
       signUpDisabled: env.AUTH_DISABLE_SIGNUP === "true",
+      showDemoSignIn: env.AUTH_DEMO_SIGN_IN_ENABLED === "true",
       runningOnHuggingFaceSpaces: env.NEXTAUTH_URL?.replace(
         "/api/auth",
         "",
@@ -538,6 +540,7 @@ const signInErrors = [
 export default function SignIn({
   authProviders,
   signUpDisabled,
+  showDemoSignIn,
   runningOnHuggingFaceSpaces,
 }: PageProps) {
   const router = useRouter();
@@ -867,19 +870,21 @@ export default function SignIn({
                     >
                       {showPasswordStep ? "Sign in" : "Continue"}
                     </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => void handleDemoSignIn()}
-                      loading={
-                        credentialsForm.formState.isSubmitting &&
-                        activeCredentialsAction === "demo"
-                      }
-                      disabled={continueLoading}
-                    >
-                      Sign as Demo
-                    </Button>
+                    {showDemoSignIn ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => void handleDemoSignIn()}
+                        loading={
+                          credentialsForm.formState.isSubmitting &&
+                          activeCredentialsAction === "demo"
+                        }
+                        disabled={continueLoading}
+                      >
+                        Sign as Demo
+                      </Button>
+                    ) : null}
                   </form>
                 </Form>
                 <div
