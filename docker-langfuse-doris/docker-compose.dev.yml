@@ -2,7 +2,7 @@ name: langfuse-doris
 
 services:
   langfuse-web:
-    image: langfuse-web:032605
+    image: litefuse/langfuse-web:042101
     container_name: langfuse-doris-web
     hostname: langfuse-web
     depends_on: &langfuse-depends-on
@@ -88,7 +88,7 @@ services:
       - doris_internal
 
   langfuse-worker:
-    image: langfuse-worker:032605
+    image: litefuse/langfuse-worker:042101
     container_name: langfuse-doris-worker
     hostname: langfuse-worker
     depends_on: *langfuse-depends-on
@@ -164,7 +164,7 @@ services:
       - langfuse_doris_postgres_data:/var/lib/postgresql
 
   doris_fe:
-    image: apache/doris:fe-4.0.0
+    image: apache/doris:fe-4.0.4
     hostname: doris_fe
     container_name: langfuse-doris-fe
     environment:
@@ -188,7 +188,7 @@ services:
       start_period: 120s
 
   doris_be:
-    image: apache/doris:be-4.0.0
+    image: apache/doris:be-4.0.4
     hostname: doris_be
     container_name: langfuse-doris-be
     environment:
