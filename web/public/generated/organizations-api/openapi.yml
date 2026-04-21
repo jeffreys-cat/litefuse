@@ -26,7 +26,7 @@ info:
 
 
     - OpenAPI spec:
-    https://cloud.langfuse.com/generated/organizations-api/openapi.yml
+    https://cloud.litefuse.ai/generated/organizations-api/openapi.yml
 
 
     ## Looking for the Langfuse API?
@@ -34,7 +34,7 @@ info:
 
     Are you looking for the full Langfuse API?
 
-    Check out our [API reference](https://api.reference.langfuse.com/#overview).
+    Check out our [API reference](https://api.reference.litefuse.ai/#overview).
 paths:
   /api/admin/organizations:
     get:

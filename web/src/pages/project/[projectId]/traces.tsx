@@ -54,8 +54,8 @@ export default function Traces() {
           title: "Tracing",
           help: {
             description:
-              "A trace represents a single function/api invocation. Traces contain observations. See [docs](https://langfuse.com/docs/observability/data-model) to learn more.",
-            href: "https://langfuse.com/docs/observability/data-model",
+              "A trace represents a single function/api invocation. Traces contain observations. See [docs](https://litefuse.ai/docs/observability/data-model) to learn more.",
+            href: "https://litefuse.ai/docs/observability/data-model",
           },
         }}
         scrollable
@@ -75,7 +75,7 @@ export default function Traces() {
               A trace represents a single function/api invocation. Traces
               contain observations. See{" "}
               <a
-                href="https://langfuse.com/docs/observability/data-model"
+                href="https://litefuse.ai/docs/observability/data-model"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="decoration-primary/30 hover:decoration-primary underline"
@@ -86,7 +86,7 @@ export default function Traces() {
               to learn more.
             </>
           ),
-          href: "https://langfuse.com/docs/observability/data-model",
+          href: "https://litefuse.ai/docs/observability/data-model",
         },
         tabsProps: isBetaEnabled
           ? undefined

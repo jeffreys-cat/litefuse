@@ -39,7 +39,7 @@ test.describe("Create project", () => {
 
     // Sign in
     await page.goto("/auth/sign-in");
-    await page.fill('input[name="email"]', "demo@langfuse.com");
+    await page.fill('input[name="email"]', "demo@langfuse.ai");
     await page.fill('input[type="password"]', "password");
 
     await expect(
@@ -132,7 +132,7 @@ test.describe("Create project", () => {
       // const errors = await checkConsoleErrors(page);
       await signin(page);
 
-      const projectUrl = await getProjectUrlForEmail("demo@langfuse.com");
+      const projectUrl = await getProjectUrlForEmail("demo@langfuse.ai");
       await page.goto(projectUrl + url, { waitUntil: "networkidle" });
       await expect(page).toHaveURL(projectUrl + url);
       await checkPageHeaderTitle(page, title);
@@ -151,7 +151,7 @@ test.describe("Create project", () => {
 
 const signin = async (page: Page) => {
   await page.goto("/auth/sign-in");
-  await page.fill('input[name="email"]', "demo@langfuse.com");
+  await page.fill('input[name="email"]', "demo@langfuse.ai");
   await page.fill('input[type="password"]', "password");
 
   await expect(

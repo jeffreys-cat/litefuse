@@ -152,20 +152,20 @@ export const VersionLabel = ({ className }: { className?: string }) => {
           </DropdownMenuItem>
         )}
         <DropdownMenuItem asChild>
-          <Link href="https://langfuse.com/changelog" target="_blank">
+          <Link href="https://langfuse.ai/changelog" target="_blank">
             <Newspaper size={16} className="mr-2" />
             Changelog
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="https://langfuse.com/roadmap" target="_blank">
+          <Link href="https://langfuse.ai/roadmap" target="_blank">
             <Map size={16} className="mr-2" />
             Roadmap
           </Link>
         </DropdownMenuItem>
         {!isLangfuseCloud && (
           <DropdownMenuItem asChild>
-            <Link href="https://langfuse.com/pricing-self-host" target="_blank">
+            <Link href="https://langfuse.ai/pricing-self-host" target="_blank">
               <Info size={16} className="mr-2" />
               Compare Versions
             </Link>
@@ -176,7 +176,7 @@ export const VersionLabel = ({ className }: { className?: string }) => {
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link
-                href="https://langfuse.com/docs/deployment/self-host#update"
+                href="https://langfuse.ai/docs/deployment/self-host#update"
                 target="_blank"
               >
                 <HardDriveDownload size={16} className="mr-2" />

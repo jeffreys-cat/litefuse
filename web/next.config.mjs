@@ -16,8 +16,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * img-src https to allow loading images from SSO providers
  */
 const cspHeader = `
-  default-src 'self' https://*.langfuse.com https://*.langfuse.dev https://*.posthog.com https://*.sentry.io;
-  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.langfuse.com https://*.langfuse.dev https://challenges.cloudflare.com https://*.sentry.io  https://static.cloudflareinsights.com https://*.stripe.com https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com;
+  default-src 'self' https://*.litefuse.ai https://*.langfuse.dev https://*.posthog.com https://*.sentry.io;
+  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://*.litefuse.ai https://*.langfuse.dev https://challenges.cloudflare.com https://*.sentry.io  https://static.cloudflareinsights.com https://*.stripe.com https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com;
   img-src 'self' https: blob: data: http://localhost:* https://prod-uk-services-workspac-workspacefilespublicbuck-vs4gjqpqjkh6.s3.amazonaws.com https://prod-uk-services-attachm-attachmentsbucket28b3ccf-uwfssb4vt2us.s3.eu-west-2.amazonaws.com https://i0.wp.com;
   font-src 'self';
@@ -27,7 +27,7 @@ const cspHeader = `
   base-uri 'self';
   form-action 'self' https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com;
   frame-ancestors 'none';
-  connect-src 'self' https://*.langfuse.com https://*.langfuse.dev https://*.ingest.us.sentry.io https://*.sentry.io https://chat.uk.plain.com https://*.s3.amazonaws.com https://prod-uk-services-attachm-attachmentsuploadbucket2-1l2e4906o2asm.s3.eu-west-2.amazonaws.com https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com https://graph.microsoft.com;
+  connect-src 'self' https://*.litefuse.ai https://*.langfuse.dev https://*.ingest.us.sentry.io https://*.sentry.io https://chat.uk.plain.com https://*.s3.amazonaws.com https://prod-uk-services-attachm-attachmentsuploadbucket2-1l2e4906o2asm.s3.eu-west-2.amazonaws.com https://login.microsoftonline.com https://login.microsoft.com https://*.microsoftonline.com https://graph.microsoft.com;
   media-src 'self' https: http://localhost:*;
   ${env.LANGFUSE_CSP_ENFORCE_HTTPS === "true" ? "upgrade-insecure-requests; block-all-mixed-content;" : ""}
   ${env.SENTRY_CSP_REPORT_URI ? `report-uri ${env.SENTRY_CSP_REPORT_URI}; report-to csp-endpoint;` : ""}
@@ -155,7 +155,7 @@ const nextConfig = {
           value: host,
         })),
       },
-      // Required to check authentication status from langfuse.com
+      // Required to check authentication status from litefuse.ai
       ...(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== undefined
         ? [
             {
@@ -163,7 +163,7 @@ const nextConfig = {
               headers: [
                 {
                   key: "Access-Control-Allow-Origin",
-                  value: "https://langfuse.com",
+                  value: "https://litefuse.ai",
                 },
                 { key: "Access-Control-Allow-Credentials", value: "true" },
                 { key: "Access-Control-Allow-Methods", value: "GET,POST" },
@@ -204,18 +204,32 @@ const nextConfig = {
 
     // Module shim aliases (antd, grafana, etc.)
     config.resolve.alias["antd"] = path.resolve(shimBase, "antd.tsx");
-    config.resolve.alias["@grafana/data"] = path.resolve(shimBase, "grafana-data.ts");
-    config.resolve.alias["@grafana/runtime"] = path.resolve(shimBase, "grafana-runtime.ts");
-    config.resolve.alias["react-i18next"] = path.resolve(shimBase, "react-i18next.ts");
-    config.resolve.alias["jotai-location"] = path.resolve(shimBase, "jotai-location.ts");
+    config.resolve.alias["@grafana/data"] = path.resolve(
+      shimBase,
+      "grafana-data.ts",
+    );
+    config.resolve.alias["@grafana/runtime"] = path.resolve(
+      shimBase,
+      "grafana-runtime.ts",
+    );
+    config.resolve.alias["react-i18next"] = path.resolve(
+      shimBase,
+      "react-i18next.ts",
+    );
+    config.resolve.alias["jotai-location"] = path.resolve(
+      shimBase,
+      "jotai-location.ts",
+    );
 
     // Bare-name path aliases used by discover components
     config.resolve.alias["store"] = path.resolve(discoverBase, "store");
     config.resolve.alias["services"] = path.resolve(discoverBase, "services");
-    config.resolve.alias["components"] = path.resolve(discoverBase, "components");
+    config.resolve.alias["components"] = path.resolve(
+      discoverBase,
+      "components",
+    );
     config.resolve.alias["types"] = path.resolve(discoverBase, "types");
     config.resolve.alias["utils"] = path.resolve(discoverBase, "utils");
-
 
     return config;
   },

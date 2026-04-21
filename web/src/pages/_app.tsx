@@ -112,7 +112,7 @@ const MyApp: AppType<{ session: Session | null }> = ({
   const router = useRouter();
 
   useEffect(() => {
-    // PostHog (cloud.langfuse.com)
+    // PostHog (cloud.litefuse.ai)
     if (env.NEXT_PUBLIC_POSTHOG_KEY && env.NEXT_PUBLIC_POSTHOG_HOST) {
       const handleRouteChange = () => {
         posthog.capture("$pageview");

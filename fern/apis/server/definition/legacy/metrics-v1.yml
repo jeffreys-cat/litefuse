@@ -12,7 +12,7 @@ service:
 
         Consider using the [v2 metrics endpoint](/api-reference#tag/metricsv2/GET/api/public/v2/metrics) for better performance.
 
-        For more details, see the [Metrics API documentation](https://langfuse.com/docs/metrics/features/metrics-api).
+        For more details, see the [Metrics API documentation](https://litefuse.ai/docs/metrics/features/metrics-api).
       method: GET
       path: /metrics
       request:

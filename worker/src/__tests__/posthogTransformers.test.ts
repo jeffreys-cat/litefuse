@@ -24,8 +24,8 @@ describe("PostHog transformers", () => {
         langfuse_trace_name: "test-trace",
         langfuse_trace_id: "trace-456",
         langfuse_url:
-          "https://langfuse.com/project/test/traces/trace-456?observation=event-123",
-        langfuse_user_url: "https://langfuse.com/project/test/users/user-789",
+          "https://litefuse.ai/project/test/traces/trace-456?observation=event-123",
+        langfuse_user_url: "https://litefuse.ai/project/test/users/user-789",
         langfuse_cost_usd: 0.001,
         langfuse_input_units: 100,
         langfuse_output_units: 50,
@@ -59,7 +59,7 @@ describe("PostHog transformers", () => {
       expect(result.properties.langfuse_model).toBe("gpt-4");
       expect(result.properties.langfuse_type).toBe("GENERATION");
       expect(result.properties.$set).toEqual({
-        langfuse_user_url: "https://langfuse.com/project/test/users/user-789",
+        langfuse_user_url: "https://litefuse.ai/project/test/users/user-789",
       });
       // Should not include posthog_session_id or mixpanel_session_id in properties
       expect(result.properties.posthog_session_id).toBeUndefined();
@@ -134,8 +134,8 @@ describe("PostHog transformers", () => {
         langfuse_id: "trace-123",
         timestamp: new Date("2024-01-15T10:00:00Z"),
         langfuse_trace_name: "test-trace",
-        langfuse_url: "https://langfuse.com/project/test/traces/trace-123",
-        langfuse_user_url: "https://langfuse.com/project/test/users/user-789",
+        langfuse_url: "https://litefuse.ai/project/test/traces/trace-123",
+        langfuse_user_url: "https://litefuse.ai/project/test/users/user-789",
         langfuse_cost_usd: 0.01,
         langfuse_count_observations: 5,
         langfuse_session_id: "session-abc",
@@ -168,8 +168,8 @@ describe("PostHog transformers", () => {
         langfuse_trace_name: "test-trace",
         langfuse_trace_id: "trace-456",
         langfuse_url:
-          "https://langfuse.com/project/test/traces/trace-456?observation=gen-123",
-        langfuse_user_url: "https://langfuse.com/project/test/users/user-789",
+          "https://litefuse.ai/project/test/traces/trace-456?observation=gen-123",
+        langfuse_user_url: "https://litefuse.ai/project/test/users/user-789",
         langfuse_cost_usd: 0.005,
         langfuse_input_units: 200,
         langfuse_output_units: 100,
@@ -212,7 +212,7 @@ describe("PostHog transformers", () => {
         langfuse_score_data_type: "NUMERIC",
         langfuse_trace_name: "test-trace",
         langfuse_trace_id: "trace-456",
-        langfuse_user_url: "https://langfuse.com/project/test/users/user-789",
+        langfuse_user_url: "https://litefuse.ai/project/test/users/user-789",
         langfuse_session_id: "session-abc",
         langfuse_project_id: projectId,
         langfuse_user_id: "user-789",

@@ -1,7 +1,7 @@
 {
-  "name": "langfuse",
+  "name": "litefuse",
   "version": "3.159.0",
-  "author": "engineering@langfuse.com",
+  "author": "engineering@litefuse.ai",
   "license": "MIT",
   "private": true,
   "engines": {

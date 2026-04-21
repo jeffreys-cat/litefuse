@@ -65,7 +65,7 @@ const LangfuseLogotypeOrCustomized = ({ size }: { size: "sm" | "xl" }) => {
           size === "sm" ? "text-sm" : "text-xl",
         )}
       >
-        Langfuse-Doris
+        Litefuse
       </span>
     </div>
   );

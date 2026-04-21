@@ -8,7 +8,7 @@
  * in batches to POST /api/admin/ingestion-replay.
  *
  * Usage:
- *   LANGFUSE_HOST=https://cloud.langfuse.com \
+ *   LANGFUSE_HOST=https://cloud.litefuse.ai \
  *   ADMIN_API_KEY=your-key \
  *   npx tsx replay.ts --file events.csv
  *

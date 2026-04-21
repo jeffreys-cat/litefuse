@@ -23,7 +23,7 @@
     "refill-billing-event": "dotenv -e ../.env -- tsx src/scripts/refill-billing-event.ts",
     "refill-queue-event": "dotenv -e ../.env -- tsx src/scripts/refillQueueEvent/index.ts"
   },
-  "author": "engineering@langfuse.com",
+  "author": "engineering@litefuse.ai",
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@appsignal/opentelemetry-instrumentation-bullmq": "^0.7.3",

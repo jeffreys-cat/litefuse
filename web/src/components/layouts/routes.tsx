@@ -29,6 +29,7 @@ import { useCommandMenu } from "@/src/features/command-k-menu/CommandMenuProvide
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 import { CloudStatusMenu } from "@/src/features/cloud-status-notification/components/CloudStatusMenu";
 import { type ProductModule } from "@/src/ee/features/ui-customization/productModuleSchema";
+import { env } from "@/src/env.mjs";
 
 export enum RouteSection {
   Main = "main",
@@ -110,6 +111,7 @@ export const ROUTES: Route[] = [
     icon: Search,
     group: RouteGroup.Observability,
     section: RouteSection.Main,
+    hidden: env.NEXT_PUBLIC_ENABLE_LOGGING !== "true",
   },
   {
     title: "Sessions",

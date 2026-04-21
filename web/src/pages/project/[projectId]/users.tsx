@@ -88,7 +88,7 @@ export default function UsersPage() {
               Attribute data in Langfuse to a user by adding a userId to your
               traces. See{" "}
               <a
-                href="https://langfuse.com/docs/observability/features/users"
+                href="https://litefuse.ai/docs/observability/features/users"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="decoration-primary/30 hover:decoration-primary underline"
@@ -99,7 +99,7 @@ export default function UsersPage() {
               to learn more.
             </>
           ),
-          href: "https://langfuse.com/docs/observability/features/users",
+          href: "https://litefuse.ai/docs/observability/features/users",
         },
       }}
       scrollable={showOnboarding}
@@ -288,7 +288,7 @@ const UsersTable = ({ isBetaEnabled }: { isBetaEnabled: boolean }) => {
       headerTooltip: {
         description:
           "The unique identifier for the user that was logged in Langfuse. See docs for more details on how to set this up.",
-        href: "https://langfuse.com/docs/observability/features/users",
+        href: "https://litefuse.ai/docs/observability/features/users",
       },
       size: 150,
       cell: ({ row }) => {
@@ -357,7 +357,7 @@ const UsersTable = ({ isBetaEnabled }: { isBetaEnabled: boolean }) => {
       headerTooltip: {
         description:
           "Total number of events for the user, includes traces and observations. See data model for more details.",
-        href: "https://langfuse.com/docs/observability/data-model",
+        href: "https://litefuse.ai/docs/observability/data-model",
       },
       size: 120,
       cell: ({ row }) => {
@@ -374,7 +374,7 @@ const UsersTable = ({ isBetaEnabled }: { isBetaEnabled: boolean }) => {
       headerTooltip: {
         description:
           "Total number of tokens used for the user across all generations.",
-        href: "https://langfuse.com/docs/model-usage-and-cost",
+        href: "https://litefuse.ai/docs/model-usage-and-cost",
       },
       size: 120,
       cell: ({ row }) => {
@@ -390,7 +390,7 @@ const UsersTable = ({ isBetaEnabled }: { isBetaEnabled: boolean }) => {
       header: "Total Cost",
       headerTooltip: {
         description: "Total cost for the user across all generations.",
-        href: "https://langfuse.com/docs/model-usage-and-cost",
+        href: "https://litefuse.ai/docs/model-usage-and-cost",
       },
       size: 120,
       cell: ({ row }) => {

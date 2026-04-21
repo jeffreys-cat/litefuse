@@ -52,7 +52,7 @@ export const env = createEnv({
     LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: z.enum(["true", "false"]).optional(),
     SALT: z.string({
       required_error:
-        "A strong Salt is required to encrypt API keys securely. See: https://langfuse.com/self-hosting#deploy-the-container",
+        "A strong Salt is required to encrypt API keys securely. See: https://litefuse.ai/self-hosting#deploy-the-container",
     }),
     // Add newly signed up users to default org(s) and/or project(s) with role
     // Supports comma-separated IDs for multiple orgs/projects (e.g., "org1,org2,org3")
@@ -259,7 +259,9 @@ export const env = createEnv({
     DORIS_PASSWORD: z.string().optional(),
     DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25).optional(),
     DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000).optional(),
-    LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z.enum(["true", "false"]).default("false"),
+    LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
+      .enum(["true", "false"])
+      .default("false"),
 
     // EE ui customization
     LANGFUSE_UI_API_HOST: z.string().optional(),
@@ -442,6 +444,7 @@ export const env = createEnv({
     NEXT_PUBLIC_PLAIN_APP_ID: z.string().optional(),
     NEXT_PUBLIC_BUILD_ID: z.string().optional(),
     NEXT_PUBLIC_BASE_PATH: z.string().optional(),
+    NEXT_PUBLIC_ENABLE_LOGGING: z.enum(["true", "false"]).default("true"),
     NEXT_PUBLIC_LANGFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT: z
       .enum(["true", "false"])
       .optional()
@@ -556,10 +559,8 @@ export const env = createEnv({
       process.env.AUTH_AUTH0_ALLOW_ACCOUNT_LINKING,
     AUTH_AUTH0_CLIENT_AUTH_METHOD: process.env.AUTH_AUTH0_CLIENT_AUTH_METHOD,
     AUTH_AUTH0_CHECKS: process.env.AUTH_AUTH0_CHECKS,
-    AUTH_DORIS_CLOUD_CLIENT_ID:
-      process.env.AUTH_DORIS_CLOUD_CLIENT_ID,
-    AUTH_DORIS_CLOUD_CLIENT_SECRET:
-      process.env.AUTH_DORIS_CLOUD_CLIENT_SECRET,
+    AUTH_DORIS_CLOUD_CLIENT_ID: process.env.AUTH_DORIS_CLOUD_CLIENT_ID,
+    AUTH_DORIS_CLOUD_CLIENT_SECRET: process.env.AUTH_DORIS_CLOUD_CLIENT_SECRET,
     AUTH_DORIS_CLOUD_ISSUER: process.env.AUTH_DORIS_CLOUD_ISSUER,
     AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING:
       process.env.AUTH_DORIS_CLOUD_ALLOW_ACCOUNT_LINKING,
@@ -680,7 +681,8 @@ export const env = createEnv({
     DORIS_DB: process.env.DORIS_DB,
     DORIS_USER: process.env.DORIS_USER,
     DORIS_PASSWORD: process.env.DORIS_PASSWORD,
-    LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: process.env.LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED,
+    LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED:
+      process.env.LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED,
     // EE ui customization
     LANGFUSE_UI_API_HOST: process.env.LANGFUSE_UI_API_HOST,
     LANGFUSE_UI_DOCUMENTATION_HREF: process.env.LANGFUSE_UI_DOCUMENTATION_HREF,
@@ -705,6 +707,7 @@ export const env = createEnv({
     // Playground
     NEXT_PUBLIC_LANGFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT:
       process.env.NEXT_PUBLIC_LANGFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT,
+    NEXT_PUBLIC_ENABLE_LOGGING: process.env.NEXT_PUBLIC_ENABLE_LOGGING,
     // EE License
     LANGFUSE_EE_LICENSE_KEY: process.env.LANGFUSE_EE_LICENSE_KEY,
     ADMIN_API_KEY: process.env.ADMIN_API_KEY,

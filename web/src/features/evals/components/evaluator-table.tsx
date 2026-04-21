@@ -87,7 +87,7 @@ function LegacyBadgeCell({ status }: { status: string }) {
                   This evaluator requires changes to benefit from new features
                   and performance improvements. Please follow{" "}
                   <Link
-                    href="https://langfuse.com/faq/all/llm-as-a-judge-migration"
+                    href="https://litefuse.ai/faq/all/llm-as-a-judge-migration"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-dark-blue font-medium hover:opacity-80"
@@ -445,7 +445,7 @@ export default function EvaluatorTable({ projectId }: { projectId: string }) {
               </span>
               <span>to benefit from new features and improvements. </span>
               <Link
-                href="https://langfuse.com/faq/all/llm-as-a-judge-migration"
+                href="https://litefuse.ai/faq/all/llm-as-a-judge-migration"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-dark-blue font-medium hover:opacity-80"

@@ -288,7 +288,7 @@ jobs:
           LANGFUSE_INIT_PROJECT_NAME: "Seed Project"
           LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-lf-1234567890"
           LANGFUSE_INIT_PROJECT_SECRET_KEY: "sk-lf-1234567890"
-          LANGFUSE_INIT_USER_EMAIL: "demo@langfuse.com"
+          LANGFUSE_INIT_USER_EMAIL: "demo@litefuse.ai"
           LANGFUSE_INIT_USER_NAME: "Demo User"
           LANGFUSE_INIT_USER_PASSWORD: "password"
       - name: run tests
@@ -599,7 +599,8 @@ jobs:
   all-ci-passed:
     # This allows us to have a branch protection rule for tests and deploys with matrix
     runs-on: ubuntu-latest
-    needs: [
+    needs:
+      [
         lint,
         prettier-check,
         tests-web,

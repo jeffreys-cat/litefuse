@@ -8,7 +8,7 @@ export default function Experiments() {
         help: {
           description:
             "Experiments allow you to compare and analyze different runs of your LLM application. See docs to learn more.",
-          href: "https://langfuse.com/docs/datasets/experiments",
+          href: "https://litefuse.ai/docs/datasets/experiments",
         },
       }}
     >

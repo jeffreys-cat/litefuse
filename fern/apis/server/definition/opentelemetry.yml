@@ -19,8 +19,8 @@ service:
         - Implements `ExportTraceServiceRequest` message format
 
         **Documentation:**
-        - Integration guide: https://langfuse.com/integrations/native/opentelemetry
-        - Data model: https://langfuse.com/docs/observability/data-model
+        - Integration guide: https://litefuse.ai/integrations/native/opentelemetry
+        - Data model: https://litefuse.ai/docs/observability/data-model
       method: POST
       path: /otel/v1/traces
       request:

@@ -60,6 +60,7 @@ The MCP server provides 6 tools for prompt management:
 Langfuse supports **prompt composition** where prompts can reference other prompts via dependency tags like `@@@langfusePrompt:name=xxx|label=yyy@@@`. The MCP server provides two tools for fetching prompts with different resolution behaviors:
 
 #### `getPrompt` (Fully Resolved)
+
 - **Use when**: You want the final, executable prompt ready to send to an LLM
 - **Behavior**: Recursively resolves all dependency tags by fetching and inserting referenced prompts
 - **Returns**: Final prompt content with all dependencies replaced
@@ -70,6 +71,7 @@ Langfuse supports **prompt composition** where prompts can reference other promp
   ```
 
 #### `getPromptUnresolved` (Raw)
+
 - **Use when**: You want to analyze prompt composition, debug dependencies, or understand the prompt structure
 - **Behavior**: Returns raw prompt content with dependency tags intact
 - **Returns**: Original prompt content with `@@@langfusePrompt:...@@@` tags preserved
@@ -80,6 +82,7 @@ Langfuse supports **prompt composition** where prompts can reference other promp
   ```
 
 **Use Cases for `getPromptUnresolved`**:
+
 - Understanding how prompts compose together (prompt stacking)
 - Debugging dependency chains before execution
 - Analyzing prompt structure and references
@@ -172,9 +175,9 @@ This outputs your BasicAuth token (e.g., `cGstbGYt...`).
 
 **Langfuse Cloud:**
 
-- **EU Region:** `https://cloud.langfuse.com`
-- **US Region:** `https://us.langfuse.com`
-- **HIPAA:** `https://hipaa.langfuse.com`
+- **EU Region:** `https://cloud.litefuse.ai`
+- **US Region:** `https://us.litefuse.ai`
+- **HIPAA:** `https://hipaa.litefuse.ai`
 
 **Self-Hosted:**
 
@@ -192,11 +195,11 @@ Register the Langfuse MCP server:
 
 ```bash
 # Langfuse Cloud (EU)
-claude mcp add --transport http langfuse https://cloud.langfuse.com/api/public/mcp \
+claude mcp add --transport http langfuse https://cloud.litefuse.ai/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 
 # Langfuse Cloud (US)
-claude mcp add --transport http langfuse https://us.langfuse.com/api/public/mcp \
+claude mcp add --transport http langfuse https://us.litefuse.ai/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 
 # Self-Hosted (HTTPS required)
@@ -219,7 +222,7 @@ Add to your Cursor MCP settings:
   "mcp": {
     "servers": {
       "langfuse": {
-        "url": "https://cloud.langfuse.com/api/public/mcp",
+        "url": "https://cloud.litefuse.ai/api/public/mcp",
         "headers": {
           "Authorization": "Basic {your-base64-token}"
         }
@@ -229,4 +232,4 @@ Add to your Cursor MCP settings:
 }
 ```
 
-Replace `https://cloud.langfuse.com` with your Langfuse URL (see [Choose Your Langfuse URL](#2-choose-your-langfuse-url)).
+Replace `https://cloud.litefuse.ai` with your Langfuse URL (see [Choose Your Langfuse URL](#2-choose-your-langfuse-url)).

@@ -45,7 +45,7 @@ export default function Generations() {
         help: {
           description:
             "An observation captures a single function call in an application. See docs to learn more.",
-          href: "https://langfuse.com/docs/observability/data-model",
+          href: "https://litefuse.ai/docs/observability/data-model",
         },
         tabsProps: isBetaEnabled
           ? undefined

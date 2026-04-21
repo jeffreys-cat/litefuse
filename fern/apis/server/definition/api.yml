@@ -9,7 +9,7 @@ docs: |
 
   ## Exports
 
-  - OpenAPI spec: https://cloud.langfuse.com/generated/api/openapi.yml
+  - OpenAPI spec: https://cloud.litefuse.ai/generated/api/openapi.yml
 
 error-discrimination:
   strategy: status-code

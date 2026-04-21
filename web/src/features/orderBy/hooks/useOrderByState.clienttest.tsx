@@ -27,7 +27,7 @@ describe.skip("useOrderByState hook", () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    locationMock = new LocationMock("https://langfuse.com");
+    locationMock = new LocationMock("https://litefuse.ai");
     testRouter = new TestRouter(locationMock);
     Object.defineProperty(window, "location", {
       value: locationMock,
@@ -70,7 +70,7 @@ describe.skip("useOrderByState hook", () => {
 
   test("orderBy reads the given param from the url", () => {
     locationMock.replace(
-      "https://langfuse.com?orderBy=column-Column 3_order-DESC",
+      "https://litefuse.ai?orderBy=column-Column 3_order-DESC",
     );
 
     const result = render(

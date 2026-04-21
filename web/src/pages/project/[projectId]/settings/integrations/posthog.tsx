@@ -78,7 +78,7 @@ export default function PosthogIntegrationSettings() {
         actionButtonsLeft: <>{status && <StatusBadge type={status} />}</>,
         actionButtonsRight: (
           <Button asChild variant="secondary">
-            <Link href="https://langfuse.com/integrations/analytics/posthog">
+            <Link href="https://litefuse.ai/integrations/analytics/posthog">
               Integration Docs ↗
             </Link>
           </Button>
@@ -251,7 +251,7 @@ const PostHogIntegrationSettings = ({
                       ))}
                       <div className="border-t pt-2">
                         <a
-                          href="https://langfuse.com/docs/integrations/export-sources"
+                          href="https://litefuse.ai/docs/integrations/export-sources"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-xs hover:underline"

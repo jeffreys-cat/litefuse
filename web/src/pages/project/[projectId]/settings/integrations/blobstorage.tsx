@@ -111,7 +111,7 @@ export default function BlobStorageIntegrationSettings() {
         actionButtonsRight: (
           <Button asChild variant="secondary">
             <Link
-              href="https://langfuse.com/docs/api-and-data-platform/features/export-to-blob-storage"
+              href="https://litefuse.ai/docs/api-and-data-platform/features/export-to-blob-storage"
               target="_blank"
             >
               Integration Docs ↗
@@ -670,7 +670,7 @@ const BlobStorageIntegrationSettingsForm = ({
                       ))}
                       <div className="border-t pt-2">
                         <a
-                          href="https://langfuse.com/docs/integrations/export-sources"
+                          href="https://litefuse.ai/docs/integrations/export-sources"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-muted-foreground hover:text-primary inline-flex items-center gap-1 text-xs hover:underline"

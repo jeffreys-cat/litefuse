@@ -24,7 +24,7 @@ pip install langfuse
    const langfuse = new Langfuse({  
      secretKey: process.env.LANGFUSE_SECRET_KEY,  
      publicKey: process.env.LANGFUSE_PUBLIC_KEY,  
-     baseUrl: 'https://cloud.langfuse.com'  
+     baseUrl: 'https://cloud.litefuse.ai'  
    })  
    \`\`\`
 
@@ -261,6 +261,6 @@ With proper implementation of Langfuse tracing, you can:
 - ✅ **Scale** your applications with confidence
 
 ### Next Steps
-1. Review the [official documentation](https://langfuse.com/docs)
+1. Review the [official documentation](https://litefuse.ai/docs)
 2. Join our [Discord community](https://discord.gg/langfuse)
 3. Check out [example projects](https://github.com/selectdb/langfuse-doris)

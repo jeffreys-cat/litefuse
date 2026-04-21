@@ -12,7 +12,7 @@ export default function ExperimentDetail() {
         help: {
           description:
             "View and analyze a specific experiment run. See docs to learn more.",
-          href: "https://langfuse.com/docs/datasets/experiments",
+          href: "https://litefuse.ai/docs/datasets/experiments",
         },
       }}
     >
