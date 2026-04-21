@@ -1,4 +1,4 @@
-![Langfuse GitHub Banner](https://litefuse.ai/images/docs/github-readme/github-banner.png)
+![Litefuse GitHub Banner](https://litefuse.ai/images/docs/github-readme/github-banner.png)
 
 <div align="center">
   <div>
@@ -7,7 +7,7 @@
         <strong>🇨🇳 🤝 🪢</strong>
       </a> · 
       <a href="https://cloud.litefuse.ai">
-        <strong>Langfuse Cloud</strong>
+        <strong>Litefuse Cloud</strong>
       </a> · 
       <a href="https://litefuse.ai/docs/deployment/self-host">
         <strong>自托管</strong>
@@ -26,7 +26,7 @@
     <a href="https://litefuse.ai/roadmap"><strong>路线图</strong></a> ·
   </div>
   <br/>
-  <span>Langfuse 使用 <a href="https://github.com/orgs/langfuse/discussions"><strong>GitHub Discussions</strong></a> 作为支持和功能请求的平台。</span>
+  <span>Litefuse 使用 <a href="https://github.com/orgs/Litefuse/discussions"><strong>GitHub Discussions</strong></a> 作为支持和功能请求的平台。</span>
   <br/>
   <span><b>我们正在招聘。</b> <a href="https://litefuse.ai/careers"><strong>加入我们</strong></a>，从事产品工程和技术市场职位。</span>
   <br/>
@@ -36,42 +36,42 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/selectdb/langfuse-doris/blob/main/LICENSE">
+  <a href="https://github.com/selectdb/Litefuse-doris/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-E11311.svg" alt="MIT License">
   </a>
-  <a href="https://www.ycombinator.com/companies/langfuse">
+  <a href="https://www.ycombinator.com/companies/Litefuse">
     <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange" alt="Y Combinator W23">
   </a>
-  <a href="https://hub.docker.com/u/langfuse" target="_blank">
-    <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/langfuse/langfuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff">
+  <a href="https://hub.docker.com/u/Litefuse" target="_blank">
+    <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/Litefuse/Litefuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff">
   </a>
-  <a href="https://pypi.python.org/pypi/langfuse">
-    <img src="https://img.shields.io/pypi/dm/langfuse?logo=python&logoColor=white&label=pypi%20langfuse&color=blue" alt="langfuse Python package on PyPi">
+  <a href="https://pypi.python.org/pypi/Litefuse">
+    <img src="https://img.shields.io/pypi/dm/Litefuse?logo=python&logoColor=white&label=pypi%20Litefuse&color=blue" alt="Litefuse Python package on PyPi">
   </a>
-  <a href="https://www.npmjs.com/package/langfuse">
-    <img src="https://img.shields.io/npm/dm/langfuse?logo=npm&logoColor=white&label=npm%20langfuse&color=blue" alt="langfuse npm package">
+  <a href="https://www.npmjs.com/package/Litefuse">
+    <img src="https://img.shields.io/npm/dm/Litefuse?logo=npm&logoColor=white&label=npm%20Litefuse&color=blue" alt="Litefuse npm package">
   </a>
   <br/>
   <a href="https://discord.com/invite/7NXusRtqYU" target="_blank">
     <img src="https://img.shields.io/discord/1111061815649124414?logo=discord&labelColor=%20%235462eb&logoColor=%20%23f5f5f5&color=%20%235462eb"
          alt="在 Discord 上聊天">
   </a>
-  <a href="https://twitter.com/intent/follow?screen_name=langfuse" target="_blank">
-    <img src="https://img.shields.io/twitter/follow/langfuse?logo=X&color=%20%23f5f5f5"
+  <a href="https://twitter.com/intent/follow?screen_name=Litefuse" target="_blank">
+    <img src="https://img.shields.io/twitter/follow/Litefuse?logo=X&color=%20%23f5f5f5"
          alt="在 X (Twitter) 上关注">
   </a>
-  <a href="https://www.linkedin.com/company/langfuse/" target="_blank">
+  <a href="https://www.linkedin.com/company/Litefuse/" target="_blank">
     <img src="https://custom-icon-badges.demolab.com/badge/LinkedIn-0A66C2?logo=linkedin-white&logoColor=fff"
          alt="在 LinkedIn 上关注">
   </a>
-  <a href="https://github.com/selectdb/langfuse-doris/graphs/commit-activity" target="_blank">
-    <img alt="过去一个月的提交" src="https://img.shields.io/github/commit-activity/m/langfuse/langfuse?labelColor=%20%2332b583&color=%20%2312b76a">
+  <a href="https://github.com/selectdb/Litefuse-doris/graphs/commit-activity" target="_blank">
+    <img alt="过去一个月的提交" src="https://img.shields.io/github/commit-activity/m/Litefuse/Litefuse?labelColor=%20%2332b583&color=%20%2312b76a">
   </a>
-  <a href="https://github.com/selectdb/langfuse-doris/" target="_blank">
-    <img alt="已关闭的问题" src="https://img.shields.io/github/issues-search?query=repo%3Alangfuse%2Flangfuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98">
+  <a href="https://github.com/selectdb/Litefuse-doris/" target="_blank">
+    <img alt="已关闭的问题" src="https://img.shields.io/github/issues-search?query=repo%3ALitefuse%2FLitefuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98">
   </a>
-  <a href="https://github.com/selectdb/langfuse-doris/discussions/" target="_blank">
-    <img alt="讨论帖数量" src="https://img.shields.io/github/discussions/langfuse/langfuse?labelColor=%20%239b8afb&color=%20%237a5af8">
+  <a href="https://github.com/selectdb/Litefuse-doris/discussions/" target="_blank">
+    <img alt="讨论帖数量" src="https://img.shields.io/github/discussions/Litefuse/Litefuse?labelColor=%20%239b8afb&color=%20%237a5af8">
   </a>
 </p>
 
@@ -82,57 +82,57 @@
   <a href="./README.kr.md"><img alt="README in Korean" src="https://img.shields.io/badge/한국어-d9d9d9"></a>
 </p>
 
-Langfuse 是一个 **开源 LLM 工程** 平台。它帮助团队协作 **开发、监控、评估** 以及 **调试** AI 应用。Langfuse 可在几分钟内 **自托管**，并且经过 **实战考验**。
+Litefuse 是一个 **开源 LLM 工程** 平台。它帮助团队协作 **开发、监控、评估** 以及 **调试** AI 应用。Litefuse 可在几分钟内 **自托管**，并且经过 **实战考验**。
 
-[![Langfuse 概览视频](https://github.com/user-attachments/assets/3926b288-ff61-4b95-8aa1-45d041c70866)](https://litefuse.ai/watch-demo)
+[![Litefuse 概览视频](https://github.com/user-attachments/assets/3926b288-ff61-4b95-8aa1-45d041c70866)](https://litefuse.ai/watch-demo)
 
 ## ✨ 核心特性
 
-![Langfuse 概览](https://litefuse.ai/images/docs/github-readme/github-feature-overview.png)
+![Litefuse 概览](https://litefuse.ai/images/docs/github-readme/github-feature-overview.png)
 
-- [LLM 应用可观察性](https://litefuse.ai/docs/tracing)：为你的应用插入仪表代码，并开始将追踪数据传送到 Langfuse，从而追踪 LLM 调用及应用中其他相关逻辑（如检索、嵌入或代理操作）。检查并调试复杂日志及用户会话。试试互动的 [演示](https://litefuse.ai/docs/demo) 看看效果。
+- [LLM 应用可观察性](https://litefuse.ai/docs/tracing)：为你的应用插入仪表代码，并开始将追踪数据传送到 Litefuse，从而追踪 LLM 调用及应用中其他相关逻辑（如检索、嵌入或代理操作）。检查并调试复杂日志及用户会话。试试互动的 [演示](https://litefuse.ai/docs/demo) 看看效果。
 - [提示管理](https://litefuse.ai/docs/prompt-management/get-started) 帮助你集中管理、版本控制并协作迭代提示。得益于服务器和客户端的高效缓存，你可以在不增加延迟的情况下反复迭代提示。
 
-- [评估](https://litefuse.ai/docs/evaluation/overview) 是 LLM 应用开发流程的关键组成部分，Langfuse 能够满足你的多样需求。它支持 LLM 作为"裁判"、用户反馈收集、手动标注以及通过 API/SDK 实现自定义评估流程。
+- [评估](https://litefuse.ai/docs/evaluation/overview) 是 LLM 应用开发流程的关键组成部分，Litefuse 能够满足你的多样需求。它支持 LLM 作为"裁判"、用户反馈收集、手动标注以及通过 API/SDK 实现自定义评估流程。
 
 - [数据集](https://litefuse.ai/docs/evaluation/dataset-runs/datasets) 为评估你的 LLM 应用提供测试集和基准。它们支持持续改进、部署前测试、结构化实验、灵活评估，并能与 LangChain、LlamaIndex 等框架无缝整合。
 
 - [LLM 试玩平台](https://litefuse.ai/docs/playground) 是用于测试和迭代提示及模型配置的工具，缩短反馈周期，加速开发。当你在追踪中发现异常结果时，可以直接跳转至试玩平台进行调整。
 
-- [综合 API](https://litefuse.ai/docs/api)：Langfuse 常用于驱动定制化的 LLMOps 工作流程，同时利用 Langfuse 提供的构建模块和 API。我们提供 OpenAPI 规格、Postman 集合以及针对 Python 和 JS/TS 的类型化 SDK。
+- [综合 API](https://litefuse.ai/docs/api)：Litefuse 常用于驱动定制化的 LLMOps 工作流程，同时利用 Litefuse 提供的构建模块和 API。我们提供 OpenAPI 规格、Postman 集合以及针对 Python 和 JS/TS 的类型化 SDK。
 
-## 📦 部署 Langfuse
+## 📦 部署 Litefuse
 
-![Langfuse 部署选项](https://litefuse.ai/images/docs/github-readme/github-deployment-options.png)
+![Litefuse 部署选项](https://litefuse.ai/images/docs/github-readme/github-deployment-options.png)
 
-### Langfuse Cloud
+### Litefuse Cloud
 
-由 Langfuse 团队管理的部署，提供慷慨的免费额度（爱好者计划），无需信用卡。
+由 Litefuse 团队管理的部署，提供慷慨的免费额度（爱好者计划），无需信用卡。
 
 <div align="center">
   <a href="https://cloud.litefuse.ai" target="_blank">
-    <img alt="注册 Langfuse Cloud" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Langfuse%20Cloud-8A2BE2?&color=orange">
+    <img alt="注册 Litefuse Cloud" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Litefuse%20Cloud-8A2BE2?&color=orange">
   </a>
 </div>
 
-### 自托管 Langfuse
+### 自托管 Litefuse
 
-在你自己的基础设施上运行 Langfuse：
+在你自己的基础设施上运行 Litefuse：
 
-- [本地（docker compose）](https://litefuse.ai/self-hosting/local)：使用 Docker Compose 在你的机器上于 5 分钟内运行 Langfuse。
+- [本地（docker compose）](https://litefuse.ai/self-hosting/local)：使用 Docker Compose 在你的机器上于 5 分钟内运行 Litefuse。
 
   ```bash:README.md/docker-compose
-  # 获取最新的 Langfuse 仓库副本
-  git clone https://github.com/selectdb/langfuse-doris.git
-  cd langfuse
+  # 获取最新的 Litefuse 仓库副本
+  git clone https://github.com/selectdb/Litefuse-doris.git
+  cd Litefuse
 
-  # 运行 Langfuse 的 docker compose
+  # 运行 Litefuse 的 docker compose
   docker compose up
   ```
 
-- [Kubernetes（Helm）](https://litefuse.ai/self-hosting/kubernetes-helm)：使用 Helm 在 Kubernetes 集群上部署 Langfuse。这是推荐的生产环境部署方式。
+- [Kubernetes（Helm）](https://litefuse.ai/self-hosting/kubernetes-helm)：使用 Helm 在 Kubernetes 集群上部署 Litefuse。这是推荐的生产环境部署方式。
 
-- [虚拟机](https://litefuse.ai/self-hosting/docker-compose)：使用 Docker Compose 在单台虚拟机上部署 Langfuse。
+- [虚拟机](https://litefuse.ai/self-hosting/docker-compose)：使用 Docker Compose 在单台虚拟机上部署 Litefuse。
 
 - Terraform 模板: [AWS](https://litefuse.ai/self-hosting/aws)、[Azure](https://litefuse.ai/self-hosting/azure)、[GCP](https://litefuse.ai/self-hosting/gcp)
 
@@ -140,7 +140,7 @@ Langfuse 是一个 **开源 LLM 工程** 平台。它帮助团队协作 **开发
 
 ## 🔌 集成
 
-![Langfuse 集成](https://litefuse.ai/images/docs/github-readme/github-integrations.png)
+![Litefuse 集成](https://litefuse.ai/images/docs/github-readme/github-integrations.png)
 
 ### 主要集成：
 
@@ -156,7 +156,7 @@ Langfuse 是一个 **开源 LLM 工程** 平台。它帮助团队协作 **开发
 | [API](https://litefuse.ai/docs/api)                                                 |                        | 直接调用公共 API。提供 OpenAPI 规格。                                                                                            |
 | [Google VertexAI 和 Gemini](https://litefuse.ai/docs/integrations/google-vertex-ai) | 模型                   | 在 Google 上运行基础模型和微调模型。                                                                                             |
 
-### 与 Langfuse 集成的软件包：
+### 与 Litefuse 集成的软件包：
 
 | 名称                                                                   | 类型          | 描述                                                                                    |
 | ---------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------- |
@@ -181,47 +181,47 @@ Langfuse 是一个 **开源 LLM 工程** 平台。它帮助团队协作 **开发
 
 ## 🚀 快速入门
 
-为你的应用增加仪表代码，并开始将追踪数据上传到 Langfuse，从而记录 LLM 调用及应用中其他相关逻辑（如检索、嵌入或代理操作）。
+为你的应用增加仪表代码，并开始将追踪数据上传到 Litefuse，从而记录 LLM 调用及应用中其他相关逻辑（如检索、嵌入或代理操作）。
 
 ### 1️⃣ 创建新项目
 
-1. [创建 Langfuse 账户](https://cloud.litefuse.ai/auth/sign-up) 或 [自托管](https://litefuse.ai/self-hosting)
+1. [创建 Litefuse 账户](https://cloud.litefuse.ai/auth/sign-up) 或 [自托管](https://litefuse.ai/self-hosting)
 2. 创建一个新项目
 3. 在项目设置中创建新的 API 凭证
 
 ### 2️⃣ 记录你的第一个 LLM 调用
 
-使用 [<code>@observe()</code> 装饰器](https://litefuse.ai/docs/sdk/python/decorators) 可轻松跟踪任何 Python LLM 应用。在本快速入门中，我们还使用了 Langfuse 的 [OpenAI 集成](https://litefuse.ai/integrations/model-providers/openai-py) 来自动捕获所有模型参数。
+使用 [<code>@observe()</code> 装饰器](https://litefuse.ai/docs/sdk/python/decorators) 可轻松跟踪任何 Python LLM 应用。在本快速入门中，我们还使用了 Litefuse 的 [OpenAI 集成](https://litefuse.ai/integrations/model-providers/openai-py) 来自动捕获所有模型参数。
 
 > [!提示]
-> 不使用 OpenAI？请访问 [我们的文档](https://litefuse.ai/docs/get-started#log-your-first-llm-call-to-langfuse) 了解如何记录其他模型和框架。
+> 不使用 OpenAI？请访问 [我们的文档](https://litefuse.ai/docs/get-started#log-your-first-llm-call-to-Litefuse) 了解如何记录其他模型和框架。
 
 安装依赖：
 
 ```bash
-pip install langfuse openai
+pip install Litefuse openai
 ```
 
 配置环境变量（创建名为 **.env** 的文件）：
 
 ```bash:.env
-LANGFUSE_SECRET_KEY="sk-lf-..."
-LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 欧盟区域
-# LANGFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 美洲区域
+Litefuse_SECRET_KEY="sk-lf-..."
+Litefuse_PUBLIC_KEY="pk-lf-..."
+Litefuse_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 欧盟区域
+# Litefuse_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 美洲区域
 ```
 
 创建示例代码（文件名：**main.py**）：
 
 ```python:main.py
-from langfuse import observe
-from langfuse.openai import openai  # OpenAI 集成
+from Litefuse import observe
+from Litefuse.openai import openai  # OpenAI 集成
 
 @observe()
 def story():
     return openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": "What is Langfuse?"}],
+        messages=[{"role": "user", "content": "What is Litefuse?"}],
     ).choices[0].message.content
 
 @observe()
@@ -231,43 +231,43 @@ def main():
 main()
 ```
 
-### 3️⃣ 在 Langfuse 中查看追踪记录
+### 3️⃣ 在 Litefuse 中查看追踪记录
 
-在 Langfuse 中查看你的语言模型调用及其他应用逻辑。
+在 Litefuse 中查看你的语言模型调用及其他应用逻辑。
 
 ![示例追踪记录](https://litefuse.ai/images/docs/github-readme/github-example-trace.png)
 
-_[Langfuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj0002jz088vzn1ja4/traces/2cec01e3-3dc2-472f-afcf-3b968cf0c1f4?timestamp=2025-02-10T14%3A27%3A30.275Z&observation=cb5ff844-07ef-41e6-b8e2-6c64344bc13b)_
+_[Litefuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj0002jz088vzn1ja4/traces/2cec01e3-3dc2-472f-afcf-3b968cf0c1f4?timestamp=2025-02-10T14%3A27%3A30.275Z&observation=cb5ff844-07ef-41e6-b8e2-6c64344bc13b)_
 
 > [!提示]
 >
-> [了解更多](https://litefuse.ai/docs/tracing) 关于 Langfuse 中的追踪，或试试 [互动演示](https://litefuse.ai/docs/demo)。
+> [了解更多](https://litefuse.ai/docs/tracing) 关于 Litefuse 中的追踪，或试试 [互动演示](https://litefuse.ai/docs/demo)。
 
 ## ⭐️ 给我们加星
 
-![star-langfuse-on-github](https://github.com/user-attachments/assets/79a1d816-d229-4526-aecc-097d4a19f1ad)
+![star-Litefuse-on-github](https://github.com/user-attachments/assets/79a1d816-d229-4526-aecc-097d4a19f1ad)
 
 ## 💭 支持
 
 查找问题答案：
 
 - 我们的 [文档](https://litefuse.ai/docs) 是查找答案的最佳起点。内容全面，我们投入大量时间进行维护。你也可以通过 GitHub 提出文档修改建议。
-- [Langfuse 常见问题](https://litefuse.ai/faq) 解答了最常见的问题。
+- [Litefuse 常见问题](https://litefuse.ai/faq) 解答了最常见的问题。
 - 使用 "Ask AI" 立即获取问题答案。
 
 支持渠道：
 
-- **在 GitHub Discussions 的 [公共问答](https://github.com/orgs/langfuse/discussions/categories/support) 中提出任何问题。** 请尽量提供详细信息（如代码片段、截图、背景信息）以帮助我们理解你的问题。
-- 在 GitHub Discussions 中 [提出功能请求](https://github.com/orgs/langfuse/discussions/categories/ideas)。
-- 在 GitHub Issues 中 [报告 Bug](https://github.com/selectdb/langfuse-doris/issues)。
+- **在 GitHub Discussions 的 [公共问答](https://github.com/orgs/Litefuse/discussions/categories/support) 中提出任何问题。** 请尽量提供详细信息（如代码片段、截图、背景信息）以帮助我们理解你的问题。
+- 在 GitHub Discussions 中 [提出功能请求](https://github.com/orgs/Litefuse/discussions/categories/ideas)。
+- 在 GitHub Issues 中 [报告 Bug](https://github.com/selectdb/Litefuse-doris/issues)。
 - 对于时效性较强的问题，请通过应用内聊天小部件联系我们。
 
 ## 🤝 贡献
 
 欢迎你的贡献！
 
-- 在 GitHub Discussions 中为 [想法](https://github.com/orgs/langfuse/discussions/categories/ideas)投票。
-- 提出并评论 [问题](https://github.com/selectdb/langfuse-doris/issues)。
+- 在 GitHub Discussions 中为 [想法](https://github.com/orgs/Litefuse/discussions/categories/ideas)投票。
+- 提出并评论 [问题](https://github.com/selectdb/Litefuse-doris/issues)。
 - 提交 PR —— 详情请参见 [CONTRIBUTING.md](CONTRIBUTING.md)，了解如何搭建开发环境。
 
 ## 🥇 许可证
@@ -276,17 +276,17 @@ _[Langfuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj
 
 ## ⭐️ 星标历史
 
-<a href="https://star-history.com/#langfuse/langfuse&Date">
+<a href="https://star-history.com/#Litefuse/Litefuse&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date" />
-    <img alt="星标历史图表" src="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date" style="border-radius: 15px;" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date" />
+    <img alt="星标历史图表" src="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date" style="border-radius: 15px;" />
   </picture>
 </a>
 
-## ❤️ 使用 Langfuse 的开源项目
+## ❤️ 使用 Litefuse 的开源项目
 
-以下是使用 Langfuse 的顶级开源 Python 项目，按星标数排名（[来源](https://github.com/selectdb/langfuse-doris-docs/blob/main/components-mdx/dependents)）：
+以下是使用 Litefuse 的顶级开源 Python 项目，按星标数排名（[来源](https://github.com/selectdb/Litefuse-doris-docs/blob/main/components-mdx/dependents)）：
 
 | 仓库                                                                                                                                                                                                                                                                |  星数 |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----: |
@@ -341,11 +341,11 @@ _[Langfuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj
 
 ### 遥测
 
-默认情况下，Langfuse 会自动将自托管实例的基础使用统计数据上传至集中服务器（PostHog）。
+默认情况下，Litefuse 会自动将自托管实例的基础使用统计数据上传至集中服务器（PostHog）。
 
 这有助于我们：
 
-1. 了解 Langfuse 的使用情况，并改进最关键的功能。
+1. 了解 Litefuse 的使用情况，并改进最关键的功能。
 2. 跟踪整体使用数据，以便内部及外部（例如筹款）报告。
 
 所有数据均不会与第三方共享，也不包含任何敏感信息。我们对这一过程保持高度透明，你可以在 [此处](/web/src/features/telemetry/index.ts) 查看我们收集的具体数据。

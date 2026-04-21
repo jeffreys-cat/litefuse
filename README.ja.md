@@ -1,4 +1,4 @@
-![Langfuse GitHub Banner](https://litefuse.ai/images/docs/github-readme/github-banner.png)
+![Litefuse GitHub Banner](https://litefuse.ai/images/docs/github-readme/github-banner.png)
 
 <div align="center">
    <div>
@@ -7,7 +7,7 @@
             <strong>🇯🇵 🤝 🪢</strong>
          </a> · 
          <a href="https://cloud.litefuse.ai">
-            <strong>Langfuse Cloud</strong>
+            <strong>Litefuse Cloud</strong>
          </a> · 
          <a href="https://litefuse.ai/docs/deployment/self-host">
             <strong>セルフホスティング</strong>
@@ -26,7 +26,7 @@
       <a href="https://litefuse.ai/roadmap"><strong>ロードマップ</strong></a> ·
    </div>
    <br/>
-   <span>Langfuseは、サポートと機能リクエストのために <a href="https://github.com/orgs/langfuse/discussions"><strong>GitHub Discussions</strong></a> を利用しています。</span>
+   <span>Litefuseは、サポートと機能リクエストのために <a href="https://github.com/orgs/Litefuse/discussions"><strong>GitHub Discussions</strong></a> を利用しています。</span>
    <br/>
    <span><b>We're hiring.</b> <a href="https://litefuse.ai/careers"><strong>チームに加わる</strong></a> （製品エンジニアリングおよびテクニカルGTMのポジション）への応募をお待ちしています。</span>
    <br/>
@@ -36,30 +36,30 @@
 </div>
 
 <p align="center">
-   <a href="https://github.com/selectdb/langfuse-doris/blob/main/LICENSE">
+   <a href="https://github.com/selectdb/Litefuse-doris/blob/main/LICENSE">
    <img src="https://img.shields.io/badge/License-MIT-E11311.svg" alt="MIT License">
    </a>
-   <a href="https://www.ycombinator.com/companies/langfuse"><img src="https://img.shields.io/badge/Y%20Combinator-W23-orange" alt="Y Combinator W23"></a>
-   <a href="https://hub.docker.com/u/langfuse" target="_blank">
-   <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/langfuse/langfuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff"></a>
-   <a href="https://pypi.python.org/pypi/langfuse"><img src="https://img.shields.io/pypi/dm/langfuse?logo=python&logoColor=white&label=pypi%20langfuse&color=blue" alt="langfuse Python package on PyPi"></a>
-   <a href="https://www.npmjs.com/package/langfuse"><img src="https://img.shields.io/npm/dm/langfuse?logo=npm&logoColor=white&label=npm%20langfuse&color=blue" alt="langfuse npm package"></a>
+   <a href="https://www.ycombinator.com/companies/Litefuse"><img src="https://img.shields.io/badge/Y%20Combinator-W23-orange" alt="Y Combinator W23"></a>
+   <a href="https://hub.docker.com/u/Litefuse" target="_blank">
+   <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/Litefuse/Litefuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff"></a>
+   <a href="https://pypi.python.org/pypi/Litefuse"><img src="https://img.shields.io/pypi/dm/Litefuse?logo=python&logoColor=white&label=pypi%20Litefuse&color=blue" alt="Litefuse Python package on PyPi"></a>
+   <a href="https://www.npmjs.com/package/Litefuse"><img src="https://img.shields.io/npm/dm/Litefuse?logo=npm&logoColor=white&label=npm%20Litefuse&color=blue" alt="Litefuse npm package"></a>
    <br/>
    <a href="https://discord.com/invite/7NXusRtqYU" target="_blank">
    <img src="https://img.shields.io/discord/1111061815649124414?logo=discord&labelColor=%20%235462eb&logoColor=%20%23f5f5f5&color=%20%235462eb"
       alt="chat on Discord"></a>
-   <a href="https://twitter.com/intent/follow?screen_name=langfuse" target="_blank">
-   <img src="https://img.shields.io/twitter/follow/langfuse?logo=X&color=%20%23f5f5f5"
+   <a href="https://twitter.com/intent/follow?screen_name=Litefuse" target="_blank">
+   <img src="https://img.shields.io/twitter/follow/Litefuse?logo=X&color=%20%23f5f5f5"
       alt="follow on X(Twitter)"></a>
-   <a href="https://www.linkedin.com/company/langfuse/" target="_blank">
+   <a href="https://www.linkedin.com/company/Litefuse/" target="_blank">
    <img src="https://custom-icon-badges.demolab.com/badge/LinkedIn-0A66C2?logo=linkedin-white&logoColor=fff"
       alt="follow on LinkedIn"></a>
-   <a href="https://github.com/selectdb/langfuse-doris/graphs/commit-activity" target="_blank">
-   <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/langfuse/langfuse?labelColor=%20%2332b583&color=%20%2312b76a"></a>
-   <a href="https://github.com/selectdb/langfuse-doris/" target="_blank">
-   <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3Alangfuse%2Flangfuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
-   <a href="https://github.com/selectdb/langfuse-doris/discussions/" target="_blank">
-   <img alt="Discussion posts" src="https://img.shields.io/github/discussions/langfuse/langfuse?labelColor=%20%239b8afb&color=%20%237a5af8"></a>
+   <a href="https://github.com/selectdb/Litefuse-doris/graphs/commit-activity" target="_blank">
+   <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/Litefuse/Litefuse?labelColor=%20%2332b583&color=%20%2312b76a"></a>
+   <a href="https://github.com/selectdb/Litefuse-doris/" target="_blank">
+   <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3ALitefuse%2FLitefuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
+   <a href="https://github.com/selectdb/Litefuse-doris/discussions/" target="_blank">
+   <img alt="Discussion posts" src="https://img.shields.io/github/discussions/Litefuse/Litefuse?labelColor=%20%239b8afb&color=%20%237a5af8"></a>
 </p>
 
 <p align="center">
@@ -69,18 +69,18 @@
   <a href="./README.kr.md"><img alt="README in Korean" src="https://img.shields.io/badge/한국어-d9d9d9"></a>
 </p>
 
-Langfuseは**オープンソースのLLMエンジニアリング**プラットフォームです。  
+Litefuseは**オープンソースのLLMエンジニアリング**プラットフォームです。  
 チームが共同でAIアプリケーションを**開発、監視、評価**、および**デバッグ**するのを支援します。  
-Langfuseは**数分でセルフホスト可能**で、**多くの実績を持つ**システムです。
+Litefuseは**数分でセルフホスト可能**で、**多くの実績を持つ**システムです。
 
-[![Langfuse Overview Video](https://github.com/user-attachments/assets/3926b288-ff61-4b95-8aa1-45d041c70866)](https://litefuse.ai/watch-demo)
+[![Litefuse Overview Video](https://github.com/user-attachments/assets/3926b288-ff61-4b95-8aa1-45d041c70866)](https://litefuse.ai/watch-demo)
 
 ## ✨ コア機能
 
-![Langfuse Overview](https://litefuse.ai/images/docs/github-readme/github-feature-overview.png)
+![Litefuse Overview](https://litefuse.ai/images/docs/github-readme/github-feature-overview.png)
 
 - **[LLMアプリケーションの可観測性](https://litefuse.ai/docs/tracing):**  
-  アプリケーションにインストゥルメンテーションを導入し、Langfuseへトレースを取り込むことで、LLM呼び出しやリトリーバル、埋め込み、エージェントアクションなどの関連ロジックを追跡できます。  
+  アプリケーションにインストゥルメンテーションを導入し、Litefuseへトレースを取り込むことで、LLM呼び出しやリトリーバル、埋め込み、エージェントアクションなどの関連ロジックを追跡できます。  
   複雑なログやユーザーセッションを解析・デバッグできます。  
   インタラクティブな[デモ](https://litefuse.ai/docs/demo)で動作を確認してください。
 
@@ -89,7 +89,7 @@ Langfuseは**数分でセルフホスト可能**で、**多くの実績を持つ
   サーバーおよびクライアント側で強力なキャッシングを行うため、アプリケーションのレイテンシを増やすことなくプロンプトの改良が可能です。
 
 - **[評価](https://litefuse.ai/docs/evaluation/overview):**  
-  評価はLLMアプリケーション開発ワークフローの要であり、Langfuseは多様なニーズに対応します。  
+  評価はLLMアプリケーション開発ワークフローの要であり、Litefuseは多様なニーズに対応します。  
   LLMを判定者として用いる方法、ユーザーフィードバックの収集、手動によるラベリング、API/SDKを通じたカスタム評価パイプラインをサポートします。
 
 - **[データセット](https://litefuse.ai/docs/evaluation/dataset-runs/datasets):**  
@@ -101,45 +101,45 @@ Langfuseは**数分でセルフホスト可能**で、**多くの実績を持つ
   トレースで不具合が見つかった場合、直接プレイグラウンドへ飛び、迅速に改善できます。
 
 - **[包括的なAPI](https://litefuse.ai/docs/api):**  
-  LangfuseはAPIを通じて提供されるビルディングブロックを用い、カスタムLLMOpsワークフローの基盤として頻繁に利用されます。  
+  LitefuseはAPIを通じて提供されるビルディングブロックを用い、カスタムLLMOpsワークフローの基盤として頻繁に利用されます。  
   OpenAPI仕様、Postmanコレクション、PythonやJS/TS向けの型付きSDKが利用可能です。
 
-## 📦 Langfuseのデプロイ
+## 📦 Litefuseのデプロイ
 
-![Langfuse Deployment Options](https://litefuse.ai/images/docs/github-readme/github-deployment-options.png)
+![Litefuse Deployment Options](https://litefuse.ai/images/docs/github-readme/github-deployment-options.png)
 
-### Langfuse Cloud
+### Litefuse Cloud
 
-Langfuseチームによるマネージドデプロイメント。充実した無料プラン（ホビープラン）で、クレジットカード不要です。
+Litefuseチームによるマネージドデプロイメント。充実した無料プラン（ホビープラン）で、クレジットカード不要です。
 
 <div align="center">
     <a href="https://cloud.litefuse.ai" target="_blank">
-        <img alt="Static Badge" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Langfuse%20Cloud-8A2BE2?&color=orange">
+        <img alt="Static Badge" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Litefuse%20Cloud-8A2BE2?&color=orange">
     </a>
 </div>
 
-### セルフホスティング Langfuse
+### セルフホスティング Litefuse
 
-自身のインフラ上でLangfuseを実行できます:
+自身のインフラ上でLitefuseを実行できます:
 
 - **[Local (docker compose)](https://litefuse.ai/self-hosting/local):**  
-  Docker Composeを使用して、たった5分で自分のマシン上でLangfuseを実行できます.
+  Docker Composeを使用して、たった5分で自分のマシン上でLitefuseを実行できます.
 
   ```bash
-  # 最新のLangfuseリポジトリのコピーを取得
-  git clone https://github.com/selectdb/langfuse-doris.git
-  cd langfuse
+  # 最新のLitefuseリポジトリのコピーを取得
+  git clone https://github.com/selectdb/Litefuse-doris.git
+  cd Litefuse
 
-  # Langfuseのdocker composeを起動
+  # Litefuseのdocker composeを起動
   docker compose up
   ```
 
 - **[Kubernetes (Helm)](https://litefuse.ai/self-hosting/kubernetes-helm):**  
-  Helmを使用してKubernetesクラスター上でLangfuseを実行します。  
+  Helmを使用してKubernetesクラスター上でLitefuseを実行します。  
   こちらが推奨される本番環境でのデプロイ方法です。
 
 - **[VM](https://litefuse.ai/self-hosting/docker-compose):**  
-  Docker Composeを使用して、単一の仮想マシン上でLangfuseを実行します。
+  Docker Composeを使用して、単一の仮想マシン上でLitefuseを実行します。
 
 - Terraform テンプレート: [AWS](https://litefuse.ai/self-hosting/aws), [Azure](https://litefuse.ai/self-hosting/azure), [GCP](https://litefuse.ai/self-hosting/gcp)
 
@@ -147,7 +147,7 @@ Langfuseチームによるマネージドデプロイメント。充実した無
 
 ## 🔌 インテグレーション
 
-![Langfuse Integrations](https://litefuse.ai/images/docs/github-readme/github-integrations.png)
+![Litefuse Integrations](https://litefuse.ai/images/docs/github-readme/github-integrations.png)
 
 ### 主なインテグレーション:
 
@@ -162,7 +162,7 @@ Langfuseチームによるマネージドデプロイメント。充実した無
 | [Vercel AI SDK](https://litefuse.ai/docs/integrations/vercel-ai-sdk)        | JS/TS                      | React、Next.js、Vue、Svelte、Node.jsを使用してAI搭載アプリケーションの構築を支援するTypeScriptツールキットです。                                          |
 | [API](https://litefuse.ai/docs/api)                                         |                            | 公開APIを直接呼び出すことが可能です。OpenAPI仕様も利用できます。                                                                                          |
 
-### Langfuseと統合されているパッケージ:
+### Litefuseと統合されているパッケージ:
 
 | 名前                                                                                 | タイプ                     | 説明                                                                                |
 | ------------------------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------- |
@@ -188,43 +188,43 @@ Langfuseチームによるマネージドデプロイメント。充実した無
 
 ## 🚀 クイックスタート
 
-アプリケーションにインストゥルメンテーションを導入し、LLM呼び出しやリトリーバル、埋め込み、エージェントアクションなどの動作をLangfuseに記録しましょう。  
+アプリケーションにインストゥルメンテーションを導入し、LLM呼び出しやリトリーバル、埋め込み、エージェントアクションなどの動作をLitefuseに記録しましょう。  
 複雑なログやユーザーセッションの解析・デバッグが可能になります。
 
 ### 1️⃣ 新規プロジェクトの作成
 
-1. [Langfuseアカウント作成](https://cloud.litefuse.ai/auth/sign-up) または [セルフホスト](https://litefuse.ai/self-hosting)
+1. [Litefuseアカウント作成](https://cloud.litefuse.ai/auth/sign-up) または [セルフホスト](https://litefuse.ai/self-hosting)
 2. 新規プロジェクトを作成
 3. プロジェクト設定で新しいAPIクレデンシャルを作成
 
 ### 2️⃣ 初めてのLLM呼び出しのログ記録
 
 [`@observe()` デコレーター](https://litefuse.ai/docs/sdk/python/decorators)を利用することで、任意のPython製LLMアプリケーションのトレースが簡単に行えます。  
-このクイックスタートでは、Langfuseの[OpenAI統合](https://litefuse.ai/integrations/model-providers/openai-py)を使用して、全てのモデルパラメータを自動で取得します。
+このクイックスタートでは、Litefuseの[OpenAI統合](https://litefuse.ai/integrations/model-providers/openai-py)を使用して、全てのモデルパラメータを自動で取得します。
 
 > [!TIP]
-> OpenAIを利用していない場合は、[こちらのドキュメント](https://litefuse.ai/docs/get-started#log-your-first-llm-call-to-langfuse)で、他のモデルやフレームワークのログ記録方法をご確認ください。
+> OpenAIを利用していない場合は、[こちらのドキュメント](https://litefuse.ai/docs/get-started#log-your-first-llm-call-to-Litefuse)で、他のモデルやフレームワークのログ記録方法をご確認ください。
 
 ```bash
-pip install langfuse openai
+pip install Litefuse openai
 ```
 
 ```bash filename=".env"
-LANGFUSE_SECRET_KEY="sk-lf-..."
-LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EUリージョン
-# LANGFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 USリージョン
+Litefuse_SECRET_KEY="sk-lf-..."
+Litefuse_PUBLIC_KEY="pk-lf-..."
+Litefuse_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EUリージョン
+# Litefuse_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 USリージョン
 ```
 
-```python:/@observe()/ /from langfuse.openai import openai/ filename="main.py"
-from langfuse import observe
-from langfuse.openai import openai  # OpenAI統合
+```python:/@observe()/ /from Litefuse.openai import openai/ filename="main.py"
+from Litefuse import observe
+from Litefuse.openai import openai  # OpenAI統合
 
 @observe()
 def story():
     return openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": "What is Langfuse?"}],
+        messages=[{"role": "user", "content": "What is Litefuse?"}],
     ).choices[0].message.content
 
 @observe()
@@ -234,45 +234,45 @@ def main():
 main()
 ```
 
-### 3️⃣ Langfuseでトレースを確認する
+### 3️⃣ Litefuseでトレースを確認する
 
-Langfuse上で、LLM呼び出しおよびその他のアプリケーションロジックのトレースを確認できます。
+Litefuse上で、LLM呼び出しおよびその他のアプリケーションロジックのトレースを確認できます。
 
-![Example trace in Langfuse](https://litefuse.ai/images/docs/github-readme/github-example-trace.png)
+![Example trace in Litefuse](https://litefuse.ai/images/docs/github-readme/github-example-trace.png)
 
-_[Langfuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0002jz088vzn1ja4/traces/2cec01e3-3dc2-472f-afcf-3b968cf0c1f4?timestamp=2025-02-10T14%3A27%3A30.275Z&observation=cb5ff844-07ef-41e6-b8e2-6c64344bc13b)_
+_[Litefuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0002jz088vzn1ja4/traces/2cec01e3-3dc2-472f-afcf-3b968cf0c1f4?timestamp=2025-02-10T14%3A27%3A30.275Z&observation=cb5ff844-07ef-41e6-b8e2-6c64344bc13b)_
 
 > [!TIP]
 >
-> Langfuseでのトレースの詳細については、[こちら](https://litefuse.ai/docs/tracing)をご参照いただくか、[インタラクティブデモ](https://litefuse.ai/docs/demo)でお試しください。
+> Litefuseでのトレースの詳細については、[こちら](https://litefuse.ai/docs/tracing)をご参照いただくか、[インタラクティブデモ](https://litefuse.ai/docs/demo)でお試しください。
 
-## ⭐️ Star Langfuse
+## ⭐️ Star Litefuse
 
-![star-langfuse-on-github](https://github.com/user-attachments/assets/79a1d816-d229-4526-aecc-097d4a19f1ad)
+![star-Litefuse-on-github](https://github.com/user-attachments/assets/79a1d816-d229-4526-aecc-097d4a19f1ad)
 
 ## 💭 サポート
 
 質問の回答をお探しの場合は:
 
 - 当社の[ドキュメント](https://litefuse.ai/docs)は、回答を探すための最良の出発点です。内容が充実しており、継続的なメンテナンスに努めています。GitHubを通じてドキュメントへの修正提案も可能です。
-- よくある質問は[Langfuse FAQ](https://litefuse.ai/faq)にまとめられています。
+- よくある質問は[Litefuse FAQ](https://litefuse.ai/faq)にまとめられています。
 - [Ask AI](https://litefuse.ai/docs/ask-ai)を利用すれば、質問に対して即座に回答を得ることができます。
 - 日本語のサポートや決済, 請求書払いなどをお求めの場合は、日本のリセラー (https://gao-ai.com) にご相談ください。
 
 サポートチャネル:
 
-- **GitHub Discussionsの[パブリックQ&A](https://github.com/orgs/langfuse/discussions/categories/support)で質問してください。**  
+- **GitHub Discussionsの[パブリックQ&A](https://github.com/orgs/Litefuse/discussions/categories/support)で質問してください。**  
   質問には、コードスニペット、スクリーンショット、背景情報など、できるだけ詳細な情報を含めるとスムーズな対応が可能です。
-- GitHub Discussionsで[機能リクエスト](https://github.com/orgs/langfuse/discussions/categories/ideas)を投稿してください。
-- GitHub Issuesにて[バグ報告](https://github.com/selectdb/langfuse-doris/issues)を行ってください。
+- GitHub Discussionsで[機能リクエスト](https://github.com/orgs/Litefuse/discussions/categories/ideas)を投稿してください。
+- GitHub Issuesにて[バグ報告](https://github.com/selectdb/Litefuse-doris/issues)を行ってください。
 - 緊急の問い合わせの場合は、アプリ内チャットウィジェットでご連絡ください。
 
 ## 🤝 貢献
 
 皆様からの貢献を歓迎します!
 
-- GitHub Discussionsの[アイデア](https://github.com/orgs/langfuse/discussions/categories/ideas)に投票してください。
-- [Issues](https://github.com/selectdb/langfuse-doris/issues)を作成・コメントしてください。
+- GitHub Discussionsの[アイデア](https://github.com/orgs/Litefuse/discussions/categories/ideas)に投票してください。
+- [Issues](https://github.com/selectdb/Litefuse-doris/issues)を作成・コメントしてください。
 - プルリクエストを送信してください。開発環境のセットアップ方法については[CONTRIBUTING.md](CONTRIBUTING.md)をご参照ください。
 
 ## 🥇 ライセンス
@@ -282,17 +282,17 @@ _[Langfuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0
 
 ## ⭐️ スターの履歴
 
-<a href="https://star-history.com/#langfuse/langfuse&Date">
+<a href="https://star-history.com/#Litefuse/Litefuse&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=langfuse/langfuse&type=Date" style="border-radius: 15px;" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Litefuse/Litefuse&type=Date" style="border-radius: 15px;" />
  </picture>
 </a>
 
-## ❤️ Langfuseを利用しているオープンソースプロジェクト
+## ❤️ Litefuseを利用しているオープンソースプロジェクト
 
-Langfuseを利用している主要なオープンソースPythonプロジェクト（スター数順）: ([出典](https://github.com/selectdb/langfuse-doris-docs/blob/main/components-mdx/dependents))
+Litefuseを利用している主要なオープンソースPythonプロジェクト（スター数順）: ([出典](https://github.com/selectdb/Litefuse-doris-docs/blob/main/components-mdx/dependents))
 
 | リポジトリ                                                                                                                                                                                                                                                          | スター |
 | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -----: |
@@ -348,9 +348,9 @@ Langfuseを利用している主要なオープンソースPythonプロジェク
 
 ### テレメトリー
 
-デフォルトでは、Langfuseは以下の目的でセルフホストされたインスタンスの基本的な使用統計情報を中央サーバ（PostHog）へ自動的に報告します。
+デフォルトでは、Litefuseは以下の目的でセルフホストされたインスタンスの基本的な使用統計情報を中央サーバ（PostHog）へ自動的に報告します。
 
-1. Langfuseの利用状況を把握し、最も重要な機能の改善に役立てる
+1. Litefuseの利用状況を把握し、最も重要な機能の改善に役立てる
 2. 内部および外部（例：資金調達）のレポートのために全体の利用状況を追跡する
 
 収集されたデータは第三者と共有されず、機微な情報は一切含まれていません。  
