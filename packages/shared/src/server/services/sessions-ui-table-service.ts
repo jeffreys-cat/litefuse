@@ -321,7 +321,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           requiresScoresJoin
             ? `scores_agg AS (
           SELECT
-            session_id,
+            score_session_id,
             any_value(project_id) as project_id,
             collect_list(CASE WHEN data_type IN ('NUMERIC', 'BOOLEAN') THEN
               struct(name, avg_value) END) AS scores_avg,
@@ -329,19 +329,19 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
               CONCAT(name, ':', string_value) ELSE NULL END) AS score_categories
           FROM (
             SELECT
-              session_id,
-              project_id,
-              name,
-              avg(value) avg_value,
-              string_value,
-              data_type
-            FROM scores
-            WHERE project_id = {projectId: String}
-              AND session_id IS NOT NULL
-              ${traceTimestampFilter ? `AND timestamp >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
-            GROUP BY session_id, project_id, name, string_value, data_type
+              t.session_id AS score_session_id,
+              s.project_id,
+              s.name,
+              avg(s.value) avg_value,
+              s.string_value,
+              s.data_type
+            FROM scores s
+            INNER JOIN filtered_traces t ON t.id = s.trace_id AND t.project_id = s.project_id
+            WHERE s.project_id = {projectId: String}
+              ${traceTimestampFilter ? `AND s.timestamp >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
+            GROUP BY t.session_id, s.project_id, s.name, s.string_value, s.data_type
           ) tmp
-          GROUP BY session_id
+          GROUP BY score_session_id
         ),`
             : ""
         }
@@ -394,7 +394,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             ${
               requiresScoresJoin
                 ? `LEFT JOIN scores_agg sc
-            ON sc.session_id = t.session_id AND sc.project_id = t.project_id`
+            ON sc.score_session_id = t.session_id AND sc.project_id = t.project_id`
                 : ""
             }
             WHERE t.session_id IS NOT NULL
