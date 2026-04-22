@@ -976,7 +976,7 @@ export default function ObservationsEventsTable({
       id: "promptName",
       header: getEventsColumnName("promptName"),
       headerTooltip: {
-        description: "Link to prompt version in Langfuse prompt management.",
+        description: "Link to prompt version in Litefuse prompt management.",
         href: "https://litefuse.ai/docs/prompt-management/get-started",
       },
       size: 200,

@@ -21,8 +21,8 @@ export const SURVEY_QUESTIONS: SurveyQuestion[] = [
     options: [
       "Invited by team",
       "Just looking around",
-      "Evaluating / Testing Langfuse",
-      "Start using Langfuse",
+      "Evaluating / Testing Litefuse",
+      "Start using Litefuse",
       "Migrating from other solution",
       "Migrating from self-hosted",
     ],

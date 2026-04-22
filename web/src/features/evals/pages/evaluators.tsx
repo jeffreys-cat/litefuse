@@ -63,7 +63,7 @@ export default function EvaluatorsPage() {
           title: "LLM-as-a-Judge Evaluators",
           help: {
             description:
-              "Configure a langfuse managed or custom evaluator to evaluate incoming traces.",
+              "Configure a Litefuse managed or custom evaluator to evaluate incoming traces.",
             href: "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge",
           },
         }}
@@ -81,7 +81,7 @@ export default function EvaluatorsPage() {
           title: "LLM-as-a-Judge Evaluators",
           help: {
             description:
-              "Configure a langfuse managed or custom evaluator to evaluate incoming traces.",
+              "Configure a Litefuse managed or custom evaluator to evaluate incoming traces.",
             href: "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge",
           },
           tabsProps: {

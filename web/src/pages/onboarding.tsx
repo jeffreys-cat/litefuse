@@ -8,7 +8,7 @@ export default function OnboardingPage() {
   return (
     <>
       <Head>
-        <title>Onboarding | Langfuse</title>
+        <title>Onboarding | Litefuse</title>
       </Head>
       <OnboardingSurvey />
     </>

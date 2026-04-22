@@ -295,7 +295,7 @@ export const plainRouter = createTRPCRouter({
           "",
           "Thanks,",
           "",
-          "Team Langfuse",
+          "Team Litefuse",
           "",
           "",
           "=============================================================================================",

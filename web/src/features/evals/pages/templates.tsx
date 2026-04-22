@@ -35,7 +35,7 @@ export default function TemplatesPage() {
       headerProps={{
         title: "LLM-as-a-Judge Evaluators",
         help: {
-          description: "View all langfuse managed and custom evaluators.",
+          description: "View all Litefuse managed and custom evaluators.",
           href: "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge",
         },
         tabsProps: {

@@ -20,7 +20,7 @@ export const getMaintainer = (
     if (evalTemplate.partner) {
       return `${getPartnerName(evalTemplate.partner)} maintained`;
     }
-    return "Langfuse maintained";
+    return "Litefuse maintained";
   }
   return "User maintained";
 };

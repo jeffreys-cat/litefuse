@@ -244,7 +244,7 @@ export const VariableMappingCard = ({
                                 <VariableMappingDescription
                                   title="Object"
                                   description={
-                                    "Langfuse object to retrieve the data from."
+                                    "Litefuse object to retrieve the data from."
                                   }
                                   href={
                                     "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge"
@@ -309,7 +309,7 @@ export const VariableMappingCard = ({
                                     <VariableMappingDescription
                                       title={"Object Name"}
                                       description={
-                                        "Name of the Langfuse object to retrieve the data from."
+                                        "Name of the Litefuse object to retrieve the data from."
                                       }
                                       href={
                                         "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge"
@@ -359,7 +359,7 @@ export const VariableMappingCard = ({
                                               onChange={(e) =>
                                                 field.onChange(e.target.value)
                                               }
-                                              placeholder="Enter langfuse object name"
+                                              placeholder="Enter Litefuse object name"
                                               disabled={disabled}
                                             />
                                           </div>
@@ -409,7 +409,7 @@ export const VariableMappingCard = ({
                                 <VariableMappingDescription
                                   title={"Object Field"}
                                   description={
-                                    "Field on the Langfuse object to insert into the template."
+                                    "Field on the Litefuse object to insert into the template."
                                   }
                                   href={
                                     "https://litefuse.ai/docs/evaluation/evaluation-methods/llm-as-a-judge"

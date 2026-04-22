@@ -292,7 +292,7 @@ export const PromptDetail = ({
         itemType: "PROMPT",
         help: {
           description:
-            "You can use this prompt within your application through the Langfuse SDKs and integrations. Refer to the documentation for more information.",
+            "You can use this prompt within your application through the available SDKs and integrations. Refer to the documentation for more information.",
           href: "https://litefuse.ai/docs/prompts",
         },
         breadcrumb: [
