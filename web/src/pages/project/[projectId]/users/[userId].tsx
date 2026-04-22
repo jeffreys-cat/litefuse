@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { api } from "@/src/utils/api";
 import TracesTable from "@/src/components/table/use-cases/traces";
+import ScoresTable from "@/src/components/table/use-cases/scores";
 import { compactNumberFormatter, usdFormatter } from "@/src/utils/numbers";
 import { StringParam, useQueryParam, withDefault } from "use-query-params";
 import { DetailPageNav } from "@/src/features/navigate-detail-pages/DetailPageNav";
@@ -13,7 +14,7 @@ import Page from "@/src/components/layouts/page";
 import { useV4Beta } from "@/src/features/events/hooks/useV4Beta";
 import { ObservationsEventsTable } from "@/src/features/events/components";
 
-const tabs = ["Traces", "Sessions"] as const;
+const tabs = ["Traces", "Sessions", "Scores"] as const;
 
 export default function UserPage() {
   const router = useRouter();
@@ -50,6 +51,8 @@ export default function UserPage() {
         return <SessionsTab userId={userId} projectId={projectId} />;
       case "Traces":
         return <TracesTab userId={userId} projectId={projectId} />;
+      case "Scores":
+        return <ScoresTab userId={userId} projectId={projectId} />;
       default:
         return null;
     }
@@ -169,6 +172,16 @@ type TabProps = {
   userId: string;
   projectId: string;
 };
+
+function ScoresTab({ userId, projectId }: TabProps) {
+  return (
+    <ScoresTable
+      projectId={projectId}
+      userId={userId}
+      omittedFilter={["User ID"]}
+    />
+  );
+}
 
 function TracesTab({ userId, projectId }: TabProps) {
   const { isBetaEnabled } = useV4Beta();
