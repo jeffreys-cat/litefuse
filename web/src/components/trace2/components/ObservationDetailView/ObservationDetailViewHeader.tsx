@@ -12,6 +12,7 @@
 import { memo } from "react";
 import {
   type ObservationType,
+  type ScoreDomain,
   AnnotationQueueObjectType,
   isGenerationLike,
 } from "@langfuse/shared";
@@ -20,6 +21,7 @@ import { type ObservationReturnTypeWithMetadata } from "@/src/server/api/routers
 import { ItemBadge } from "@/src/components/ItemBadge";
 import { LocalIsoDate } from "@/src/components/LocalIsoDate";
 import { NewDatasetItemFromExistingObject } from "@/src/features/datasets/components/NewDatasetItemFromExistingObject";
+import { AnnotateDrawer } from "@/src/features/scores/components/AnnotateDrawer";
 import { CreateNewAnnotationQueueItem } from "@/src/features/annotation-queues/components/CreateNewAnnotationQueueItem";
 import { CommentDrawerButton } from "@/src/features/comments/CommentDrawerButton";
 import { JumpToPlaygroundButton } from "@/src/features/playground/page/components/JumpToPlaygroundButton";
@@ -39,7 +41,10 @@ import {
 import { CostBadge, UsageBadge } from "./ObservationMetadataBadgesTooltip";
 import { ModelBadge } from "./ObservationMetadataBadgeModel";
 import { ModelParametersBadges } from "./ObservationMetadataBadgeModelParameters";
-import { type MetadataDomainClient } from "@/src/utils/clientSideDomainTypes";
+import {
+  type WithStringifiedMetadata,
+  type MetadataDomainClient,
+} from "@/src/utils/clientSideDomainTypes";
 import { type AggregatedTraceMetrics } from "@/src/components/trace2/lib/trace-aggregation";
 import type Decimal from "decimal.js";
 import { DetailHeaderActionsMenu } from "@/src/components/trace2/components/_shared/DetailHeaderActionsMenu";
@@ -57,6 +62,7 @@ export interface ObservationDetailViewHeaderProps {
   projectId: string;
   traceId: string;
   latencySeconds: number | null;
+  observationScores: WithStringifiedMetadata<ScoreDomain>[];
   commentCount: number | undefined;
   // Inline comment props
   pendingSelection?: SelectionData | null;
@@ -74,6 +80,7 @@ export const ObservationDetailViewHeader = memo(
     projectId,
     traceId,
     latencySeconds,
+    observationScores,
     commentCount,
     pendingSelection,
     onSelectionUsed,
@@ -124,7 +131,21 @@ export const ObservationDetailViewHeader = memo(
               />
             )}
             <div className="flex items-start">
-              {/* AnnotateDrawer hidden: score feature not supported */}
+              <AnnotateDrawer
+                key={"annotation-drawer-" + observation.id}
+                projectId={projectId}
+                scoreTarget={{
+                  type: "trace",
+                  traceId: traceId,
+                  observationId: observation.id,
+                }}
+                scores={observationScores}
+                scoreMetadata={{
+                  projectId: projectId,
+                  environment: observation.environment,
+                }}
+                size="sm"
+              />
               <CreateNewAnnotationQueueItem
                 projectId={projectId}
                 objectId={observation.id}
