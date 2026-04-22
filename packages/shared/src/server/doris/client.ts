@@ -713,6 +713,8 @@ const TIMESTAMP_FIELDS = [
   "start_time",
   "end_time",
   "completion_start_time",
+  "dataset_run_created_at",
+  "dataset_item_version",
 ] as const;
 
 const DATE_FIELD_MAPPINGS = {
