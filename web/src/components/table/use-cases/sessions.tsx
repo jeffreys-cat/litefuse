@@ -872,7 +872,7 @@ export default function SessionsTable({
               help={{
                 description:
                   "A session is a collection of related traces, such as a conversation or thread. To begin, add a sessionId to the trace.",
-                href: "https://langfuse.ai/docs/observability/features/sessions",
+                href: "https://litefuse.ai/docs/observability/features/sessions",
               }}
               rowHeight={rowHeight}
             />

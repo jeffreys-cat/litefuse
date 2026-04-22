@@ -55,9 +55,9 @@ export function AnnotationQueuesOnboarding({
       }}
       secondaryAction={{
         label: "Learn More",
-        href: "https://langfuse.ai/docs/scores/annotation",
+        href: "https://litefuse.ai/docs/scores/annotation",
       }}
-      videoSrc="https://static.langfuse.ai/prod-assets/onboarding/annotation-queue-overview-v1.mp4"
+      videoSrc="https://static.litefuse.ai/prod-assets/onboarding/annotation-queue-overview-v1.mp4"
     />
   );
 }

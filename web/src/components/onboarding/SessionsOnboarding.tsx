@@ -7,7 +7,7 @@ export function SessionsOnboarding() {
     <SplashScreen
       title="You aren't using sessions yet"
       description="Sessions let you group traces that belong to the same workflow, or conversation."
-      videoSrc="https://static.langfuse.ai/prod-assets/onboarding/sessions-overview-v1.mp4"
+      videoSrc="https://static.litefuse.ai/prod-assets/onboarding/sessions-overview-v1.mp4"
     >
       <div className="mt-8">
         <h3 className="mb-4 text-2xl font-semibold">Start using sessions</h3>
@@ -16,7 +16,7 @@ export function SessionsOnboarding() {
           your traces.
         </p>
         <ActionButton
-          href="https://langfuse.ai/docs/observability/features/sessions"
+          href="https://litefuse.ai/docs/observability/features/sessions"
           variant="default"
         >
           Read the docs

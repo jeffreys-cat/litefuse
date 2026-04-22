@@ -98,7 +98,7 @@ const DemoBadge = () => {
               variant="cta"
             >
               <Link
-                href="https://langfuse.ai/docs/demo"
+                href="https://litefuse.ai/docs/demo"
                 target="_blank"
                 rel="noopener noreferrer"
               >

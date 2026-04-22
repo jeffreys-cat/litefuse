@@ -257,9 +257,9 @@ _[Litefuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj
 
 支持渠道：
 
-- **在 GitHub Discussions 的 [公共问答](https://github.com/orgs/Litefuse/discussions/categories/support) 中提出任何问题。** 请尽量提供详细信息（如代码片段、截图、背景信息）以帮助我们理解你的问题。
-- 在 GitHub Discussions 中 [提出功能请求](https://github.com/orgs/Litefuse/discussions/categories/ideas)。
-- 在 GitHub Issues 中 [报告 Bug](https://github.com/selectdb/Litefuse-doris/issues)。
+- **在 GitHub Discussions 的 [公共问答](https://github.com/orgs/litefuse/discussions/categories/support) 中提出任何问题。** 请尽量提供详细信息（如代码片段、截图、背景信息）以帮助我们理解你的问题。
+- 在 GitHub Discussions 中 [提出功能请求](https://github.com/orgs/litefuse/discussions/categories/ideas)。
+- 在 GitHub Issues 中 [报告 Bug](https://github.com/selectdb/litefuse/issues)。
 - 对于时效性较强的问题，请通过应用内聊天小部件联系我们。
 
 ## 🤝 贡献

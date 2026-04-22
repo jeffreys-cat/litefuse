@@ -65,7 +65,7 @@ export const mixpanelIntegrationRouter = createTRPCRouter({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message:
-              "Missing environment variable: `ENCRYPTION_KEY`. Please consult our docs: https://langfuse.ai/self-hosting",
+              "Missing environment variable: `ENCRYPTION_KEY`. Please consult our docs: https://litefuse.ai/self-hosting",
           });
         }
       }

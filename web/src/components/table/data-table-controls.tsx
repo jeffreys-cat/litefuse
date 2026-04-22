@@ -722,7 +722,7 @@ export function CategoricalFacet({
                     Sessions group traces together, which is useful for tracing
                     multi-step workflows.{" "}
                     <a
-                      href="https://langfuse.ai/docs/observability/features/sessions"
+                      href="https://litefuse.ai/docs/observability/features/sessions"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-foreground underline"
@@ -738,7 +738,7 @@ export function CategoricalFacet({
                     Tags let you filter traces according to custom categories
                     (e.g. feature flags).{" "}
                     <a
-                      href="https://langfuse.ai/docs/observability/features/tags"
+                      href="https://litefuse.ai/docs/observability/features/tags"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-foreground underline"
@@ -816,7 +816,7 @@ export function CategoricalFacet({
                     Environments help you separate traces from different
                     contexts (e.g. production, staging).{" "}
                     <a
-                      href="https://langfuse.ai/docs/observability/features/environments"
+                      href="https://litefuse.ai/docs/observability/features/environments"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-foreground underline"

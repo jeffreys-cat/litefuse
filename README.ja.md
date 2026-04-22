@@ -261,10 +261,10 @@ _[Litefuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0
 
 サポートチャネル:
 
-- **GitHub Discussionsの[パブリックQ&A](https://github.com/orgs/Litefuse/discussions/categories/support)で質問してください。**  
+- **GitHub Discussionsの[パブリックQ&A](https://github.com/orgs/litefuse/discussions/categories/support)で質問してください。**  
   質問には、コードスニペット、スクリーンショット、背景情報など、できるだけ詳細な情報を含めるとスムーズな対応が可能です。
-- GitHub Discussionsで[機能リクエスト](https://github.com/orgs/Litefuse/discussions/categories/ideas)を投稿してください。
-- GitHub Issuesにて[バグ報告](https://github.com/selectdb/Litefuse-doris/issues)を行ってください。
+- GitHub Discussionsで[機能リクエスト](https://github.com/orgs/litefuse/discussions/categories/ideas)を投稿してください。
+- GitHub Issuesにて[バグ報告](https://github.com/selectdb/litefuse/issues)を行ってください。
 - 緊急の問い合わせの場合は、アプリ内チャットウィジェットでご連絡ください。
 
 ## 🤝 貢献

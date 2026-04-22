@@ -53,7 +53,7 @@ export function V4BetaIntroDialog({
               Save your table filters as an org-wide saved view so your whole
               team starts from the same place.{" "}
               <a
-                href="https://langfuse.ai/faq/all/explore-observations-in-v4"
+                href="https://litefuse.ai/faq/all/explore-observations-in-v4"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary font-medium hover:underline"
@@ -68,7 +68,7 @@ export function V4BetaIntroDialog({
               Upgrade your SDK to the latest version. Older SDKs still work but
               traces may take ~10 minutes to appear.{" "}
               <a
-                href="https://langfuse.ai/docs/observability/sdk/upgrade-path"
+                href="https://litefuse.ai/docs/observability/sdk/upgrade-path"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-medium underline hover:no-underline"
@@ -80,7 +80,7 @@ export function V4BetaIntroDialog({
         </DialogBody>
         <DialogFooter className="items-center sm:justify-between">
           <a
-            href="https://langfuse.ai/docs/v4"
+            href="https://litefuse.ai/docs/v4"
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary text-sm font-medium hover:underline"

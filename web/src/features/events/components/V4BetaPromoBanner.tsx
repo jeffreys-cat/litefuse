@@ -15,7 +15,7 @@ import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePos
 import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
 
 const CHANGELOG_URL =
-  "https://langfuse.ai/changelog/2026-03-10-simplify-for-scale";
+  "https://litefuse.ai/changelog/2026-03-10-simplify-for-scale";
 const DISMISSED_STORAGE_KEY = "v4-beta-promo-banner:v1:dismissed";
 const V4_BETA_PROMO_BANNER_ID = "v4-beta-promo-banner";
 const V4_BETA_PROMO_BANNER_ORDER = 25;
