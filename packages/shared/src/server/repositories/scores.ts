@@ -966,6 +966,7 @@ const getScoresUiGeneric = async <T>(props: {
         FROM scores s
         ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
         WHERE s.project_id = {projectId: String}
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ${scoresFilterRes?.query ? `AND ${scoresFilterRes.query}` : ""}
         ${orderByToDorisSQL(orderBy ?? null, scoresTableUiColumnDefinitions)}
         ${limit !== undefined && offset !== undefined ? `limit {limit: Int32} offset {offset: Int32}` : ""}
