@@ -51,9 +51,9 @@ export function DatasetsOnboarding({ projectId }: { projectId: string }) {
       }}
       secondaryAction={{
         label: "Learn More",
-        href: "https://langfuse.ai/docs/datasets",
+        href: "https://litefuse.ai/docs/datasets",
       }}
-      videoSrc="https://static.langfuse.ai/prod-assets/onboarding/datasets-overview-v1.mp4"
+      videoSrc="https://static.litefuse.ai/prod-assets/onboarding/datasets-overview-v1.mp4"
     />
   );
 }

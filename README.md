@@ -246,15 +246,15 @@ Support Channels:
 
 - **Ask any question in our [public Q&A](https://github.com/orgs/litefuse/discussions/categories/support) on GitHub Discussions.** Please include as much detail as possible (e.g. code snippets, screenshots, background information) to help us understand your question.
 - [Request a feature](https://github.com/orgs/litefuse/discussions/categories/ideas) on GitHub Discussions.
-- [Report a Bug](https://github.com/selectdb/litefuse-doris/issues) on GitHub Issues.
+- [Report a Bug](https://github.com/selectdb/litefuse/issues) on GitHub Issues.
 - For time-sensitive queries, ping us via the in-app chat widget.
 
 ## 🤝 Contributing
 
 Your contributions are welcome!
 
-- Vote on [Ideas](https://github.com/orgs/litefuse/discussions/categories/ideas) in GitHub Discussions.
-- Raise and comment on [Issues](https://github.com/selectdb/litefuse-doris/issues).
+- Vote on [Ideas](https://github.com/selectdb/litefuse/discussions/categories/ideas) in GitHub Discussions.
+- Raise and comment on [Issues](https://github.com/selectdb/litefuse/issues).
 - Open a PR - see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to setup a development environment.
 
 ## 🥇 License

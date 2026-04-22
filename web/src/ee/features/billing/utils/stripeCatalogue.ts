@@ -110,7 +110,7 @@ export const stripeProducts: StripeProduct[] = [
       ],
       cta: {
         label: "Contact Sales",
-        href: "https://langfuse.ai/talk-to-us",
+        href: "https://litefuse.ai/talk-to-us",
       },
     },
   },

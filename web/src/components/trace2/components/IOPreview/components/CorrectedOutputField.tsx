@@ -179,7 +179,7 @@ export function CorrectedOutputField({
                     Corrected outputs allow you to save the expected output for
                     a trace or observation. Learn more in the{" "}
                     <Link
-                      href="https://langfuse.ai/docs/observability/features/corrections"
+                      href="https://litefuse.ai/docs/observability/features/corrections"
                       target="_blank"
                       rel="noreferrer"
                       className="hover:text-foreground underline"

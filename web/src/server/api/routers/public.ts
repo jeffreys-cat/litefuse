@@ -21,7 +21,7 @@ export const publicRouter = createTRPCRouter({
     let body;
     try {
       const response = await fetch(
-        `https://langfuse.ai/api/latest-releases?repo=langfuse/langfuse&version=${VERSION}`,
+        `https://litefuse.ai/api/latest-releases?repo=langfuse/langfuse&version=${VERSION}`,
       );
       body = await response.json();
     } catch (error) {
