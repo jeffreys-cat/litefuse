@@ -78,6 +78,20 @@ describe("formatDataForDoris", () => {
       expect(result[0].start_time).toBe("2024-06-15T12:00:00.000Z");
     });
 
+    it("should convert dataset_run_created_at from number epoch to ISO string", () => {
+      const ts = new Date("2024-06-15T12:00:00.000Z").getTime();
+      const result = formatDataForDoris([{ dataset_run_created_at: ts }]);
+      expect(result[0].dataset_run_created_at).toBe(
+        "2024-06-15T12:00:00.000Z",
+      );
+    });
+
+    it("should convert dataset_item_version from number epoch to ISO string", () => {
+      const ts = new Date("2024-06-15T12:00:00.000Z").getTime();
+      const result = formatDataForDoris([{ dataset_item_version: ts }]);
+      expect(result[0].dataset_item_version).toBe("2024-06-15T12:00:00.000Z");
+    });
+
     it("should leave null values as null", () => {
       const result = formatDataForDoris([{ name: null }]);
       expect(result[0].name).toBeNull();
