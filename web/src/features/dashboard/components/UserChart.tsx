@@ -237,7 +237,7 @@ export const UserChart = ({
                   <NoDataOrLoading
                     isLoading={isLoading || user.isPending}
                     description="Consumption per user is tracked by passing their ids on traces."
-                    href="https://litefuse.com/docs/observability/features/users"
+                    href="https://litefuse.ai/docs/observability/features/users"
                   />
                 )}
               </>

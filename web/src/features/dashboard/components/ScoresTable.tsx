@@ -243,7 +243,7 @@ export const ScoresTable = ({
         noDataProps={{
           description:
             "Scores evaluate LLM quality and can be created manually or using the SDK.",
-          href: "https://litefuse.com/docs/evaluation/overview",
+          href: "https://litefuse.ai/docs/evaluation/overview",
         }}
       >
         <TotalMetric
