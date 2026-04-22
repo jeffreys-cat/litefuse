@@ -55,8 +55,9 @@ export const scoresColumnsTableUiColumnDefinitions: UiColumnMappings = [
 
 // Doris-specific column definitions for scores columns table.
 // Uses plain column names without double-quoted identifiers (which Doris doesn't support).
-// Note: dataset_run_items_rmt columns are mapped to scores table equivalents since
-// the rmt table doesn't exist in Doris - use scores.dataset_run_id directly.
+// datasetRunItemRunIds / datasetId / datasetItemIds require a JOIN with
+// dataset_run_items_rmt on (project_id, trace_id); scores.dataset_run_id is only
+// populated for scores recorded against a dataset run directly, not for EVAL scores.
 export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
   {
     uiTableName: "Timestamp",
@@ -80,27 +81,6 @@ export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     queryPrefix: "s",
   },
   {
-    uiTableName: "Dataset Run Item Run IDs",
-    uiTableId: "datasetRunItemRunIds",
-    tableName: "scores",
-    select: "dataset_run_id",
-    queryPrefix: "s",
-  },
-  {
-    uiTableName: "Dataset ID",
-    uiTableId: "datasetId",
-    tableName: "scores",
-    select: "dataset_id",
-    queryPrefix: "s",
-  },
-  {
-    uiTableName: "Dataset Item IDs",
-    uiTableId: "datasetItemIds",
-    tableName: "scores",
-    select: "dataset_item_id",
-    queryPrefix: "s",
-  },
-  {
     uiTableName: "Observation ID",
     uiTableId: "observationId",
     tableName: "scores",
@@ -113,5 +93,26 @@ export const scoresColumnsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     tableName: "scores",
     select: "trace_id",
     queryPrefix: "s",
+  },
+  {
+    uiTableName: "Dataset Run Item Run IDs",
+    uiTableId: "datasetRunItemRunIds",
+    tableName: "dataset_run_items_rmt",
+    select: "dataset_run_id",
+    queryPrefix: "dri",
+  },
+  {
+    uiTableName: "Dataset ID",
+    uiTableId: "datasetId",
+    tableName: "dataset_run_items_rmt",
+    select: "dataset_id",
+    queryPrefix: "dri",
+  },
+  {
+    uiTableName: "Dataset Item IDs",
+    uiTableId: "datasetItemIds",
+    tableName: "dataset_run_items_rmt",
+    select: "dataset_item_id",
+    queryPrefix: "dri",
   },
 ];

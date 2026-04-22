@@ -605,24 +605,10 @@ export const getScoresGroupedByNameSourceType = async ({
 }) => {
   const dorisScoresFilter = new FilterList();
 
-  // Filter out columns that don't exist in the Doris scores table
-  // Scores table doesn't have: dataset_id, dataset_item_id
-  // These filters would require JOINs which getScoresGroupedByNameSourceType doesn't support
-  const supportedFilter = filter.filter((f) => {
-    const unsupportedColumns = ["datasetId", "datasetItemIds"];
-    if (unsupportedColumns.includes(f.column)) {
-      logger.warn(
-        `Filter column ${f.column} is not supported in getScoresGroupedByNameSourceType for Doris scores table. Skipping.`,
-      );
-      return false;
-    }
-    return true;
-  });
-
   try {
     dorisScoresFilter.push(
       ...createDorisFilterFromFilterState(
-        supportedFilter,
+        filter,
         scoresColumnsTableUiColumnDefinitionsForDoris,
       ),
     );
@@ -635,12 +621,17 @@ export const getScoresGroupedByNameSourceType = async ({
 
   const dorisScoresFilterRes = dorisScoresFilter.apply();
 
+  const performDatasetRunItemsJoin = dorisScoresFilter.some(
+    (f) => f.table === "dataset_run_items_rmt",
+  );
+
   const query = `
       select
-        name,
-        source,
-        data_type
+        s.name as name,
+        s.source as source,
+        s.data_type as data_type
       from scores s
+      ${performDatasetRunItemsJoin ? `JOIN dataset_run_items_rmt dri ON s.trace_id = dri.trace_id AND s.project_id = dri.project_id` : ""}
       WHERE s.project_id = {projectId: String}
       ${dorisScoresFilterRes?.query ? `AND ${dorisScoresFilterRes.query}` : ""}
       ${fromTimestamp ? `AND s.timestamp >= {fromTimestamp: DateTime}` : ""}
