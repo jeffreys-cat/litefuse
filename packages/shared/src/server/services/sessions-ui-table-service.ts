@@ -328,6 +328,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             collect_list(CASE WHEN data_type = 'CATEGORICAL' AND string_value IS NOT NULL AND string_value != '' THEN
               CONCAT(name, ':', string_value) ELSE NULL END) AS score_categories
           FROM (
+            -- Trace-level scores: derive session_id via the trace join, since Doris
+            -- ingestion does not backfill scores.session_id (unlike upstream ClickHouse).
             SELECT
               t.session_id AS score_session_id,
               s.project_id,
@@ -340,6 +342,27 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             WHERE s.project_id = {projectId: String}
               ${traceTimestampFilter ? `AND s.timestamp >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
             GROUP BY t.session_id, s.project_id, s.name, s.string_value, s.data_type
+
+            UNION ALL
+
+            -- Session-level scores: attached directly to a session (trace_id NULL),
+            -- which the trace-join path above would otherwise drop. Restricting to
+            -- sessions present in filtered_traces keeps the result set aligned with
+            -- the outer sessions list.
+            SELECT
+              s.session_id AS score_session_id,
+              s.project_id,
+              s.name,
+              avg(s.value) avg_value,
+              s.string_value,
+              s.data_type
+            FROM scores s
+            WHERE s.project_id = {projectId: String}
+              AND s.trace_id IS NULL
+              AND s.session_id IS NOT NULL
+              AND s.session_id IN (SELECT DISTINCT session_id FROM filtered_traces WHERE session_id IS NOT NULL)
+              ${traceTimestampFilter ? `AND s.timestamp >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
+            GROUP BY s.session_id, s.project_id, s.name, s.string_value, s.data_type
           ) tmp
           GROUP BY score_session_id
         ),`
