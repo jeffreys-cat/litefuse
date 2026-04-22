@@ -352,37 +352,45 @@ export const getScoresForDatasetRuns = async <
 export const getTraceScoresForDatasetRuns = async (
   projectId: string,
   datasetRunIds: string[],
-): Promise<Array<{ dataset_run_id: string } & any>> => {
+) => {
   if (datasetRunIds.length === 0) return [];
 
-  // Query scores linked to dataset runs via dataset_run_items_rmt
-  // Scores are associated with traces via trace_id, and dataset_run_items_rmt maps trace_id to dataset_run_id
-  const scoreRows = await queryDoris<{
-    dataset_run_id: string;
-    trace_id: string;
-    id: string;
-    name: string;
-    value: number;
-    data_type: string;
-    string_value: string | null;
-    comment: string | null;
-    metadata: Record<string, unknown>;
-    has_metadata: 0 | 1;
-    timestamp: string;
-  }>({
+  // Scores are linked to dataset runs via trace_id in dataset_run_items_rmt.
+  // dri.dataset_run_id aliased as run_id so it does not collide with
+  // scores.dataset_run_id (which is NULL for EVAL scores).
+  const rows = await queryDoris<
+    Omit<ScoreRecordReadType, "metadata"> & {
+      has_metadata: 0 | 1;
+      run_id: string;
+    }
+  >({
     query: `
       SELECT
-        dri.dataset_run_id,
-        s.trace_id,
         s.id,
+        s.timestamp,
+        s.project_id,
+        s.environment,
+        s.trace_id,
+        s.session_id,
+        s.observation_id,
+        s.dataset_run_id,
         s.name,
         s.value,
+        s.source,
+        s.comment,
+        s.author_user_id,
+        s.config_id,
         s.data_type,
         s.string_value,
-        s.comment,
-        s.metadata,
+        s.long_string_value,
+        s.queue_id,
+        s.execution_trace_id,
+        s.created_at,
+        s.updated_at,
+        s.event_ts,
+        s.is_deleted,
         CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END as has_metadata,
-        s.timestamp
+        dri.dataset_run_id as run_id
       FROM scores s
       INNER JOIN (
         SELECT DISTINCT dataset_run_id, trace_id, project_id
@@ -391,14 +399,22 @@ export const getTraceScoresForDatasetRuns = async (
           AND dataset_run_id IN ({datasetRunIds: Array(String)})
       ) dri ON s.trace_id = dri.trace_id AND s.project_id = dri.project_id
       WHERE s.project_id = {projectId: String}
-        AND s.data_type IN ('NUMERIC', 'BOOLEAN')
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
       ORDER BY s.event_ts DESC
     `,
     params: { projectId, datasetRunIds },
     tags: { feature: "scores", type: "read" },
   });
 
-  return scoreRows;
+  const includeMetadataPayload = false;
+  return rows.map((row) => ({
+    ...convertDorisScoreToDomain(
+      { ...row, metadata: {} } as ScoreRecordReadType,
+      includeMetadataPayload,
+    ),
+    datasetRunId: row.run_id,
+    hasMetadata: !!row.has_metadata,
+  }));
 };
 
 const getScoresForTracesInternal = async <
