@@ -72,6 +72,9 @@ export class DorisWriter {
     this.intervalId = setInterval(() => {
       if (this.isIntervalFlushInProgress) return;
 
+      const hasWork = Object.values(this.queue).some((q) => q.length > 0);
+      if (!hasWork) return;
+
       this.isIntervalFlushInProgress = true;
 
       logger.info(
