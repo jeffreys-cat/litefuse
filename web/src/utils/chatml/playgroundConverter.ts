@@ -46,6 +46,12 @@ function contentToString(content: unknown): string {
     }
   }
 
+  // For objects/dicts, use JSON.stringify to preserve structure
+  // This handles tool results, function outputs, and other complex structures
+  if (typeof content === "object") {
+    return JSON.stringify(content, null, 2);
+  }
+
   return JSON.stringify(content);
 }
 
@@ -114,7 +120,10 @@ export function convertChatMlToPlayground(
   // Check top-level field first, then fall back to json field
   const toolCallId =
     msg.tool_call_id || jsonData?.tool_call_id || jsonData?.toolCallId;
-  if (toolCallId) {
+
+  // Tool result handling with fallback: if role is 'tool', treat as tool result
+  // even if tool_call_id is missing (graceful degradation for incomplete data)
+  if (toolCallId || msg.role === "tool") {
     // If content is undefined but we have rich data in json.json (spread tool result),
     // use that for playground display
     // this happens if for complex tool calls isRichToolResult applies
@@ -127,7 +136,8 @@ export function convertChatMlToPlayground(
       role: ChatMessageRole.Tool,
       content: contentToString(toolContent),
       type: ChatMessageType.ToolResult,
-      toolCallId: toolCallId as string,
+      // Use toolCallId if available, otherwise use a placeholder
+      toolCallId: (toolCallId as string) || "unknown",
     };
   }
 

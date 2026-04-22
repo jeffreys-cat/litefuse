@@ -24,10 +24,14 @@ const _unsafeNonSecureCopyToClipboard = (text: string) => {
     document.body.appendChild(textArea);
     textArea.focus();
     textArea.select();
-    document.execCommand("copy");
+    const success = document.execCommand("copy");
     document.body.removeChild(textArea);
+    if (!success) {
+      throw new Error("execCommand returned false");
+    }
   } catch (error) {
     console.error("Unable to copy to clipboard", error);
+    throw error;
   }
 };
 
