@@ -18,7 +18,7 @@ import {
 } from "@/src/components/ui/select";
 import { Label } from "@/src/components/ui/label";
 import { api } from "@/src/utils/api";
-import { CopyIcon, ExternalLinkIcon } from "lucide-react";
+import { CopyIcon, ExternalLinkIcon, CheckIcon } from "lucide-react";
 import { copyTextToClipboard } from "@/src/utils/clipboard";
 
 type PromptSelectionDialogProps = {
@@ -41,9 +41,16 @@ export function PromptSelectionDialog({
   );
   const [selectedVersionOrLabel, setSelectedVersionOrLabel] =
     useState<string>("");
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const copySelectedTag = useCallback(async () => {
-    await copyTextToClipboard(selectedTag);
+    try {
+      await copyTextToClipboard(selectedTag);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
   }, [selectedTag]);
 
   useEffect(() => {
@@ -52,6 +59,7 @@ export function PromptSelectionDialog({
       setSelectedTag("");
       setSelectionType("label");
       setSelectedVersionOrLabel("");
+      setCopySuccess(false);
     }
   }, [isOpen]);
 
@@ -224,7 +232,11 @@ export function PromptSelectionDialog({
                   className="bg-opacity-70 absolute top-2 right-2"
                   onClick={copySelectedTag}
                 >
-                  <CopyIcon className="h-4 w-4" />
+                  {copySuccess ? (
+                    <CheckIcon className="h-4 w-4 text-green-500" />
+                  ) : (
+                    <CopyIcon className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
               <p className="text-muted-foreground text-xs">
