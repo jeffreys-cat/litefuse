@@ -408,7 +408,7 @@ export const getTraceScoresForDatasetRuns = async (
 
   const includeMetadataPayload = false;
   return rows.map((row) => ({
-    ...convertDorisScoreToDomain(
+    ...convertDorisScoreToDomain<true, AggregatableScoreDataType>(
       { ...row, metadata: {} } as ScoreRecordReadType,
       includeMetadataPayload,
     ),
