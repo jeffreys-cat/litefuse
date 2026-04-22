@@ -36,13 +36,14 @@ export const applyInputOutputRendering = (
 ): JsonNested | string | null => {
   if (!io) return null;
 
-  // If io is an object (not a string), return as-is when shouldJsonParse is false.
-  // This preserves the original object returned from Doris JSON columns.
-  // When shouldJsonParse is true, we stringify and re-parse to normalize.
+  // If io is an object (not a string), stringify it first.
+  // When shouldJsonParse is true, we re-parse the stringified object to normalize.
+  // When shouldJsonParse is false, we return the stringified result (maintaining the first commit's fix).
   if (typeof io === "object" && io !== null) {
+    const stringified = JSON.stringify(io);
     return renderingProps.shouldJsonParse
-      ? (parseJsonPrioritised(JSON.stringify(io)) ?? null)
-      : (io as JsonNested);
+      ? (parseJsonPrioritised(stringified) ?? null)
+      : stringified;
   }
 
   // For string input, handle truncation
