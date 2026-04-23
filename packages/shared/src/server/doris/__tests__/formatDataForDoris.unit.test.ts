@@ -81,9 +81,7 @@ describe("formatDataForDoris", () => {
     it("should convert dataset_run_created_at from number epoch to ISO string", () => {
       const ts = new Date("2024-06-15T12:00:00.000Z").getTime();
       const result = formatDataForDoris([{ dataset_run_created_at: ts }]);
-      expect(result[0].dataset_run_created_at).toBe(
-        "2024-06-15T12:00:00.000Z",
-      );
+      expect(result[0].dataset_run_created_at).toBe("2024-06-15T12:00:00.000Z");
     });
 
     it("should convert dataset_item_version from number epoch to ISO string", () => {

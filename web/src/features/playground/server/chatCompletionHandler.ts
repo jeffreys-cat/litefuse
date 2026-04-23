@@ -88,18 +88,18 @@ export default async function chatCompletionHandler(req: NextRequest) {
       const hasToolResults = messages.some((msg) => msg.type === "tool-result");
 
       if ((tools && tools.length > 0) || hasToolResults) {
-        // Fix empty tool_call_id values by mapping to langgraph IDs
-        const fixedMessages = messages.map((msg) => {
+        // First try to fix tool_call_id by mapping to assistant tool calls
+        let fixedMessages = messages.map((msg) => {
           if (
             msg.type === "tool-result" &&
-            (!msg.toolCallId || msg.toolCallId === "")
+            (!msg.toolCallId ||
+              msg.toolCallId === "" ||
+              msg.toolCallId === "unknown")
           ) {
             const assistantMessages = messages
               .filter((m) => m.type === "assistant-tool-call" && m.toolCalls)
               .reverse();
 
-            // Find the first matching tool call by name
-            // Note: using 'as any' because we filtered for assistant-tool-call messages above
             for (const prevMsg of assistantMessages) {
               const matchingToolCall = (prevMsg as any).toolCalls.find(
                 (tc: any) => tc.name === (msg as any)._originalRole,
@@ -113,6 +113,17 @@ export default async function chatCompletionHandler(req: NextRequest) {
             }
           }
 
+          return msg;
+        });
+
+        // Fallback: if any tool-result still has invalid toolCallId, sanitize to only keep role and content
+        fixedMessages = fixedMessages.map((msg) => {
+          if (msg.type === "tool-result" && msg.toolCallId) {
+            return {
+              role: msg.role,
+              content: msg.content,
+            } as any;
+          }
           return msg;
         });
 
