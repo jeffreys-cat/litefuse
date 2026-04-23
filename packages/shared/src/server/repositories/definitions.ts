@@ -60,6 +60,9 @@ export const observationRecordBaseSchema = z.object({
 });
 
 export const observationRecordReadSchema = observationRecordBaseSchema.extend({
+  // Doris Variant columns: mysql2 typeCast parses them to object/array on read
+  input: z.unknown().nullish(),
+  output: z.unknown().nullish(),
   created_at: dorisStringDateSchema,
   updated_at: dorisStringDateSchema,
   start_time: dorisStringDateSchema,
@@ -150,6 +153,9 @@ export const traceRecordExtraFields = z.object({
 export type TraceRecordExtraFieldsType = z.infer<typeof traceRecordExtraFields>;
 
 export const traceRecordReadSchema = traceRecordBaseSchema.extend({
+  // Doris Variant columns: mysql2 typeCast parses them to object/array on read
+  input: z.unknown().nullish(),
+  output: z.unknown().nullish(),
   timestamp: dorisStringDateSchema,
   created_at: dorisStringDateSchema,
   updated_at: dorisStringDateSchema,
