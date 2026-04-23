@@ -474,14 +474,19 @@ export class DorisClient {
         throw new Error(`Stream load failed: ${errorMessage}`);
       }
 
-      logger.debug("Stream load completed successfully", {
-        table,
-        recordCount: data.length,
-        dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
-        loadLabel,
-        loadedRows: result.NumberLoadedRows,
-        filteredRows: result.NumberFilteredRows,
-      });
+      if (env.LANGFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
+        logger.info(
+          `Stream load completed ${JSON.stringify({ table, ...result })}`,
+        );
+      } else {
+        logger.debug("Stream load completed", {
+          table,
+          recordCount: data.length,
+          dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
+          loadLabel,
+          response: result,
+        });
+      }
     } catch (error) {
       // Enhanced error handling for different error types
       let errorMessage = "Unknown error";
