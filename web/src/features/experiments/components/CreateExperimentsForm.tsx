@@ -121,7 +121,7 @@ export const CreateExperimentsForm = ({
                   via User Interface
                 </CardTitle>
                 <CardDescription>
-                  Test single prompts and model configurations via Langfuse UI.
+                  Test single prompts and model configurations via Litefuse UI.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -160,7 +160,7 @@ export const CreateExperimentsForm = ({
                   via SDK / API
                 </CardTitle>
                 <CardDescription>
-                  Start any dataset run via the Langfuse SDKs. To configure runs
+                  Start any dataset run via the Litefuse SDKs. To configure runs
                   via webhook, use the button below.
                 </CardDescription>
               </CardHeader>

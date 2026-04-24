@@ -123,7 +123,7 @@ export const PeekViewEvaluatorConfigDetail = ({
               )}
             </TooltipTrigger>
             <TooltipContent>
-              {evalConfig.evalTemplate.partner ?? "Langfuse"}
+              {evalConfig.evalTemplate.partner ?? "Litefuse"}
             </TooltipContent>
           </Tooltip>
         )}

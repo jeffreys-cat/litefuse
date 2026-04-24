@@ -35,7 +35,7 @@ export const PeekViewTraceDetail = ({ projectId }: { projectId: string }) => {
         <p className="font-medium">未找到 Trace</p>
         <p className="text-xs opacity-70">
           Trace ID：{peekId}
-          <br />该 Trace 可能尚未同步到 Langfuse，或所属项目与当前项目不一致。
+          <br />该 Trace 可能尚未同步到 Litefuse，或所属项目与当前项目不一致。
         </p>
       </div>
     );

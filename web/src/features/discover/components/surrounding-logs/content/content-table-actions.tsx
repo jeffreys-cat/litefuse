@@ -6,6 +6,8 @@ import React from "react";
 import { surroundingDataFilterAtom, tableFieldsAtom } from "store/discover";
 import { isComplexType, isValidTimeFieldType } from "utils/data";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+dayjs.extend(utc);
 import { css } from "@emotion/css";
 
 export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
@@ -19,10 +21,15 @@ export function SurroundingContentTableActions({ fieldName, fieldValue }: any) {
   const filterValue = (() => {
     const raw =
       typeof fieldValue === "object" ? JSON.stringify(fieldValue) : fieldValue;
-    if (typeof raw === "string" && isValidTimeFieldType(fieldType)) {
-      const d = dayjs(raw);
+    if (
+      typeof raw === "string" &&
+      isValidTimeFieldType(fieldType?.toUpperCase())
+    ) {
+      const d = dayjs.utc(raw);
       if (d.isValid()) {
-        const msPart = raw.includes(".") ? raw.split(".")[1] : null;
+        // Strip trailing non-digit chars (e.g. 'Z' in ISO strings like '360Z')
+        const rawMs = raw.includes(".") ? raw.split(".")[1] : null;
+        const msPart = rawMs ? rawMs.replace(/\D+$/, "") : null;
         const fmt = msPart
           ? `YYYY-MM-DD HH:mm:ss.${"S".repeat(msPart.length)}`
           : "YYYY-MM-DD HH:mm:ss";

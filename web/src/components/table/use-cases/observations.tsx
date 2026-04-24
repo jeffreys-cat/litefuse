@@ -880,7 +880,7 @@ export default function ObservationsTable({
       id: "promptName",
       header: "Prompt",
       headerTooltip: {
-        description: "Link to prompt version in Langfuse prompt management.",
+        description: "Link to prompt version in Litefuse prompt management.",
         href: "https://litefuse.ai/docs/prompt-management/get-started",
       },
       size: 200,

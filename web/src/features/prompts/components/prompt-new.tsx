@@ -55,7 +55,7 @@ export const NewPrompt = () => {
           : "Create new prompt",
         help: {
           description:
-            "Manage and version your prompts in Langfuse. Edit and update them via the UI and SDK. Retrieve the production version via the SDKs. Learn more in the docs.",
+            "Manage and version your prompts in Litefuse. Edit and update them via the UI and SDK. Retrieve the production version via the SDKs. Learn more in the docs.",
           href: "https://litefuse.ai/docs/prompts",
         },
         breadcrumb: breadcrumb,
@@ -63,7 +63,7 @@ export const NewPrompt = () => {
     >
       {initialPrompt ? (
         <p className="text-muted-foreground text-sm">
-          Prompts are immutable in Langfuse. To update a prompt, create a new
+          Prompts are immutable in Litefuse. To update a prompt, create a new
           version.
         </p>
       ) : null}
