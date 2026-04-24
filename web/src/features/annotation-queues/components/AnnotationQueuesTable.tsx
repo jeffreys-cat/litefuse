@@ -6,7 +6,6 @@ import { useQueryParams, withDefault, NumberParam } from "use-query-params";
 import { type RouterOutput } from "@/src/utils/types";
 import useColumnVisibility from "@/src/features/column-visibility/hooks/useColumnVisibility";
 import { DataTableToolbar } from "@/src/components/table/data-table-toolbar";
-import { useRowHeightLocalStorage } from "@/src/components/table/data-table-row-height-switch";
 import useColumnOrder from "@/src/features/column-visibility/hooks/useColumnOrder";
 import { CreateOrEditAnnotationQueueButton } from "@/src/features/annotation-queues/components/CreateOrEditAnnotationQueueButton";
 import {
@@ -17,7 +16,6 @@ import {
 } from "@/src/components/ui/dropdown-menu";
 import { ClipboardPen, Lock, MoreVertical } from "lucide-react";
 import { Button } from "@/src/components/ui/button";
-import { cn } from "@/src/utils/tailwind";
 import TableLink from "@/src/components/table/table-link";
 import Link from "next/link";
 import { useHasProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
@@ -39,11 +37,6 @@ type RowData = {
 };
 
 export function AnnotationQueuesTable({ projectId }: { projectId: string }) {
-  const [rowHeight, setRowHeight] = useRowHeightLocalStorage(
-    "annotationQueues",
-    "s",
-  );
-
   const [paginationState, setPaginationState] = useQueryParams({
     pageIndex: withDefault(NumberParam, 0),
     pageSize: withDefault(NumberParam, 50),
@@ -87,12 +80,7 @@ export function AnnotationQueuesTable({ projectId }: { projectId: string }) {
       cell: ({ row }) => {
         const description: RowData["description"] = row.getValue("description");
         return (
-          <span
-            className={cn(
-              "grid h-full items-center overflow-auto",
-              rowHeight === "s" && "leading-3",
-            )}
-          >
+          <span className="grid h-full items-center overflow-hidden wrap-break-word whitespace-pre-wrap">
             {description}
           </span>
         );
@@ -123,12 +111,7 @@ export function AnnotationQueuesTable({ projectId }: { projectId: string }) {
           row.getValue("scoreConfigs");
 
         return (
-          <span
-            className={cn(
-              "grid h-full items-center overflow-auto",
-              rowHeight === "s" && "leading-3",
-            )}
-          >
+          <span className="grid h-full items-center overflow-hidden wrap-break-word whitespace-pre-wrap">
             {scoreConfigs
               .map(
                 (config) =>
@@ -238,8 +221,6 @@ export function AnnotationQueuesTable({ projectId }: { projectId: string }) {
         setColumnVisibility={setColumnVisibility}
         columnOrder={columnOrder}
         setColumnOrder={setColumnOrder}
-        rowHeight={rowHeight}
-        setRowHeight={setRowHeight}
       />
       <DataTable
         tableName={"annotationQueues"}
@@ -270,7 +251,7 @@ export function AnnotationQueuesTable({ projectId }: { projectId: string }) {
         onColumnVisibilityChange={setColumnVisibility}
         columnOrder={columnOrder}
         onColumnOrderChange={setColumnOrder}
-        rowHeight={rowHeight}
+        autoRowHeight
         getRowClassName={(row) =>
           row.isAssigned ? "bg-primary/5 border-l-4 border-l-primary/40" : ""
         }

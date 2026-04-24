@@ -67,6 +67,7 @@ interface DataTableProps<TData, TValue> {
   help?: { description: string; href: string };
   noResultsMessage?: React.ReactNode;
   rowHeight?: RowHeight;
+  autoRowHeight?: boolean;
   customRowHeights?: CustomHeights;
   className?: string;
   shouldRenderGroupHeaders?: boolean;
@@ -155,6 +156,7 @@ export function DataTable<TData extends object, TValue>({
   orderBy,
   setOrderBy,
   rowHeight,
+  autoRowHeight = false,
   customRowHeights,
   className,
   shouldRenderGroupHeaders = false,
@@ -407,6 +409,7 @@ export function DataTable<TData extends object, TValue>({
                 table={table}
                 rowheighttw={rowheighttw}
                 rowHeight={rowHeight}
+                autoRowHeight={autoRowHeight}
                 columns={columns}
                 data={data}
                 help={help}
@@ -424,6 +427,7 @@ export function DataTable<TData extends object, TValue>({
                 table={table}
                 rowheighttw={rowheighttw}
                 rowHeight={rowHeight}
+                autoRowHeight={autoRowHeight}
                 columns={columns}
                 data={data}
                 help={help}
@@ -469,6 +473,7 @@ interface TableBodyComponentProps<TData> {
   table: ReturnType<typeof useReactTable<TData>>;
   rowheighttw?: string;
   rowHeight?: RowHeight;
+  autoRowHeight?: boolean;
   columns: LangfuseColumnDef<TData, any>[];
   data: AsyncTableData<TData[]>;
   help?: { description: string; href: string };
@@ -521,6 +526,7 @@ function TableBodyComponent<TData>({
   table,
   rowheighttw,
   rowHeight,
+  autoRowHeight = false,
   columns,
   data,
   help,
@@ -550,7 +556,8 @@ function TableBodyComponent<TData>({
             {row.getVisibleCells().map((cell) => {
               const cellValue = cell.getValue();
               const isStringCell = typeof cellValue === "string";
-              const isSmallRowHeight = (rowHeight ?? "s") === "s";
+              const isSmallRowHeight =
+                !autoRowHeight && (rowHeight ?? "s") === "s";
 
               return (
                 <TableCell
@@ -646,6 +653,7 @@ const MemoizedTableBody = React.memo(TableBodyComponent, (prev, next) => {
   if (prev.data.isLoading !== next.data.isLoading) return false;
   if (prev.rowheighttw !== next.rowheighttw) return false;
   if (prev.rowHeight !== next.rowHeight) return false;
+  if (prev.autoRowHeight !== next.autoRowHeight) return false;
 
   // Then do more expensive deep equality checks
   if (
