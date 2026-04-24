@@ -31,7 +31,7 @@ export const DEFAULT_RENDERING_PROPS: RenderingProps = {
  * Transform input/output fields based on rendering properties.
  */
 export const applyInputOutputRendering = (
-  io: string | null | undefined | object,
+  io: unknown,
   renderingProps: RenderingProps,
 ): JsonNested | string | null => {
   if (!io) return null;
@@ -46,8 +46,9 @@ export const applyInputOutputRendering = (
       : stringified;
   }
 
-  // For string input, handle truncation
-  let result: string = io;
+  // For string input, handle truncation. Coerce any remaining non-string
+  // primitive (number/boolean) to its string form for safety.
+  let result: string = typeof io === "string" ? io : String(io);
 
   if (
     renderingProps.truncated &&

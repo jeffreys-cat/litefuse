@@ -338,11 +338,22 @@ export const contentDictInsertSchema = z.object({
 });
 export type ContentDictInsertType = z.infer<typeof contentDictInsertSchema>;
 
+// Variant columns come back as object/array after mysql2 typeCast; insert
+// schema expects a JSON string, so stringify non-string values on the way out.
+const stringifyForInsert = (
+  value: unknown,
+): string | null | undefined => {
+  if (value === null || value === undefined) return value;
+  return typeof value === "string" ? value : JSON.stringify(value);
+};
+
 export const convertTraceReadToInsert = (
   record: TraceRecordReadType,
 ): TraceRecordInsertType => {
   return {
     ...record,
+    input: stringifyForInsert(record.input),
+    output: stringifyForInsert(record.output),
     created_at: new Date(record.created_at).getTime(),
     updated_at: new Date(record.updated_at).getTime(),
     timestamp: new Date(record.timestamp).getTime(),
@@ -357,6 +368,8 @@ export const convertObservationReadToInsert = (
 
   return {
     ...record,
+    input: stringifyForInsert(record.input),
+    output: stringifyForInsert(record.output),
     created_at: convertDate(record.created_at),
     updated_at: convertDate(record.updated_at),
     start_time: convertDate(record.start_time),
