@@ -257,11 +257,20 @@ export class DorisClient {
         });
       }
 
+      const queryStartTime = Date.now();
       const [rows] = await this.connectionPool.query(finalQuery);
+      const queryDurationMs = Date.now() - queryStartTime;
 
       logger.debug("Doris query completed", {
         rowCount: Array.isArray(rows) ? rows.length : 0,
+        durationMs: queryDurationMs,
       });
+
+      // Auto-warn slow queries regardless of LANGFUSE_DORIS_LOG_QUERIES so
+      // operational anomalies surface even when the per-query log is off.
+      if (queryDurationMs > env.LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
+        logger.warn(`doris:slow-query (${queryDurationMs}ms) ${finalQuery}`);
+      }
 
       return Array.isArray(rows) ? rows : [];
     } catch (error) {
@@ -336,7 +345,11 @@ export class DorisClient {
       query_params,
     );
 
-    logger.info(`doris:query ${processedQuery}`);
+    if (env.LANGFUSE_DORIS_LOG_QUERIES === "true") {
+      logger.info(`doris:query ${processedQuery}`);
+    } else {
+      logger.debug(`doris:query ${processedQuery}`);
+    }
 
     // Execute the processed query
     const result = await this.query(processedQuery, []);
