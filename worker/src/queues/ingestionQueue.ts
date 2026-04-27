@@ -38,7 +38,7 @@ export const ingestionQueueProcessorBuilder = (
 
   return async (job: Job<TQueueJobTypes[QueueName.IngestionQueue]>) => {
     try {
-      logger.info(
+      logger.debug(
         `[ingestionQueue] Received ingestion job, id: ${job.data.id}, type: ${job.data.payload?.data?.type}, eventBodyId: ${job.data.payload?.data?.eventBodyId}`,
       );
       const span = getCurrentSpan();
@@ -280,7 +280,7 @@ export const ingestionQueueProcessorBuilder = (
         env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
       // Use Doris only
-      logger.info(
+      logger.debug(
         `[ingestionQueue] Calling mergeAndWrite for type ${getDorisEntityType(events[0].type)}, project ${job.data.payload.authCheck.scope.projectId}, eventBodyId ${job.data.payload.data.eventBodyId}, events count: ${events.length}`,
       );
       await new IngestionService(
@@ -296,7 +296,7 @@ export const ingestionQueueProcessorBuilder = (
         events,
         forwardToEventsTable,
       );
-      logger.info(
+      logger.debug(
         `[ingestionQueue] mergeAndWrite completed for type ${getDorisEntityType(events[0].type)}, eventBodyId ${job.data.payload.data.eventBodyId}`,
       );
     } catch (e) {
