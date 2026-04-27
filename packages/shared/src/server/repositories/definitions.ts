@@ -326,6 +326,12 @@ export type BlobStorageFileLogInsertType = z.infer<
   typeof blobStorageFileLogRecordInsertSchema
 >;
 
+export const contentDictInsertSchema = z.object({
+  content_hash: z.string(),
+  content: z.string(),
+});
+export type ContentDictInsertType = z.infer<typeof contentDictInsertSchema>;
+
 export const convertTraceReadToInsert = (
   record: TraceRecordReadType,
 ): TraceRecordInsertType => {
