@@ -77,6 +77,16 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(200),
+  LANGFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE: z
+    .enum(["true", "false"])
+    .default("false"),
+  LANGFUSE_DORIS_LOG_QUERIES: z
+    .enum(["true", "false"])
+    .default("false"),
+  LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS: z.coerce
+    .number()
+    .positive()
+    .default(2000),
   LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
     .enum(["true", "false"])
     .default("false"),
