@@ -37,22 +37,22 @@ import { fetchCommentsForExport } from "./fetchCommentsForExport";
 
 const tableNameToTimeFilterColumn: Record<BatchTableNames, string> = {
   scores: "timestamp",
-  sessions: "created_at",
+  sessions: "createdAt",
   traces: "timestamp",
   observations: "start_time",
   events: "start_time",
-  dataset_run_items: "created_at",
-  dataset_items: "created_at", // TODO: flip to validFrom once we write in new format
+  dataset_run_items: "createdAt",
+  dataset_items: "createdAt", // TODO: flip to validFrom once we write in new format
   audit_logs: "created_at",
 };
 const tableNameToTimeFilterColumnCh: Record<BatchTableNames, string> = {
   scores: "timestamp",
-  sessions: "created_at",
+  sessions: "createdAt",
   traces: "timestamp",
   observations: "start_time",
   events: "start_time",
-  dataset_run_items: "created_at",
-  dataset_items: "created_at",
+  dataset_run_items: "createdAt",
+  dataset_items: "createdAt",
   audit_logs: "created_at",
 };
 const isGenerationTimestampFilter = (
@@ -459,7 +459,7 @@ export const getDatabaseReadStreamPaginated = async ({
               : [createdAtCutoffFilter],
             limit: pageSize,
             orderBy: {
-              column: "created_at",
+              column: "createdAt",
               order: "DESC",
             },
             offset,
