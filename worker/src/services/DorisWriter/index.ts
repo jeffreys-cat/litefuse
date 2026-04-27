@@ -25,15 +25,24 @@ export class DorisWriter {
   private static client: DorisClientType | null = null;
   batchSize: number;
   writeInterval: number;
+  gaugeInterval: number;
   maxAttempts: number;
   queue: DorisQueue;
 
   isIntervalFlushInProgress: boolean;
   intervalId: NodeJS.Timeout | null = null;
+  gaugeIntervalId: NodeJS.Timeout | null = null;
+
+  // Per-window add/flush counters drive the gauge log. Both reset to 0
+  // each time the gauge tick emits, so each log line shows the rate over
+  // exactly one interval.
+  private addCounters = new Map<TableName, number>();
+  private flushCounters = new Map<TableName, number>();
 
   private constructor() {
     this.batchSize = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
     this.writeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
+    this.gaugeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
     this.maxAttempts = sharedEnv.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
 
     this.isIntervalFlushInProgress = false;
@@ -87,6 +96,25 @@ export class DorisWriter {
         this.isIntervalFlushInProgress = false;
       });
     }, this.writeInterval);
+
+    // Periodic queue gauge — one log line per table per window, but
+    // skip tables that are completely silent (q=0 and no add/flush in
+    // the window) so an idle system stays quiet instead of emitting
+    // 6 zero rows every tick. Format: `q=<depth> +<added> -<flushed>`.
+    const gaugeWindowSec = Math.round(this.gaugeInterval / 1000);
+    this.gaugeIntervalId = setInterval(() => {
+      for (const t of Object.values(TableName)) {
+        const len = this.queue[t]?.length ?? 0;
+        const added = this.addCounters.get(t) ?? 0;
+        const flushed = this.flushCounters.get(t) ?? 0;
+        this.addCounters.set(t, 0);
+        this.flushCounters.set(t, 0);
+        if (len === 0 && added === 0 && flushed === 0) continue;
+        logger.info(
+          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} +${String(added).padEnd(7)} -${flushed}`,
+        );
+      }
+    }, this.gaugeInterval);
   }
 
   public async shutdown(): Promise<void> {
@@ -95,6 +123,10 @@ export class DorisWriter {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
+    }
+    if (this.gaugeIntervalId) {
+      clearInterval(this.gaugeIntervalId);
+      this.gaugeIntervalId = null;
     }
 
     await this.flushAll(true);
@@ -172,6 +204,11 @@ export class DorisWriter {
         `[DorisWriter.flush] Flushed ${queueItems.length} records to Doris ${tableName}. New queue length: ${entityQueue.length}`,
       );
 
+      this.flushCounters.set(
+        tableName,
+        (this.flushCounters.get(tableName) ?? 0) + queueItems.length,
+      );
+
       recordGauge("ingestion_doris_insert_queue_length", entityQueue.length, {
         unit: "records",
         entityType: tableName,
@@ -209,12 +246,16 @@ export class DorisWriter {
       data,
     });
 
-    logger.info(
-      `[DorisWriter.addToQueue] Added record to ${tableName}, queue length now: ${entityQueue.length}`,
+    // Per-push detail at debug level. Bump LOG_LEVEL=debug to inspect each push.
+    logger.debug(
+      `[DorisWriter.addToQueue] ${tableName} length=${entityQueue.length}`,
     );
+
+    this.addCounters.set(tableName, (this.addCounters.get(tableName) ?? 0) + 1);
+
     if (entityQueue.length >= this.batchSize) {
       logger.info(
-        `[DorisWriter.addToQueue] Queue is full. Flushing ${tableName}...`,
+        `[DorisWriter.addToQueue] ${tableName} hit batch size ${this.batchSize}, flushing`,
       );
 
       this.flush(tableName).catch((err: any) => {

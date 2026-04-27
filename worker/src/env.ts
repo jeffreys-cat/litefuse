@@ -92,6 +92,10 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(1000),
+  LANGFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS: z.coerce
+    .number()
+    .positive()
+    .default(10_000),
 
   // Analytics backend selection
   LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
