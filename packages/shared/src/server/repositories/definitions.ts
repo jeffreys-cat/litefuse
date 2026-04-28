@@ -340,9 +340,7 @@ export type ContentDictInsertType = z.infer<typeof contentDictInsertSchema>;
 
 // Variant columns come back as object/array after mysql2 typeCast; insert
 // schema expects a JSON string, so stringify non-string values on the way out.
-const stringifyForInsert = (
-  value: unknown,
-): string | null | undefined => {
+const stringifyForInsert = (value: unknown): string | null | undefined => {
   if (value === null || value === undefined) return value;
   return typeof value === "string" ? value : JSON.stringify(value);
 };
