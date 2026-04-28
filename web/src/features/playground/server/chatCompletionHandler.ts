@@ -118,7 +118,12 @@ export default async function chatCompletionHandler(req: NextRequest) {
 
         // Fallback: if any tool-result still has invalid toolCallId, sanitize to only keep role and content
         fixedMessages = fixedMessages.map((msg) => {
-          if (msg.type === "tool-result" && msg.toolCallId) {
+          if (
+            msg.type === "tool-result" &&
+            (!msg.toolCallId ||
+              msg.toolCallId === "" ||
+              msg.toolCallId === "unknown")
+          ) {
             return {
               role: msg.role,
               content: msg.content,
