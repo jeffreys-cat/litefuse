@@ -821,6 +821,55 @@ const generateDateField = (
 };
 
 /**
+ * Parse JSON string values in metadata to native JS objects/arrays.
+ *
+ * Doris has a bug in its MAP<TEXT, TEXT> JSON parser: it doesn't properly
+ * handle escape characters. When a metadata value is a JSON-encoded string
+ * like "{\"key\":\"val\"}", the outer JSON.stringify for the stream load
+ * body produces nested \" escape sequences that confuse Doris's MAP parser.
+ *
+ * By parsing these values to native objects BEFORE JSON.stringify(data),
+ * the outer serialization produces clean nested JSON with no \" escaping:
+ *
+ *   Before: { "resourceAttributes": "{\"service.name\":\"foo\"}" }
+ *           → outer JSON.stringify adds escaping → Doris MAP parser fails
+ *
+ *   After:  { "resourceAttributes": {"service.name": "foo"} }
+ *           → outer JSON.stringify produces nested JSON, zero \" sequences
+ *           → Doris MAP parser accepts the nested object, stores as TEXT
+ *           → query returns original structure unchanged
+ */
+const normalizeMetadataForDoris = (
+  metadata: Record<string, string> | undefined | null,
+): Record<string, unknown> => {
+  if (!metadata || typeof metadata !== "object") return {};
+
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value == null || value === "") {
+      result[key] = value ?? "";
+      continue;
+    }
+
+    // Parse JSON strings (objects and arrays) to native values.
+    // This removes the need for outer JSON.stringify to produce \"
+    // escape sequences — the data becomes genuinely nested JSON.
+    if ((value.startsWith("{") || value.startsWith("[")) && value.length > 0) {
+      try {
+        result[key] = JSON.parse(value);
+      } catch {
+        result[key] = value;
+      }
+    } else {
+      result[key] = value;
+    }
+  }
+
+  return result;
+};
+
+/**
  * Elegant utility function to format data for Doris insertion
  * Handles data type conversion, null values, and date field generation
  */
@@ -834,6 +883,14 @@ export const formatDataForDoris = <T extends Record<string, any>>(
       (acc as any)[key] = normalizeValue(key, value);
       return acc;
     }, {} as T);
+
+    // Step 1.5: Normalize metadata to avoid Doris MAP parsing issues with
+    // escaped quotes in JSON string values.
+    if ("metadata" in formatted && formatted.metadata) {
+      (formatted as any).metadata = normalizeMetadataForDoris(
+        formatted.metadata,
+      );
+    }
 
     // Step 2: Generate date fields based on table type
     const mapping = tableName

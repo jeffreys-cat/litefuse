@@ -182,6 +182,154 @@ describe("formatDataForDoris", () => {
     });
   });
 
+  describe("metadata normalization for Doris MAP parsing", () => {
+    it("should parse JSON object values to native objects (structure preserved)", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-1",
+          metadata: {
+            source: "test-script",
+            resourceAttributes:
+              '{"service.name":"unknown_service:node","host.name":"localhost"}',
+            scope: '{"name":"langfuse-sdk","version":"5.2.0"}',
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({
+        source: "test-script",
+        resourceAttributes: {
+          "service.name": "unknown_service:node",
+          "host.name": "localhost",
+        },
+        scope: { name: "langfuse-sdk", version: "5.2.0" },
+      });
+    });
+
+    it("should pass through plain string metadata values unchanged", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-2",
+          metadata: {
+            source: "api",
+            workflow: "simple-agent",
+            versionTag: "v1.0",
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({
+        source: "api",
+        workflow: "simple-agent",
+        versionTag: "v1.0",
+      });
+    });
+
+    it("should parse JSON array values to native arrays", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-3",
+          metadata: {
+            availableTools: '["weather_lookup","search"]',
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({
+        availableTools: ["weather_lookup", "search"],
+      });
+    });
+
+    it("should handle empty metadata object", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-4",
+          metadata: {},
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({});
+    });
+
+    it("should preserve null metadata as null", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-5",
+          metadata: null,
+        } as any,
+      ]);
+
+      expect(result[0].metadata).toBeNull();
+    });
+
+    it("should preserve non-JSON string that starts with {", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-6",
+          metadata: {
+            broken: "{not valid json!!!}",
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({
+        broken: "{not valid json!!!}",
+      });
+    });
+
+    it("should parse empty JSON object value", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-7",
+          metadata: {
+            attributes: "{}",
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({ attributes: {} });
+    });
+
+    it("should handle mixed metadata: some JSON objects, some plain strings, some arrays", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-8",
+          metadata: {
+            source: "test",
+            resourceAttributes:
+              '{"service.name":"unknown_service:node","telemetry.sdk.language":"nodejs"}',
+            availableTools: '["tool-a","tool-b"]',
+            workflow: "agent",
+            scope: '{"name":"langfuse-sdk","version":"5.2.0"}',
+          },
+        },
+      ]);
+
+      expect(result[0].metadata).toEqual({
+        source: "test",
+        resourceAttributes: {
+          "service.name": "unknown_service:node",
+          "telemetry.sdk.language": "nodejs",
+        },
+        availableTools: ["tool-a", "tool-b"],
+        workflow: "agent",
+        scope: { name: "langfuse-sdk", version: "5.2.0" },
+      });
+    });
+
+    it("should not affect records without metadata field", () => {
+      const result = formatDataForDoris([
+        {
+          id: "test-9",
+          name: "no-metadata-record",
+        },
+      ]);
+
+      expect(result[0] as any).not.toHaveProperty("metadata");
+      expect(result[0].id).toBe("test-9");
+    });
+  });
+
   describe("multiple records", () => {
     it("should process all records in the array", () => {
       const result = formatDataForDoris(
