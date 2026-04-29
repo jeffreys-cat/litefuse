@@ -74,8 +74,8 @@ export async function sendResetPasswordVerificationRequest(
   const result = await transport.sendMail({
     to: identifier,
     from: provider.from,
-    subject: `Your Langfuse password reset code`,
-    text: `Use the following code to reset your Langfuse password: ${token}\n\nThis code will expire in 3 minutes. If you did not request a reset, you can ignore this email.`,
+    subject: `Your Litefuse password reset code`,
+    text: `Use the following code to reset your Litefuse password: ${token}\n\nThis code will expire in 3 minutes. If you did not request a reset, you can ignore this email.`,
     html: htmlTemplate,
   });
   const failed = result.rejected.concat(result.pending).filter(Boolean);
