@@ -301,7 +301,7 @@ const Integrations = (props: { projectId: string }) => {
           </div>
         </Card>
 
-        <Card className="p-3">
+        <Card className="p-3" hidden={true}>
           <MixpanelLogo className="text-foreground mb-4 w-20" />
           <p className="text-primary mb-4 text-sm">
             Integrate with Mixpanel to sync your Langfuse traces, generations,
@@ -353,7 +353,7 @@ const Integrations = (props: { projectId: string }) => {
           </div>
         </Card>
 
-        <Card className="p-3">
+        <Card className="p-3" hidden={true}>
           <div className="mb-4 flex items-center gap-2">
             <Slack className="text-foreground h-5 w-5" />
             <span className="font-semibold">Slack</span>
