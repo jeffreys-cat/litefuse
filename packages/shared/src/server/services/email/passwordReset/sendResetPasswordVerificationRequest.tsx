@@ -9,7 +9,6 @@ import {
   Head,
   Heading,
   Html,
-  Img,
   Preview,
   Section,
   Tailwind,
@@ -24,7 +23,7 @@ interface ResetPasswordTemplateProps {
 }
 
 const ResetPasswordTemplate = ({ token }: ResetPasswordTemplateProps) => {
-  const previewText = "Your Langfuse reset code";
+  const previewText = "Your Litefuse reset code";
   return (
     <Html>
       <Head />
@@ -32,17 +31,8 @@ const ResetPasswordTemplate = ({ token }: ResetPasswordTemplateProps) => {
       <Tailwind>
         <Body className="mx-auto my-auto bg-background font-sans">
           <Container className="mx-auto my-10 w-[465px] rounded border border-solid border-[#eaeaea] p-5">
-            <Section className="mt-8">
-              <Img
-                src="https://static.langfuse.com/langfuse_logo_transactional_email.png"
-                width="40"
-                height="40"
-                alt="Langfuse"
-                className="mx-auto my-0"
-              />
-            </Section>
             <Heading className="mx-0 my-[30px] p-0 text-center text-xl font-normal text-black">
-              Forgot your Langfuse password?
+              Forgot your Litefuse password?
               <br />
               It happens to the best of us.
             </Heading>

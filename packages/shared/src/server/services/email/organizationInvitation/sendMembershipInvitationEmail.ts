@@ -5,7 +5,7 @@ import { render } from "@react-email/render";
 import MembershipInvitationTemplate from "./MembershipInvitationEmailTemplate";
 import { logger } from "../../../logger";
 
-const langfuseUrls = {
+const litefuseCloudUrls = {
   US: "https://us.cloud.litefuse.ai",
   EU: "https://cloud.litefuse.ai",
   STAGING: "https://staging.litefuse.ai",
@@ -53,7 +53,7 @@ export const sendMembershipInvitationEmail = async ({
     env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "HIPAA" ||
     env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "JP" ||
     env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING"
-      ? langfuseUrls[env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION]
+      ? litefuseCloudUrls[env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION]
       : env.NEXTAUTH_URL;
 
   const authUrl = getAuthURL();
@@ -81,14 +81,14 @@ export const sendMembershipInvitationEmail = async ({
         inviteLink: inviteLink,
         userExists: userExists,
         emailFromAddress: env.EMAIL_FROM_ADDRESS,
-        langfuseCloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+        cloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
       }),
     );
 
     await mailer.sendMail({
       to,
-      from: `Langfuse <${env.EMAIL_FROM_ADDRESS}>`,
-      subject: `${inviterName} invited you to join the "${orgName}" organization on Langfuse`,
+      from: `Litefuse <${env.EMAIL_FROM_ADDRESS}>`,
+      subject: `${inviterName} invited you to join the "${orgName}" organization on Litefuse`,
       html: htmlTemplate,
     });
   } catch (error) {

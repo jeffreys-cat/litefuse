@@ -44,7 +44,7 @@ export const sendUsageThresholdSuspensionEmail = async ({
     const mailer = createTransport(parseConnectionUrl(env.SMTP_CONNECTION_URL));
 
     // const emailSubject = `🚨 URGENT: Action required for ${organizationName} - enforcement begins next week`;
-    const emailSubject = `🚨 URGENT: Langfuse ingestion suspended for ${organizationName}`;
+    const emailSubject = `🚨 URGENT: Litefuse ingestion suspended for ${organizationName}`;
     const emailHtml = await render(
       UsageThresholdSuspensionEmailTemplate({
         organizationName,
@@ -60,7 +60,7 @@ export const sendUsageThresholdSuspensionEmail = async ({
       to: receiverEmail,
       from: {
         address: env.EMAIL_FROM_ADDRESS,
-        name: "Langfuse",
+        name: "Litefuse",
       },
       replyTo: "support@litefuse.ai",
       subject: emailSubject,

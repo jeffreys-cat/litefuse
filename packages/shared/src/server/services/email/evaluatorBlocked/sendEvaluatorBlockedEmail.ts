@@ -57,7 +57,7 @@ export const sendEvaluatorBlockedEmail = async ({
       to: receiverEmail,
       from: {
         address: env.EMAIL_FROM_ADDRESS,
-        name: "Langfuse",
+        name: "Litefuse",
       },
       replyTo: "support@litefuse.ai",
       subject,
