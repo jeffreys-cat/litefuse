@@ -7,7 +7,6 @@ import {
   Heading,
   Hr,
   Html,
-  Img,
   Section,
   Text,
   Tailwind,
@@ -49,16 +48,6 @@ export const UsageThresholdUpcomingEnforcementEmailTemplate = ({
       <Tailwind>
         <Body className="bg-background my-auto mx-auto font-sans">
           <Container className="mx-auto my-10 w-[465px] rounded border border-solid border-[#eaeaea] p-5">
-            <Section className="mt-8">
-              <Img
-                src="https://static.langfuse.com/langfuse_logo_transactional_email.png"
-                width="40"
-                height="40"
-                alt="Langfuse"
-                className="mx-auto my-0"
-              />
-            </Section>
-
             <Section>
               <Heading className="mx-0 my-[30px] p-0 text-center text-2xl font-normal text-black">
                 ⚠️ Action Required: Usage Limit Enforcement Begins Next Week
