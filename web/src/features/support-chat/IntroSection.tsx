@@ -57,7 +57,7 @@ export function IntroSection({
 
   return (
     <div className="mt-1 flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
+      {/* <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2 text-base font-semibold">
           <Sparkles className="h-4 w-4" /> Ask AI
         </div>
@@ -77,7 +77,7 @@ export function IntroSection({
         </RainbowButton>
       </div>
 
-      <Separator />
+      <Separator /> */}
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2 text-base font-semibold">
@@ -135,7 +135,7 @@ export function IntroSection({
             )}
             {!uiCustomization?.supportHref && (
               <>
-                <Button variant="outline" asChild>
+                {/* <Button variant="outline" asChild>
                   <a
                     href="https://litefuse.ai/ideas"
                     target="_blank"
@@ -152,7 +152,7 @@ export function IntroSection({
                   >
                     Report a bug
                   </a>
-                </Button>
+                </Button> */}
               </>
             )}
           </div>
@@ -161,7 +161,7 @@ export function IntroSection({
         </>
       )}
 
-      {supportType === "in-app-support" && (
+      {/* {supportType === "in-app-support" && (
         <>
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2 text-base font-semibold">
@@ -178,7 +178,7 @@ export function IntroSection({
 
           <Separator />
         </>
-      )}
+      )} */}
 
       {supportType === "community" && (
         <>
@@ -190,7 +190,7 @@ export function IntroSection({
               Ask AI & Docs did not unblock you? Get help from and share
               feedback with the community.
             </p>
-            <Button variant="outline" asChild>
+            {/* <Button variant="outline" asChild>
               <a
                 href="https://litefuse.ai/gh-support"
                 target="_blank"
@@ -216,14 +216,14 @@ export function IntroSection({
               >
                 <Bug className="mr-2 h-4 w-4" /> Report a bug ↗
               </a>
-            </Button>
+            </Button> */}
           </div>
 
           <Separator />
         </>
       )}
 
-      {supportType !== "custom" && (
+      {/* {supportType !== "custom" && (
         <div>
           <div className="flex items-center gap-2 text-base font-semibold">
             <Github className="h-4 w-4" /> Community & Resources
@@ -277,7 +277,7 @@ export function IntroSection({
             )}
           </div>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
