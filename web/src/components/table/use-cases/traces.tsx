@@ -527,7 +527,7 @@ export default function TracesTable({
   );
 
   const tableActions: TableAction[] = [
-    ...(hasTraceDeletionEntitlement
+    ...(false && hasTraceDeletionEntitlement
       ? [
           {
             id: ActionId.TraceDelete,

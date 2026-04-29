@@ -854,7 +854,7 @@ export async function getScoresUiTable<
     trace_id: string | null;
     session_id: string | null;
     dataset_run_id: string | null;
-    metadata: ExcludeMetadata extends true ? never : Record<string, string>;
+    metadata: Record<string, string>;
     observation_id: string | null;
     author_user_id: string | null;
     user_id: string | null;
@@ -870,7 +870,6 @@ export async function getScoresUiTable<
     event_ts: string;
     created_at: string;
     updated_at: string;
-    // has_metadata is 0 or 1 from Doris, later converted to a boolean
     has_metadata: IncludeHasMetadata extends true ? 0 | 1 : never;
   }>({
     select: "rows",
@@ -882,6 +881,9 @@ export async function getScoresUiTable<
 
   const includeMetadataPayload = excludeMetadata ? false : true;
   return rows.map((row) => {
+    // Compute hasMetadata in JS instead of SQL to avoid Doris 5.7.99 bug:
+    // CASE expressions on MAP columns inside LEFT JOIN queries trigger
+    // __DORIS_GLOBAL_ROWID_COL__ type mismatch.
     const score = convertDorisScoreToDomain(
       {
         ...row,
@@ -938,7 +940,7 @@ const getScoresUiGeneric = async <T>(props: {
           s.source,
           s.data_type,
           s.comment,
-          ${excludeMetadata ? "" : "s.metadata,"}
+          ${!excludeMetadata ? "s.metadata," : ""}
           s.trace_id,
           s.session_id,
           s.observation_id,
@@ -948,11 +950,7 @@ const getScoresUiGeneric = async <T>(props: {
           s.config_id,
           s.queue_id,
           s.is_deleted,
-          s.event_ts,
-          t.user_id,
-          t.name as trace_name,
-          t.tags as trace_tags
-          ${includeHasMetadataFlag ? ",CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata" : ""}
+          s.event_ts
         `;
 
   const { scoresFilter } = getDorisProjectIdDefaultFilter(projectId, {
@@ -967,17 +965,88 @@ const getScoresUiGeneric = async <T>(props: {
   const performTracesJoin =
     props.select === "rows" || scoresFilter.some((f) => f.table === "traces");
 
-  const query = `
-        SELECT
-            ${dorisSelect}
-        FROM scores s
-        ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
+  const orderBySQL = orderByToDorisSQL(
+    orderBy ?? null,
+    scoresTableUiColumnDefinitions,
+  );
+  const limitSQL =
+    limit !== undefined && offset !== undefined
+      ? `limit {limit: Int32} offset {offset: Int32}`
+      : "";
+
+  const baseWhere = `
         WHERE s.project_id = {projectId: String}
         AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
         ${scoresFilterRes?.query ? `AND ${scoresFilterRes.query}` : ""}
-        ${orderByToDorisSQL(orderBy ?? null, scoresTableUiColumnDefinitions)}
-        ${limit !== undefined && offset !== undefined ? `limit {limit: Int32} offset {offset: Int32}` : ""}
       `;
+
+  let query: string;
+
+  if (includeHasMetadataFlag && performTracesJoin) {
+    // Subquery pattern: compute has_metadata before LEFT JOIN to avoid
+    // Doris 5.7.99 bug with CASE/map_size on a MAP column inside LEFT JOIN
+    // (__DORIS_GLOBAL_ROWID_COL__ type mismatch).
+    query = `
+        SELECT
+            sm.id,
+            sm.project_id,
+            sm.environment,
+            sm.name,
+            sm.value,
+            sm.string_value,
+            sm.timestamp,
+            sm.source,
+            sm.data_type,
+            sm.comment,
+            ${!excludeMetadata ? "sm.metadata," : ""}
+            sm.trace_id,
+            sm.session_id,
+            sm.observation_id,
+            sm.author_user_id,
+            sm.created_at,
+            sm.updated_at,
+            sm.config_id,
+            sm.queue_id,
+            sm.is_deleted,
+            sm.event_ts,
+            sm.has_metadata,
+            t.user_id,
+            t.name as trace_name,
+            t.tags as trace_tags
+        FROM (
+            SELECT s.*,
+                CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0
+                     THEN 1 ELSE 0 END AS has_metadata
+            FROM scores s
+            ${baseWhere}
+            ${orderBySQL}
+            ${limitSQL}
+        ) sm
+        LEFT JOIN traces t
+            ON sm.trace_id = t.id AND t.project_id = sm.project_id
+        ORDER BY sm.timestamp DESC
+      `;
+  } else {
+    // Flat query — CASE on MAP is safe when there is no LEFT JOIN
+    const traceSelect = performTracesJoin
+      ? `, t.user_id, t.name as trace_name, t.tags as trace_tags`
+      : "";
+    const hasMetadataSQL = includeHasMetadataFlag
+      ? ", CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata"
+      : "";
+
+    query = `
+        SELECT
+            ${dorisSelect}
+            ${hasMetadataSQL}
+            ${traceSelect}
+        FROM scores s
+        ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
+        ${baseWhere}
+        ${orderBySQL}
+        ${limitSQL}
+      `;
+  }
 
   const rows = await queryDoris<T>({
     query: query,
