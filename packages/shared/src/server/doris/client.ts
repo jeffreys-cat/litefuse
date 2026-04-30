@@ -361,6 +361,60 @@ export class DorisClient {
   }
 
   /**
+   * Stream rows from a SELECT query, one at a time, with bounded memory.
+   *
+   * Borrows a single connection from the pool, runs the raw SQL with the
+   * mysql2 callback API's `.query(sql).stream()` (the promise wrapper hides
+   * `.stream()`, so we reach through `conn.connection`), and yields each row
+   * as it arrives over the wire. Connection is released back to the pool in
+   * the finally block whether the consumer drains the stream, breaks early,
+   * or throws.
+   */
+  async *queryStream<T = any>(
+    sql: string,
+    options: { highWaterMark?: number } = {},
+  ): AsyncGenerator<T> {
+    if (!this.connectionPool) {
+      throw new Error("MySQL connection pool not initialized");
+    }
+
+    const highWaterMark = options.highWaterMark ?? 1000;
+    const startTime = Date.now();
+    const conn = await this.connectionPool.getConnection();
+
+    try {
+      // mysql2/promise's PoolConnection wraps a callback Connection. The
+      // promise wrapper does not expose `.stream()`, but we can reach the
+      // underlying callback connection at `.connection`.
+      const underlying = (conn as unknown as { connection: any }).connection;
+      const stream = underlying.query(sql).stream({ highWaterMark });
+
+      let rowCount = 0;
+      for await (const row of stream) {
+        rowCount++;
+        yield row as T;
+      }
+
+      const durationMs = Date.now() - startTime;
+      logger.debug("Doris stream query completed", {
+        rowCount,
+        durationMs,
+      });
+      if (durationMs > env.LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
+        logger.warn(
+          `doris:slow-stream-query (${durationMs}ms, ${rowCount} rows) ${sql}`,
+        );
+      }
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`Doris stream query failed: ${errMsg}, SQL: ${sql}`);
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * Stream Load data into Doris table using HTTP API
    * @param table Target table name
    * @param data Array of records to insert
