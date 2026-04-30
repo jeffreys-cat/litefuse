@@ -248,9 +248,9 @@ export type PromptVariable = { name: string; value: string; isUsed: boolean };
 export enum LLMAdapter {
   Anthropic = "anthropic",
   OpenAI = "openai",
-  Azure = "azure",
-  Bedrock = "bedrock",
-  VertexAI = "google-vertex-ai",
+  // Azure = "azure",
+  // Bedrock = "bedrock",
+  // VertexAI = "google-vertex-ai",
   GoogleAIStudio = "google-ai-studio",
 }
 
