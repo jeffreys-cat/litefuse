@@ -192,7 +192,13 @@ export async function commandDoris(opts: {
 }
 
 /**
- * Stream query results from Doris - compatible with ClickHouse queryClickhouseStream interface
+ * Stream query results from Doris row-by-row over the MySQL protocol.
+ *
+ * Compatible with ClickHouse's queryClickhouseStream interface. Backed by
+ * mysql2's `connection.query(sql).stream()` so heap stays bounded and the
+ * first row is delivered as soon as Doris starts emitting — critical for
+ * large analytics exports (PostHog/Mixpanel historical syncs) that would
+ * otherwise OOM when materializing the full result set.
  */
 export async function* queryDorisStream<T>(opts: {
   query: string;
@@ -206,32 +212,21 @@ export async function* queryDorisStream<T>(opts: {
     span.setAttribute("doris.query.text", opts.query);
 
     const client = dorisClient();
-
-    // Use unified parameter processor for consistency
     const processedQuery = DorisParameterProcessor.processQuery(
       opts.query,
       opts.params,
     );
 
-    // For streaming, we'll execute the query and yield results
-    // Note: Doris doesn't have native streaming like ClickHouse, so we simulate it
-    const result = await client.queryWithParams({
-      query: processedQuery,
-      query_params: opts.params,
-    });
-
-    const data = await result.json();
-
-    span.setAttribute("doris.records.count", data.length);
-
-    // Yield results in batches to simulate streaming
-    const batchSize = 1000;
-    for (let i = 0; i < data.length; i += batchSize) {
-      const batch = data.slice(i, i + batchSize);
-      for (const row of batch) {
-        yield row as T;
-      }
+    if (env.LANGFUSE_DORIS_LOG_QUERIES === "true") {
+      logger.info(`doris:stream-query ${processedQuery}`);
     }
+
+    let count = 0;
+    for await (const row of client.queryStream<T>(processedQuery)) {
+      count++;
+      yield row;
+    }
+    span.setAttribute("doris.records.count", count);
   } finally {
     span.end();
   }
