@@ -590,19 +590,21 @@ export class DorisClient {
         errorMessage = String(error);
       }
 
-      logger.error("Stream load failed", {
-        table,
-        recordCount: data.length,
-        dataSizeKB: (
-          data.reduce(
-            (acc, item) =>
-              acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
-            0,
-          ) / 1024
-        ).toFixed(2),
-        loadLabel,
-        error: errorMessage,
-      });
+      // Inline errorMessage into the message string so it survives the
+      // default text log format (which drops the metadata object). Without
+      // this, "[E-217]json body size ... exceed BE's conf
+      // streaming_load_json_max_mb ..." and similar BE-side rejections are
+      // invisible until operators flip LANGFUSE_LOG_FORMAT=json.
+      const dataSizeKB = (
+        data.reduce(
+          (acc, item) =>
+            acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
+          0,
+        ) / 1024
+      ).toFixed(2);
+      logger.error(
+        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${data.length}, dataSizeKB=${dataSizeKB}): ${errorMessage}`,
+      );
 
       throw new Error(errorMessage);
     }
@@ -632,11 +634,7 @@ export class DorisClient {
         if (attempt < this.config.maxRetries) {
           const delay = this.config.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
           logger.warn(
-            `Stream load attempt ${attempt} failed, retrying in ${delay}ms`,
-            {
-              table,
-              error: lastError.message,
-            },
+            `Stream load attempt ${attempt} failed for ${table}, retrying in ${delay}ms: ${lastError.message}`,
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
