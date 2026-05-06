@@ -1,8 +1,6 @@
 import { type ZodSchema, z } from "zod/v4";
 
 import { ChatAnthropic, ChatAnthropicInput } from "@langchain/anthropic";
-import { ChatVertexAI } from "@langchain/google-vertexai";
-import { ChatBedrockConverse } from "@langchain/aws";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import {
   AIMessage,
@@ -16,15 +14,8 @@ import {
   StringOutputParser,
 } from "@langchain/core/output_parsers";
 import { IterableReadableStream } from "@langchain/core/utils/stream";
-import { ChatOpenAI, AzureChatOpenAI } from "@langchain/openai";
+import { ChatOpenAI } from "@langchain/openai";
 import { env } from "../../env";
-import GCPServiceAccountKeySchema, {
-  BedrockConfigSchema,
-  BedrockCredentialSchema,
-  VertexAIConfigSchema,
-  BEDROCK_USE_DEFAULT_CREDENTIALS,
-  VERTEXAI_USE_DEFAULT_CREDENTIALS,
-} from "../../interfaces/customLLMProviderConfigSchemas";
 import {
   ChatMessage,
   ChatMessageRole,
@@ -49,12 +40,9 @@ import { LLMCompletionError } from "./errors";
 
 export type CompletionWithReasoning = { text: string; reasoning?: string };
 
-const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
-
 // Maps adapters to the content block types that represent "thinking".
 // Used to extract reasoning separately and strip thinking parts from parsed output.
 const THINKING_BLOCK_TYPES: Partial<Record<LLMAdapter, Set<string>>> = {
-  [LLMAdapter.VertexAI]: new Set(["reasoning"]),
   [LLMAdapter.GoogleAIStudio]: new Set(["reasoning"]),
 };
 
@@ -97,10 +85,8 @@ function stripThinkingFromObject(obj: unknown): unknown {
 }
 
 const PROVIDERS_WITH_REQUIRED_USER_MESSAGE = [
-  LLMAdapter.VertexAI,
   LLMAdapter.GoogleAIStudio,
   LLMAdapter.Anthropic,
-  LLMAdapter.Bedrock,
 ];
 
 const transformSystemMessageToUserMessage = (
@@ -129,7 +115,7 @@ type LLMCompletionParams = {
     secretKey: string;
     extraHeaders?: string | null;
     baseURL?: string | null;
-    config?: Record<string, string> | null;
+    config?: Record<string, unknown> | null;
   };
   structuredOutputSchema?: ZodSchema | LLMJSONSchema;
   callbacks?: BaseCallbackHandler[];
@@ -187,10 +173,9 @@ export async function fetchLLMCompletion(
     llmConnection,
     maxRetries,
     traceSinkParams,
-    shouldUseLangfuseAPIKey = false,
   } = params;
 
-  const { baseURL, config } = llmConnection;
+  const { baseURL } = llmConnection;
   const apiKey = decrypt(llmConnection.secretKey); // the apiKey must never be printed to the console
   const extraHeaders = decryptAndParseExtraHeaders(llmConnection.extraHeaders);
 
@@ -280,12 +265,7 @@ export async function fetchLLMCompletion(
   const proxyDispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
   const timeoutMs = env.LANGFUSE_FETCH_LLM_COMPLETION_TIMEOUT_MS;
 
-  let chatModel:
-    | ChatOpenAI
-    | ChatAnthropic
-    | ChatBedrockConverse
-    | ChatVertexAI
-    | ChatGoogleGenerativeAI;
+  let chatModel: ChatOpenAI | ChatAnthropic | ChatGoogleGenerativeAI;
   if (modelParams.adapter === LLMAdapter.Anthropic) {
     const isClaude45Family =
       modelParams.model?.includes("claude-sonnet-4-5") ||
@@ -363,95 +343,6 @@ export async function fetchLLMCompletion(
       },
       modelKwargs: modelParams.providerOptions,
       timeout: timeoutMs,
-    });
-  } else if (modelParams.adapter === LLMAdapter.Azure) {
-    chatModel = new AzureChatOpenAI({
-      azureOpenAIApiKey: apiKey,
-      azureOpenAIBasePath: baseURL ?? undefined,
-      azureOpenAIApiDeploymentName: modelParams.model,
-      azureOpenAIApiVersion: "2025-02-01-preview",
-      temperature: modelParams.temperature,
-      maxTokens: modelParams.max_tokens,
-      topP: modelParams.top_p,
-      callbacks: finalCallbacks,
-      maxRetries,
-      timeout: timeoutMs,
-      configuration: {
-        timeout: timeoutMs,
-        defaultHeaders: extraHeaders,
-        ...(proxyDispatcher && {
-          fetchOptions: { dispatcher: proxyDispatcher },
-        }),
-      },
-      modelKwargs: modelParams.providerOptions,
-    });
-  } else if (modelParams.adapter === LLMAdapter.Bedrock) {
-    const { region } = shouldUseLangfuseAPIKey
-      ? { region: env.LANGFUSE_AWS_BEDROCK_REGION }
-      : BedrockConfigSchema.parse(config);
-
-    // Handle both explicit credentials and default provider chain
-    // Only allow default provider chain in self-hosted or internal AI features
-    const isSelfHosted = !isLangfuseCloud;
-    const credentials =
-      apiKey === BEDROCK_USE_DEFAULT_CREDENTIALS &&
-      (isSelfHosted || shouldUseLangfuseAPIKey)
-        ? undefined // undefined = use AWS SDK default credential provider chain
-        : BedrockCredentialSchema.parse(JSON.parse(apiKey));
-
-    chatModel = new ChatBedrockConverse({
-      model: modelParams.model,
-      region,
-      credentials,
-      temperature: modelParams.temperature,
-      maxTokens: modelParams.max_tokens,
-      topP: modelParams.top_p,
-      callbacks: finalCallbacks,
-      maxRetries,
-      timeout: timeoutMs,
-      additionalModelRequestFields: modelParams.providerOptions as any,
-    });
-  } else if (modelParams.adapter === LLMAdapter.VertexAI) {
-    const { location } = config
-      ? VertexAIConfigSchema.parse(config)
-      : { location: undefined };
-
-    const googleProviderOptions = googleProviderOptionsSchema.parse(
-      modelParams.providerOptions,
-    );
-
-    // Handle both explicit credentials and default provider chain (ADC)
-    // Only allow default provider chain in self-hosted or internal AI features
-    const shouldUseDefaultCredentials =
-      apiKey === VERTEXAI_USE_DEFAULT_CREDENTIALS && !isLangfuseCloud;
-
-    // When using ADC, authOptions must be undefined to use google-auth-library's default credential chain
-    // This supports: GKE Workload Identity, Cloud Run service accounts, GCE metadata service, gcloud auth
-    // Security: We intentionally ignore user-provided projectId when using ADC to prevent
-    // privilege escalation attacks where users could access other GCP projects via the server's credentials
-    const authOptions = shouldUseDefaultCredentials
-      ? undefined // Always use ADC auto-detection, never allow user-specified projectId
-      : {
-          credentials: GCPServiceAccountKeySchema.parse(JSON.parse(apiKey)),
-          projectId: GCPServiceAccountKeySchema.parse(JSON.parse(apiKey))
-            .project_id,
-        };
-
-    // Requests time out after 60 seconds for both public and private endpoints by default
-    // Reference: https://cloud.google.com/vertex-ai/docs/predictions/get-online-predictions#send-request
-    chatModel = new ChatVertexAI({
-      model: modelParams.model,
-      temperature: modelParams.temperature,
-      maxOutputTokens: modelParams.max_tokens,
-      topP: modelParams.top_p,
-      callbacks: finalCallbacks,
-      maxRetries,
-      location,
-      authOptions,
-      ...(modelParams.maxReasoningTokens !== undefined && {
-        maxReasoningTokens: modelParams.maxReasoningTokens,
-      }),
-      ...((googleProviderOptions as any) ?? {}), // Typecast as thinkingLevel is intentionally looser typed
     });
   } else if (modelParams.adapter === LLMAdapter.GoogleAIStudio) {
     const googleProviderOptions = googleProviderOptionsSchema.parse(

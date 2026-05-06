@@ -1,15 +1,7 @@
 import { useFieldArray, useForm } from "react-hook-form";
 import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import {
-  type BedrockConfig,
-  type BedrockCredential,
-  type VertexAIConfig,
-  LLMAdapter,
-  type LlmApiKeys,
-  BEDROCK_USE_DEFAULT_CREDENTIALS,
-  VERTEXAI_USE_DEFAULT_CREDENTIALS,
-} from "@langfuse/shared";
+import { LLMAdapter, type LlmApiKeys } from "@langfuse/shared";
 import { ChevronDown, PlusIcon, TrashIcon } from "lucide-react";
 import { z } from "zod/v4";
 import { Button } from "@/src/components/ui/button";
@@ -41,9 +33,6 @@ import { env } from "@/src/env.mjs";
 
 const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
 
-const isCustomModelsRequired = (adapter: LLMAdapter) =>
-  adapter === LLMAdapter.Azure || adapter === LLMAdapter.Bedrock;
-
 const createFormSchema = (mode: "create" | "update") =>
   z
     .object({
@@ -70,56 +59,8 @@ const createFormSchema = (mode: "create" | "update") =>
         }),
       ),
     })
-    // 1) Bedrock validation - credentials required in create mode
     .refine(
       (data) => {
-        if (data.adapter !== LLMAdapter.Bedrock) return true;
-
-        // In update mode, credentials are optional (existing ones are preserved)
-        if (mode === "update") {
-          // Only validate region is present
-          return data.awsRegion;
-        }
-
-        // In create mode, validate credentials
-        // For cloud deployments, AWS credentials are required
-        if (isLangfuseCloud) {
-          return (
-            data.awsAccessKeyId && data.awsSecretAccessKey && data.awsRegion
-          );
-        }
-
-        // For self-hosted deployments, only region is required
-        return data.awsRegion;
-      },
-      {
-        message:
-          mode === "update"
-            ? "AWS region is required."
-            : isLangfuseCloud
-              ? "AWS credentials are required for Bedrock"
-              : "AWS region is required.",
-        path: ["adapter"],
-      },
-    )
-    .refine(
-      (data) => {
-        if (isCustomModelsRequired(data.adapter)) {
-          return data.customModels.length > 0;
-        }
-        return true;
-      },
-      {
-        message: "At least one custom model is required for this adapter.",
-        path: ["customModels"],
-      },
-    )
-    // 2) For adapters that support defaults, require default models or at least one custom model
-    .refine(
-      (data) => {
-        if (isCustomModelsRequired(data.adapter)) {
-          return true;
-        }
         return data.withDefaultModels || data.customModels.length > 0;
       },
       {
@@ -128,45 +69,10 @@ const createFormSchema = (mode: "create" | "update") =>
         path: ["withDefaultModels"],
       },
     )
-    // Vertex AI validation - service account key or ADC sentinel value required
-    .refine(
-      (data) => {
-        if (data.adapter !== LLMAdapter.VertexAI) return true;
-
-        // In update mode, credentials are optional (existing ones are preserved)
-        if (mode === "update") return true;
-
-        // secretKey is required (either JSON key or VERTEXAI_USE_DEFAULT_CREDENTIALS sentinel)
-        return !!data.secretKey;
-      },
-      {
-        message: isLangfuseCloud
-          ? "GCP service account JSON key is required for Vertex AI"
-          : "GCP service account JSON key or Application Default Credentials is required.",
-        path: ["secretKey"],
-      },
-    )
-    .refine(
-      (data) =>
-        data.adapter === LLMAdapter.Bedrock ||
-        data.adapter === LLMAdapter.VertexAI ||
-        mode === "update" ||
-        data.secretKey,
-      {
-        message: "Secret key is required.",
-        path: ["secretKey"],
-      },
-    )
-    .refine(
-      (data) => {
-        if (data.adapter !== LLMAdapter.Azure) return true;
-        return data.baseURL && data.baseURL.trim() !== "";
-      },
-      {
-        message: "API Base URL is required for Azure connections.",
-        path: ["baseURL"],
-      },
-    );
+    .refine((data) => mode === "update" || data.secretKey, {
+      message: "Secret key is required.",
+      path: ["secretKey"],
+    });
 
 interface CreateLLMApiKeyFormProps {
   projectId?: string;
@@ -205,16 +111,16 @@ export function CreateLLMApiKeyForm({
   const mutTestLLMApiKey = api.llmApiKey.test.useMutation();
   const mutTestUpdateLLMApiKey = api.llmApiKey.testUpdate.useMutation();
 
-  const defaultAdapter: LLMAdapter = customization?.defaultModelAdapter
-    ? LLMAdapter[customization.defaultModelAdapter]
-    : LLMAdapter.OpenAI;
+  const defaultAdapter: LLMAdapter =
+    customization?.defaultModelAdapter &&
+    customization.defaultModelAdapter in LLMAdapter
+      ? LLMAdapter[customization.defaultModelAdapter as keyof typeof LLMAdapter]
+      : LLMAdapter.OpenAI;
 
   const getCustomizedBaseURL = (adapter: LLMAdapter) => {
     switch (adapter) {
       case LLMAdapter.OpenAI:
         return customization?.defaultBaseUrlOpenAI ?? "";
-      case LLMAdapter.Azure:
-        return customization?.defaultBaseUrlAzure ?? "";
       case LLMAdapter.Anthropic:
         return customization?.defaultBaseUrlAnthropic ?? "";
       default:
@@ -231,11 +137,7 @@ export function CreateLLMApiKeyForm({
         ? {
             adapter: existingKey.adapter as LLMAdapter,
             provider: existingKey.provider,
-            secretKey:
-              existingKey.adapter === LLMAdapter.VertexAI &&
-              existingKey.displaySecretKey === "Default GCP credentials (ADC)"
-                ? VERTEXAI_USE_DEFAULT_CREDENTIALS
-                : "",
+            secretKey: "",
             baseURL:
               existingKey.baseURL ??
               getCustomizedBaseURL(existingKey.adapter as LLMAdapter),
@@ -244,14 +146,8 @@ export function CreateLLMApiKeyForm({
             extraHeaders:
               existingKey.extraHeaderKeys?.map((key) => ({ key, value: "" })) ??
               [],
-            vertexAILocation:
-              existingKey.adapter === LLMAdapter.VertexAI && existingKey.config
-                ? ((existingKey.config as VertexAIConfig).location ?? "")
-                : "",
-            awsRegion:
-              existingKey.adapter === LLMAdapter.Bedrock && existingKey.config
-                ? ((existingKey.config as BedrockConfig).region ?? "")
-                : "",
+            vertexAILocation: "",
+            awsRegion: "",
             awsAccessKeyId: "",
             awsSecretAccessKey: "",
           }
@@ -275,7 +171,6 @@ export function CreateLLMApiKeyForm({
   const hasAdvancedSettings = (adapter: LLMAdapter) =>
     adapter === LLMAdapter.OpenAI ||
     adapter === LLMAdapter.Anthropic ||
-    adapter === LLMAdapter.VertexAI ||
     adapter === LLMAdapter.GoogleAIStudio;
 
   const { fields, append, remove } = useFieldArray({
@@ -302,21 +197,6 @@ export function CreateLLMApiKeyForm({
           <FormDescription>
             Custom model names accepted by given endpoint.
           </FormDescription>
-          {currentAdapter === LLMAdapter.Azure && (
-            <FormDescription className="text-dark-yellow">
-              {
-                "For Azure, the model name should be the same as the deployment name in Azure. For evals, choose a model with function calling capabilities."
-              }
-            </FormDescription>
-          )}
-
-          {currentAdapter === LLMAdapter.Bedrock && (
-            <FormDescription className="text-dark-yellow">
-              {
-                "For Bedrock, the model name is the Bedrock Inference Profile ID, e.g. 'eu.anthropic.claude-3-5-sonnet-20240620-v1:0'"
-              }
-            </FormDescription>
-          )}
 
           {fields.map((customModel, index) => (
             <span key={customModel.id} className="flex flex-row space-x-2">
@@ -430,66 +310,8 @@ export function CreateLLMApiKeyForm({
       });
     }
 
-    let secretKey = values.secretKey;
-    let config: BedrockConfig | VertexAIConfig | undefined;
-
-    if (currentAdapter === LLMAdapter.Bedrock) {
-      // In update mode, only update credentials if provided
-      if (mode === "update") {
-        // Only update secretKey if both credentials are provided
-        if (values.awsAccessKeyId && values.awsSecretAccessKey) {
-          const credentials: BedrockCredential = {
-            accessKeyId: values.awsAccessKeyId,
-            secretAccessKey: values.awsSecretAccessKey,
-          };
-          secretKey = JSON.stringify(credentials);
-        } else {
-          // Keep existing credentials by not setting secretKey
-          secretKey = undefined;
-        }
-      } else {
-        // In create mode, handle as before
-        if (
-          !isLangfuseCloud &&
-          (!values.awsAccessKeyId || !values.awsSecretAccessKey)
-        ) {
-          secretKey = BEDROCK_USE_DEFAULT_CREDENTIALS;
-        } else {
-          const credentials: BedrockCredential = {
-            accessKeyId: values.awsAccessKeyId ?? "",
-            secretAccessKey: values.awsSecretAccessKey ?? "",
-          };
-          secretKey = JSON.stringify(credentials);
-        }
-      }
-
-      config = {
-        region: values.awsRegion ?? "",
-      };
-    } else if (currentAdapter === LLMAdapter.VertexAI) {
-      // Handle Vertex AI credentials
-      // secretKey already contains either JSON key or VERTEXAI_USE_DEFAULT_CREDENTIALS sentinel
-      if (mode === "update") {
-        // In update mode, only update secretKey if a new one is provided
-        if (values.secretKey) {
-          secretKey = values.secretKey;
-        } else {
-          // Keep existing credentials by not setting secretKey
-          secretKey = undefined;
-        }
-      }
-      // In create mode, secretKey is already set from values.secretKey
-
-      // Build config with location only (projectId removed for security - ADC auto-detects)
-      config = {};
-      if (values.vertexAILocation?.trim()) {
-        config.location = values.vertexAILocation.trim();
-      }
-      // If config is empty, set to undefined
-      if (Object.keys(config).length === 0) {
-        config = undefined;
-      }
-    }
+    const secretKey =
+      mode === "update" && !values.secretKey ? undefined : values.secretKey;
 
     const extraHeaders =
       values.extraHeaders.length > 0
@@ -509,10 +331,8 @@ export function CreateLLMApiKeyForm({
       provider: values.provider,
       adapter: values.adapter,
       baseURL: values.baseURL || undefined,
-      withDefaultModels: isCustomModelsRequired(currentAdapter)
-        ? false
-        : values.withDefaultModels,
-      config,
+      withDefaultModels: values.withDefaultModels,
+      config: undefined,
       customModels: values.customModels
         .map((m) => m.value.trim())
         .filter(Boolean),
@@ -620,335 +440,34 @@ export function CreateLLMApiKeyForm({
             )}
           />
 
-          {/* API Key or AWS Credentials or Vertex AI Credentials */}
-          {currentAdapter === LLMAdapter.Bedrock ? (
-            <>
-              <FormField
-                control={form.control}
-                name="awsRegion"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>AWS Region</FormLabel>
-                    <FormDescription>
-                      {mode === "update" &&
-                        existingKey?.config &&
-                        (existingKey.config as BedrockConfig).region && (
-                          <span className="text-sm">
-                            Current:{" "}
-                            <code className="bg-muted rounded px-1 py-0.5">
-                              {(existingKey.config as BedrockConfig).region}
-                            </code>
-                          </span>
-                        )}
-                    </FormDescription>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        placeholder={
-                          mode === "update" && existingKey?.config
-                            ? ((existingKey.config as BedrockConfig).region ??
-                              "")
-                            : "e.g., us-east-1"
-                        }
-                        data-1p-ignore
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="awsAccessKeyId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      AWS Access Key ID
-                      {!isLangfuseCloud && (
-                        <span className="text-muted-foreground font-normal">
-                          {" "}
-                          (optional)
-                        </span>
-                      )}
-                    </FormLabel>
-                    <FormDescription>
-                      {mode === "update"
-                        ? "Leave empty to keep existing credentials. To update, provide both Access Key ID and Secret Access Key."
-                        : isLangfuseCloud
-                          ? "These should be long-lived credentials for an AWS user with `bedrock:InvokeModel` permission."
-                          : "For self-hosted deployments, AWS credentials are optional. When omitted, authentication will use the AWS SDK default credential provider chain."}
-                    </FormDescription>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        placeholder={
-                          mode === "update"
-                            ? existingKey?.displaySecretKey ===
-                              "Default AWS credentials"
-                              ? "Using default AWS credentials"
-                              : "•••••••• (existing credentials preserved if empty)"
-                            : undefined
-                        }
-                        autoComplete="off"
-                        data-1p-ignore
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="awsSecretAccessKey"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      AWS Secret Access Key
-                      {!isLangfuseCloud && (
-                        <span className="text-muted-foreground font-normal">
-                          {" "}
-                          (optional)
-                        </span>
-                      )}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        type="password"
-                        placeholder={
-                          mode === "update"
-                            ? existingKey?.displaySecretKey ===
-                              "Default AWS credentials"
-                              ? "Using default AWS credentials"
-                              : existingKey?.displaySecretKey
-                                ? `${existingKey.displaySecretKey} (preserved if empty)`
-                                : "•••••••• (existing credentials preserved if empty)"
-                            : undefined
-                        }
-                        autoComplete="new-password"
-                        data-1p-ignore
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              {!isLangfuseCloud && (
-                <div className="text-muted-foreground space-y-2 border-l-2 border-blue-200 pl-4 text-sm">
-                  <p>
-                    <strong>Default credential provider chain:</strong> When AWS
-                    credentials are omitted, the system will automatically check
-                    for credentials in this order:
-                  </p>
-                  <ul className="ml-2 list-inside list-disc space-y-1">
-                    <li>
-                      Environment variables (AWS_ACCESS_KEY_ID,
-                      AWS_SECRET_ACCESS_KEY)
-                    </li>
-                    <li>AWS credentials file (~/.aws/credentials)</li>
-                    <li>IAM roles for EC2 instances</li>
-                    <li>IAM roles for ECS tasks</li>
-                  </ul>
-                  <p>
-                    <a
-                      href="https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline hover:text-blue-800"
-                    >
-                      Learn more about AWS credential providers →
-                    </a>
-                  </p>
-                </div>
-              )}
-            </>
-          ) : currentAdapter === LLMAdapter.VertexAI ? (
-            <>
-              {/* Vertex AI ADC option for self-hosted only, create mode only */}
-              {!isLangfuseCloud && mode === "create" && (
-                <FormItem>
-                  <span className="row flex">
-                    <span className="flex-1">
-                      <FormLabel>
-                        Use Application Default Credentials (ADC)
-                      </FormLabel>
-                      <FormDescription>
-                        When enabled, authentication uses the GCP
-                        environment&apos;s default credentials instead of a
-                        service account key.
-                      </FormDescription>
-                    </span>
-                    <FormControl>
-                      <Switch
-                        checked={
-                          form.watch("secretKey") ===
-                          VERTEXAI_USE_DEFAULT_CREDENTIALS
-                        }
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            form.setValue(
-                              "secretKey",
-                              VERTEXAI_USE_DEFAULT_CREDENTIALS,
-                            );
-                          } else {
-                            form.setValue("secretKey", "");
-                          }
-                        }}
-                      />
-                    </FormControl>
-                  </span>
-                </FormItem>
-              )}
-
-              {/* Service Account Key - hidden when ADC is enabled */}
-              {(isLangfuseCloud ||
-                form.watch("secretKey") !==
-                  VERTEXAI_USE_DEFAULT_CREDENTIALS) && (
-                <FormField
-                  control={form.control}
-                  name="secretKey"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>GCP Service Account Key (JSON)</FormLabel>
-                      <FormDescription>
-                        {isLangfuseCloud
-                          ? "Your API keys are stored encrypted on our servers."
-                          : "Your API keys are stored encrypted in your database."}
-                      </FormDescription>
-                      <FormDescription className="text-dark-yellow">
-                        Paste your GCP service account JSON key here. The
-                        service account must have `Vertex AI User` role
-                        permissions. Example JSON:
-                        <pre className="text-xs">
-                          {`{
-  "type": "service_account",
-  "project_id": "<project_id>",
-  "private_key_id": "<private_key_id>",
-  "private_key": "<private_key>",
-  "client_email": "<client_email>",
-  "client_id": "<client_id>",
-  "auth_uri": "<auth_uri>",
-  "token_uri": "<token_uri>",
-  "auth_provider_x509_cert_url": "<auth_provider_x509_cert_url>",
-  "client_x509_cert_url": "<client_x509_cert_url>",
-}`}
-                        </pre>
-                      </FormDescription>
-                      <FormControl>
-                        <Input
-                          {...field}
-                          placeholder={
-                            mode === "update"
-                              ? existingKey?.displaySecretKey
-                              : '{"type": "service_account", ...}'
-                          }
-                          autoComplete="off"
-                          spellCheck="false"
-                          autoCapitalize="off"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-
-              {/* ADC info box for self-hosted */}
-              {!isLangfuseCloud &&
-                form.watch("secretKey") ===
-                  VERTEXAI_USE_DEFAULT_CREDENTIALS && (
-                  <div className="text-muted-foreground space-y-2 border-l-2 border-blue-200 pl-4 text-sm">
-                    <p>
-                      <strong>Application Default Credentials (ADC):</strong>{" "}
-                      When enabled, the system will automatically check for
-                      credentials in this order:
-                    </p>
-                    <ul className="ml-2 list-inside list-disc space-y-1">
-                      <li>
-                        Environment variable (GOOGLE_APPLICATION_CREDENTIALS)
-                      </li>
-                      <li>
-                        gcloud CLI credentials (gcloud auth application-default
-                        login)
-                      </li>
-                      <li>GKE Workload Identity</li>
-                      <li>Cloud Run service account</li>
-                      <li>GCE instance service account (metadata service)</li>
-                    </ul>
-                    <p>
-                      <a
-                        href="https://cloud.google.com/docs/authentication/application-default-credentials"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 underline hover:text-blue-800"
-                      >
-                        Learn more about GCP Application Default Credentials →
-                      </a>
-                    </p>
-                  </div>
-                )}
-            </>
-          ) : (
-            <FormField
-              control={form.control}
-              name="secretKey"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>API Key</FormLabel>
-                  <FormDescription>
-                    {isLangfuseCloud
-                      ? "Your API keys are stored encrypted on our servers."
-                      : "Your API keys are stored encrypted in your database."}
-                  </FormDescription>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      placeholder={
-                        mode === "update"
-                          ? existingKey?.displaySecretKey
-                          : undefined
-                      }
-                      autoComplete="off"
-                      spellCheck="false"
-                      autoCapitalize="off"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          )}
-
-          {/* Azure Base URL - Always required for Azure */}
-          {currentAdapter === LLMAdapter.Azure && (
-            <FormField
-              control={form.control}
-              name="baseURL"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>API Base URL</FormLabel>
-                  <FormDescription>
-                    Please add the base URL in the following format (or
-                    compatible API):
-                    https://&#123;instanceName&#125;.openai.azure.com/openai/deployments
-                  </FormDescription>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      placeholder="https://your-instance.openai.azure.com/openai/deployments"
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          )}
-
-          {/* Custom models: top-level for Azure/Bedrock */}
-          {isCustomModelsRequired(currentAdapter) && renderCustomModelsField()}
-
-          {/* Extra headers - show for Azure in main section (Azure has no advanced settings) */}
-          {currentAdapter === LLMAdapter.Azure && renderExtraHeadersField()}
+          <FormField
+            control={form.control}
+            name="secretKey"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>API Key</FormLabel>
+                <FormDescription>
+                  {isLangfuseCloud
+                    ? "Your API keys are stored encrypted on our servers."
+                    : "Your API keys are stored encrypted in your database."}
+                </FormDescription>
+                <FormControl>
+                  <Input
+                    {...field}
+                    placeholder={
+                      mode === "update"
+                        ? existingKey?.displaySecretKey
+                        : undefined
+                    }
+                    autoComplete="off"
+                    spellCheck="false"
+                    autoCapitalize="off"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
 
           {hasAdvancedSettings(currentAdapter) && (
             <div className="flex items-center">
@@ -1003,29 +522,6 @@ export function CreateLLMApiKeyForm({
                 )}
               />
 
-              {/* VertexAI Location */}
-              {currentAdapter === LLMAdapter.VertexAI && (
-                <FormField
-                  control={form.control}
-                  name="vertexAILocation"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Location (Optional)</FormLabel>
-                      <FormDescription>
-                        Google Cloud region (e.g., global, us-central1,
-                        europe-west4). Defaults to{" "}
-                        <span className="font-medium">global</span> as required
-                        for Gemini 3 models.
-                      </FormDescription>
-                      <FormControl>
-                        <Input {...field} placeholder="global" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-
               {/* Extra Headers */}
               {[LLMAdapter.OpenAI, LLMAdapter.Anthropic].includes(
                 currentAdapter,
@@ -1060,8 +556,7 @@ export function CreateLLMApiKeyForm({
               />
 
               {/* Custom model names */}
-              {!isCustomModelsRequired(currentAdapter) &&
-                renderCustomModelsField()}
+              {renderCustomModelsField()}
             </div>
           )}
         </DialogBody>

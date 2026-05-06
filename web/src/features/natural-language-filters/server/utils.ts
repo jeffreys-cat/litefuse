@@ -8,8 +8,8 @@ let langfuseClient: Langfuse | null = null;
 
 export function getDefaultModelParams() {
   return {
-    provider: "bedrock",
-    adapter: LLMAdapter.Bedrock,
+    provider: "google-ai-studio",
+    adapter: LLMAdapter.GoogleAIStudio,
     model: env.LANGFUSE_AWS_BEDROCK_MODEL ?? "",
     temperature: 0.1,
     maxTokens: 1000,

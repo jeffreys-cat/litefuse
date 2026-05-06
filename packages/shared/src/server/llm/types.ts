@@ -1,9 +1,5 @@
 import { LlmApiKeys } from "@prisma/client";
 import z from "zod/v4";
-import {
-  BedrockConfigSchema,
-  VertexAIConfigSchema,
-} from "../../interfaces/customLLMProviderConfigSchemas";
 import { JSONObjectSchema } from "../../utils/zod";
 
 // disable lint as this is exported and used in web/worker
@@ -439,26 +435,6 @@ export const anthropicModels = [
   "claude-instant-1.2",
 ] as const;
 
-// WARNING: The first entry in the array is chosen as the default model to add LLM API keys
-export const vertexAIModels = [
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
-  "gemini-3.1-pro-preview",
-  "gemini-3.1-flash-lite-preview",
-  "gemini-3-pro-preview",
-  "gemini-3-flash-preview",
-  "gemini-2.5-flash-preview-09-2025",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-flash-lite-preview-09-2025",
-  "gemini-2.0-flash",
-  "gemini-2.0-pro-exp-02-05",
-  "gemini-2.0-flash-001",
-  "gemini-2.0-flash-exp",
-  "gemini-1.5-pro",
-  "gemini-1.5-flash",
-  "gemini-1.0-pro",
-] as const;
-
 // WARNING: The first entry in the array is chosen as the default model to add LLM API keys. Make sure it supports top_p, max_tokens and temperature.
 export const googleAIStudioModels = [
   "gemini-2.5-flash",
@@ -477,14 +453,10 @@ export const googleAIStudioModels = [
 ] as const;
 
 export type AnthropicModel = (typeof anthropicModels)[number];
-export type VertexAIModel = (typeof vertexAIModels)[number];
 export const supportedModels = {
   [LLMAdapter.Anthropic]: anthropicModels,
   [LLMAdapter.OpenAI]: openAIModels,
-  [LLMAdapter.VertexAI]: vertexAIModels,
   [LLMAdapter.GoogleAIStudio]: googleAIStudioModels,
-  [LLMAdapter.Azure]: [],
-  [LLMAdapter.Bedrock]: [],
 } as const;
 
 export type LLMFunctionCall = {
@@ -508,7 +480,7 @@ export const LLMApiKeySchema = z
     baseURL: z.string().nullable(),
     customModels: z.array(z.string()),
     withDefaultModels: z.boolean(),
-    config: z.union([BedrockConfigSchema, VertexAIConfigSchema]).nullish(), // Bedrock and VertexAI have additional config
+    config: z.any().nullish(),
   })
   // strict mode to prevent extra keys. Thorws error otherwise
   // https://github.com/colinhacks/zod?tab=readme-ov-file#strict

@@ -26,6 +26,7 @@ import { DialogDescription } from "@radix-ui/react-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/src/components/ui/alert";
 import { CreateLLMApiKeyDialog } from "./CreateLLMApiKeyDialog";
 import { UpdateLLMApiKeyDialog } from "./UpdateLLMApiKeyDialog";
+import { type LlmApiKeys } from "@langfuse/shared";
 
 export function LlmApiKeyList(props: { projectId: string }) {
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
@@ -125,7 +126,8 @@ export function LlmApiKeyList(props: { projectId: string }) {
                           ...apiKey,
                           secretKey: apiKey.displaySecretKey,
                           extraHeaders: apiKey.extraHeaderKeys.join(","),
-                          config: apiKey.config ?? null,
+                          config: (apiKey.config ??
+                            null) as LlmApiKeys["config"],
                         }}
                         projectId={props.projectId}
                         open={editingKeyId === apiKey.id}
