@@ -215,12 +215,12 @@ export const getProjectSettingsPages = ({
     cmdKKeywords: ["bulk", "batch", "action", "dataset", "delete"],
     content: <BatchActionsSettingsPage projectId={project.id} />,
   },
-  {
-    title: "Audit Logs",
-    slug: "audit-logs",
-    cmdKKeywords: ["trail"],
-    content: <AuditLogsSettingsPage projectId={project.id} />,
-  },
+  // {
+  //   title: "Audit Logs",
+  //   slug: "audit-logs",
+  //   cmdKKeywords: ["trail"],
+  //   content: <AuditLogsSettingsPage projectId={project.id} />,
+  // },
   {
     title: "Notifications",
     slug: "notifications",
