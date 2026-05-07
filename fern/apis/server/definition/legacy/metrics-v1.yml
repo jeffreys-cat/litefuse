@@ -8,7 +8,7 @@ service:
   endpoints:
     metrics:
       docs: |
-        Get metrics from the Langfuse project using a query object.
+        Get metrics from the Litefuse project using a query object.
 
         Consider using the [v2 metrics endpoint](/api-reference#tag/metricsv2/GET/api/public/v2/metrics) for better performance.
 

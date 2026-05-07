@@ -7,7 +7,7 @@ service:
       docs: |
         **OpenTelemetry Traces Ingestion Endpoint**
 
-        This endpoint implements the OTLP/HTTP specification for trace ingestion, providing native OpenTelemetry integration for Langfuse Observability.
+        This endpoint implements the OTLP/HTTP specification for trace ingestion, providing native OpenTelemetry integration for Litefuse Observability.
 
         **Supported Formats:**
         - Binary Protobuf: `Content-Type: application/x-protobuf`

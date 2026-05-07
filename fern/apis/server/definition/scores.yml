@@ -91,7 +91,7 @@ service:
       path-parameters:
         scoreId:
           type: string
-          docs: The unique langfuse identifier of a score
+          docs: The unique litefuse identifier of a score
       response: commons.Score
 
 types:

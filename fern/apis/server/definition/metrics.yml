@@ -8,7 +8,7 @@ service:
   endpoints:
     metrics:
       docs: |
-        Get metrics from the Langfuse project using a query object. V2 endpoint with optimized performance.
+        Get metrics from the Litefuse project using a query object. V2 endpoint with optimized performance.
 
         ## V2 Differences
         - Supports `observations`, `scores-numeric`, and `scores-categorical` views only (traces view not supported)

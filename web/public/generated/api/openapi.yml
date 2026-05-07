@@ -1,6 +1,6 @@
 openapi: 3.0.1
 info:
-  title: langfuse
+  title: litefuse
   version: ''
   description: >-
     ## Authentication
@@ -11,9 +11,9 @@ info:
     keys in the project settings:
 
 
-    - username: Langfuse Public Key
+    - username: Litefuse Public Key
 
-    - password: Langfuse Secret Key
+    - password: Litefuse Secret Key
 
 
     ## Exports
@@ -883,7 +883,7 @@ paths:
       parameters:
         - name: commentId
           in: path
-          description: The unique langfuse identifier of a comment
+          description: The unique litefuse identifier of a comment
           required: true
           schema:
             type: string
@@ -1616,7 +1616,7 @@ paths:
   /api/public/ingestion:
     post:
       description: >-
-        **Legacy endpoint for batch ingestion for Langfuse Observability.**
+        **Legacy endpoint for batch ingestion for Litefuse Observability.**
 
 
         -> Please use the OpenTelemetry endpoint (`/api/public/otel/v1/traces`).
@@ -1635,7 +1635,7 @@ paths:
         unique per request.
 
         The event.body.id is the ID of the actual trace and will be used for
-        updates and will be visible within the Langfuse App.
+        updates and will be visible within the Litefuse App.
 
         I.e. if you want to update a trace, you'd use the same body id, but
         separate event IDs.
@@ -1779,7 +1779,7 @@ paths:
   /api/public/metrics:
     get:
       description: >-
-        Get metrics from the Langfuse project using a query object.
+        Get metrics from the Litefuse project using a query object.
 
 
         Consider using the [v2 metrics
@@ -1888,7 +1888,7 @@ paths:
         - name: observationId
           in: path
           description: >-
-            The unique langfuse identifier of an observation, can be an event,
+            The unique litefuse identifier of an observation, can be an event,
             span or generation
           required: true
           schema:
@@ -2272,7 +2272,7 @@ paths:
       parameters:
         - name: scoreId
           in: path
-          description: The unique langfuse identifier of a score
+          description: The unique litefuse identifier of a score
           required: true
           schema:
             type: string
@@ -2418,7 +2418,7 @@ paths:
       parameters:
         - name: mediaId
           in: path
-          description: The unique langfuse identifier of a media record
+          description: The unique litefuse identifier of a media record
           required: true
           schema:
             type: string
@@ -2464,7 +2464,7 @@ paths:
       parameters:
         - name: mediaId
           in: path
-          description: The unique langfuse identifier of a media record
+          description: The unique litefuse identifier of a media record
           required: true
           schema:
             type: string
@@ -2554,7 +2554,7 @@ paths:
   /api/public/v2/metrics:
     get:
       description: >-
-        Get metrics from the Langfuse project using a query object. V2 endpoint
+        Get metrics from the Litefuse project using a query object. V2 endpoint
         with optimized performance.
 
 
@@ -2999,7 +2999,7 @@ paths:
         - BasicAuth: []
     delete:
       description: >-
-        Delete a model. Cannot delete models managed by Langfuse. You can create
+        Delete a model. Cannot delete models managed by Litefuse. You can create
         your own definition with the same modelName to override the definition
         though.
       operationId: models_delete
@@ -3426,7 +3426,7 @@ paths:
 
 
         This endpoint implements the OTLP/HTTP specification for trace
-        ingestion, providing native OpenTelemetry integration for Langfuse
+        ingestion, providing native OpenTelemetry integration for Litefuse
         Observability.
 
 
@@ -4381,7 +4381,7 @@ paths:
                   description: >-
                     New labels for the prompt version. Labels are unique across
                     versions. The "latest" label is reserved and managed by
-                    Langfuse.
+                    Litefuse.
               required:
                 - newLabels
   /api/public/v2/prompts/{promptName}:
@@ -5130,7 +5130,7 @@ paths:
       parameters:
         - name: configId
           in: path
-          description: The unique langfuse identifier of a score config
+          description: The unique litefuse identifier of a score config
           required: true
           schema:
             type: string
@@ -5176,7 +5176,7 @@ paths:
       parameters:
         - name: configId
           in: path
-          description: The unique langfuse identifier of a score config
+          description: The unique litefuse identifier of a score config
           required: true
           schema:
             type: string
@@ -5450,7 +5450,7 @@ paths:
       parameters:
         - name: scoreId
           in: path
-          description: The unique langfuse identifier of a score
+          description: The unique litefuse identifier of a score
           required: true
           schema:
             type: string
@@ -5635,7 +5635,7 @@ paths:
       parameters:
         - name: traceId
           in: path
-          description: The unique langfuse identifier of a trace
+          description: The unique litefuse identifier of a trace
           required: true
           schema:
             type: string
@@ -5681,7 +5681,7 @@ paths:
       parameters:
         - name: traceId
           in: path
-          description: The unique langfuse identifier of the trace to delete
+          description: The unique litefuse identifier of the trace to delete
           required: true
           schema:
             type: string
@@ -6562,7 +6562,7 @@ components:
       properties:
         id:
           type: string
-          description: The id of the created object in Langfuse
+          description: The id of the created object in Litefuse
       required:
         - id
     GetCommentsResponse:
@@ -6644,7 +6644,7 @@ components:
       properties:
         htmlPath:
           type: string
-          description: Path of trace in Langfuse UI
+          description: Path of trace in Litefuse UI
         latency:
           type: number
           format: double
@@ -6677,7 +6677,7 @@ components:
       properties:
         htmlPath:
           type: string
-          description: Path of trace in Langfuse UI
+          description: Path of trace in Litefuse UI
         latency:
           type: number
           format: double
@@ -7005,7 +7005,7 @@ components:
         internalModelId:
           type: string
           nullable: true
-          description: The internal model ID matched by Langfuse
+          description: The internal model ID matched by Litefuse
         modelParameters:
           nullable: true
           description: The parameters of the model used for the observation
@@ -8182,7 +8182,7 @@ components:
         - SECONDS
         - IMAGES
         - REQUESTS
-      description: Unit of usage in Langfuse
+      description: Unit of usage in Litefuse
     ObservationLevel:
       title: ObservationLevel
       type: string
@@ -8413,7 +8413,7 @@ components:
       properties:
         version:
           type: string
-          description: Langfuse server version
+          description: Litefuse server version
           example: 1.25.0
         status:
           type: string
@@ -9215,7 +9215,7 @@ components:
           type: string
           nullable: true
           description: >-
-            Reference a score config on a score. The unique langfuse identifier
+            Reference a score config on a score. The unique litefuse identifier
             of a score config. When passing this field, the dataType and
             stringValue fields are automatically populated.
       required:
@@ -9227,7 +9227,7 @@ components:
       properties:
         id:
           type: string
-          description: The id of the created object in Langfuse
+          description: The id of the created object in Litefuse
       required:
         - id
     LlmConnection:
@@ -9371,7 +9371,7 @@ components:
       properties:
         mediaId:
           type: string
-          description: The unique langfuse identifier of a media record
+          description: The unique litefuse identifier of a media record
         contentType:
           type: string
           description: The MIME type of the media record
@@ -9461,7 +9461,7 @@ components:
             will be null
         mediaId:
           type: string
-          description: The unique langfuse identifier of a media record
+          description: The unique litefuse identifier of a media record
       required:
         - mediaId
     MediaContentType:
@@ -10708,7 +10708,7 @@ components:
           type: string
           nullable: true
           description: >-
-            Description is shown across the Langfuse UI and can be used to e.g.
+            Description is shown across the Litefuse UI and can be used to e.g.
             explain the config categories in detail, why a numeric range was
             set, or provide additional context on config name or usage
       required:
@@ -10753,7 +10753,7 @@ components:
           type: string
           nullable: true
           description: >-
-            Description is shown across the Langfuse UI and can be used to e.g.
+            Description is shown across the Litefuse UI and can be used to e.g.
             explain the config categories in detail, why a numeric range was
             set, or provide additional context on config name or usage
     GetScoresResponseTraceData:

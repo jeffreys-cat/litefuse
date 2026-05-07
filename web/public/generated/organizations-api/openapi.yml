@@ -1,12 +1,12 @@
 openapi: 3.0.1
 info:
-  title: langfuse-organizations
+  title: litefuse-organizations
   version: ''
   description: >-
     ## General Notes
 
 
-    This admin API is only available on self-hosted instances, not on Langfuse
+    This admin API is only available on self-hosted instances, not on Litefuse
     Cloud.
 
     An administrator must set the `ADMIN_API_KEY` environment variable to use
@@ -29,10 +29,10 @@ info:
     https://cloud.litefuse.ai/generated/organizations-api/openapi.yml
 
 
-    ## Looking for the Langfuse API?
+    ## Looking for the Litefuse API?
 
 
-    Are you looking for the full Langfuse API?
+    Are you looking for the full Litefuse API?
 
     Check out our [API reference](https://api.reference.litefuse.ai/#overview).
 paths:
