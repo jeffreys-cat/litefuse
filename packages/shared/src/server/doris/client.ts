@@ -597,8 +597,7 @@ export class DorisClient {
       // invisible until operators flip LANGFUSE_LOG_FORMAT=json.
       const dataSizeKB = (
         data.reduce(
-          (acc, item) =>
-            acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
+          (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
           0,
         ) / 1024
       ).toFixed(2);
