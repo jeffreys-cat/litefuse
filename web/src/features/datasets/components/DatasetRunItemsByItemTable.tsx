@@ -140,17 +140,16 @@ export function DatasetRunItemsByItemTable(props: {
       id: "expectedOutput",
       size: 200,
       enableHiding: true,
-      cell: ({ row }) => {
-        const datasetItemId: string = row.getValue("datasetItemId");
-        return datasetItemId ? (
+      cell: () => {
+        return (
           <DatasetItemIOCell
             projectId={props.projectId}
             datasetId={props.datasetId}
-            datasetItemId={datasetItemId}
+            datasetItemId={props.datasetItemId}
             io="expectedOutput"
             singleLine={rowHeight === "s"}
           />
-        ) : null;
+        );
       },
     },
     {
