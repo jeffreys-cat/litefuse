@@ -10,7 +10,11 @@ import {
   orderByToDorisSQL,
   type DateTimeFilter,
 } from "@langfuse/shared/src/server";
-import { type OrderByState, tracesTableCols } from "@langfuse/shared";
+import {
+  type OrderByState,
+  tracesTableCols,
+  InvalidRequestError,
+} from "@langfuse/shared";
 import { type TraceFieldGroup } from "@/src/features/public-api/types/traces";
 
 import type { FilterState } from "@langfuse/shared";
@@ -52,6 +56,9 @@ export const generateTracesForPublicApi = async ({
     tracesTableUiColumnDefinitionsForDoris,
     tracesTableCols,
   );
+  rejectNonTracesFilters(filter);
+  // appliedFilter is serialized BEFORE we strip prefixes below, so the outer
+  // WHERE keeps `t.<col>` references where `t` is in scope.
   const appliedFilter = filter.apply();
 
   const timeFilter = filter.find(
@@ -61,9 +68,15 @@ export const generateTracesForPublicApi = async ({
       (f.operator === ">=" || f.operator === ">"),
   ) as DateTimeFilter | undefined;
 
+  // The environment filter is reused inside the observations/scores CTEs, where
+  // alias `t` is not in scope. Drop the prefix on the env filter copies so they
+  // reference the bare `environment` column on those tables. Mirrors upstream CK.
   const environmentFilter = filter.filter(
     (f: any) => f.field === "environment",
   );
+  environmentFilter.forEach((f: any) => {
+    f.tablePrefix = undefined;
+  });
   const appliedEnvironmentFilter = environmentFilter.apply();
 
   // Skip indexes logic still applies to Doris
@@ -145,12 +158,14 @@ export const generateTracesForPublicApi = async ({
                      ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
               FROM traces
               WHERE project_id = {projectId: String}
-              ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
+              ${timeFilter ? `AND timestamp >= {cteTimeFilter: DateTime}` : ""}
             ) ranked
             WHERE rn = 1
           ) t
       LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id
       LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id
+      WHERE t.project_id = {projectId: String}
+      ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
       ${dorisOrderBy}
       ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
     `;
@@ -208,6 +223,7 @@ export const getTracesCountForPublicApi = async ({
     tracesTableUiColumnDefinitionsForDoris,
     tracesTableCols,
   );
+  rejectNonTracesFilters(dorisFilter);
   const appliedDorisFilter = dorisFilter.apply();
 
   const dorisQuery = `
@@ -249,3 +265,25 @@ const orderByColumns = [
 
 // Use factory functions to create column mappings (eliminates duplication with events table)
 const filterParams = createPublicApiTracesColumnMapping("traces", "t");
+
+// The Doris public-traces query joins observation_stats / score_stats CTEs that only
+// expose aggregate columns (counts, ids, totals). Filters on observation/score columns
+// (e.g. level, latency, totalCost, scores_avg) reference columns those CTEs do not
+// produce, and would emit SQL that fails at parse time. Reject them up front so the
+// caller gets a clear 400 instead of a Doris parser error.
+function rejectNonTracesFilters(filterList: {
+  forEach: (cb: (f: { table?: string; field: string }) => void) => void;
+}) {
+  const offending: { table?: string; field: string }[] = [];
+  filterList.forEach((f) => {
+    if (f.table && f.table !== "traces") offending.push(f);
+  });
+  if (offending.length > 0) {
+    const desc = offending
+      .map((f) => `'${f.field}' (table: ${f.table})`)
+      .join(", ");
+    throw new InvalidRequestError(
+      `Filtering on ${desc} is not supported via the public traces API on the Doris backend. Only columns on the traces table are supported.`,
+    );
+  }
+}
