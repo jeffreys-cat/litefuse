@@ -61,8 +61,8 @@ const getMinTimestampForExport = async (
                 SELECT min(timestamp) as ts
                 FROM scores
                 WHERE project_id = {projectId: String}
-              )
-              WHERE ts > 0 -- Ignore 0 results (usually empty tables)
+              ) t
+              WHERE ts IS NOT NULL -- Ignore empty tables
             `,
           params: { projectId },
         });
@@ -81,11 +81,11 @@ const getMinTimestampForExport = async (
           return date;
         }
 
-        // If no data exists, use current time as a fallback
+        // If no data exists, skip to current time to avoid infinite catch-up loop
         logger.info(
           `[BLOB INTEGRATION] No historical data found for project ${projectId}, using current time`,
         );
-        return new Date(0);
+        return new Date();
       } catch (error) {
         logger.error(
           `[BLOB INTEGRATION] Error querying Doris for minimum timestamp for project ${projectId}`,
@@ -298,45 +298,54 @@ export const handleBlobStorageIntegrationProjectJob = async (
 
   // Sync between lastSyncAt and now - 30 minutes
   // Cap the export to one frequency period to enable chunked historic exports
-  const minTimestamp = await getMinTimestampForExport(
-    projectId,
-    blobStorageIntegration.lastSyncAt,
-    blobStorageIntegration.exportMode,
-    blobStorageIntegration.exportStartDate,
-  );
-
-  logger.info(
-    `[BLOB INTEGRATION] Calculated minTimestamp for project ${projectId}: ${minTimestamp}, isValid: ${!isNaN(minTimestamp.getTime())}, getTime: ${minTimestamp.getTime()}, exportMode: ${blobStorageIntegration.exportMode}, lastSyncAt: ${blobStorageIntegration.lastSyncAt}, exportStartDate: ${blobStorageIntegration.exportStartDate}`,
-  );
-
-  const now = new Date();
-  const uncappedMaxTimestamp = new Date(now.getTime() - 30 * 60 * 1000); // 30-minute lag buffer
-  const frequencyIntervalMs = getFrequencyIntervalMs(
-    blobStorageIntegration.exportFrequency,
-  );
-
-  // Cap maxTimestamp to one frequency period ahead of minTimestamp
-  // This ensures large historic exports are broken into manageable chunks
-  const maxTimestamp = new Date(
-    Math.min(
-      minTimestamp.getTime() + frequencyIntervalMs,
-      uncappedMaxTimestamp.getTime(),
-    ),
-  );
-
-  logger.info(
-    `[BLOB INTEGRATION] Calculated maxTimestamp for project ${projectId}: ${maxTimestamp}, isValid: ${!isNaN(maxTimestamp.getTime())}, getTime: ${maxTimestamp.getTime()}, frequencyIntervalMs: ${frequencyIntervalMs}`,
-  );
-
-  // Skip export if the time window is empty or invalid
-  if (minTimestamp >= maxTimestamp) {
-    logger.info(
-      `[BLOB INTEGRATION] Skipping export for project ${projectId}: time window is empty (min: ${minTimestamp.toISOString()}, max: ${maxTimestamp.toISOString()})`,
-    );
-    return;
-  }
-
   try {
+    const minTimestamp = await getMinTimestampForExport(
+      projectId,
+      blobStorageIntegration.lastSyncAt,
+      blobStorageIntegration.exportMode,
+      blobStorageIntegration.exportStartDate,
+    );
+
+    logger.info(
+      `[BLOB INTEGRATION] Calculated minTimestamp for project ${projectId}: ${minTimestamp}, isValid: ${!isNaN(minTimestamp.getTime())}, getTime: ${minTimestamp.getTime()}, exportMode: ${blobStorageIntegration.exportMode}, lastSyncAt: ${blobStorageIntegration.lastSyncAt}, exportStartDate: ${blobStorageIntegration.exportStartDate}`,
+    );
+
+    const now = new Date();
+    const uncappedMaxTimestamp = new Date(now.getTime() - 30 * 60 * 1000); // 30-minute lag buffer
+    const frequencyIntervalMs = getFrequencyIntervalMs(
+      blobStorageIntegration.exportFrequency,
+    );
+
+    // Cap maxTimestamp to one frequency period ahead of minTimestamp
+    // This ensures large historic exports are broken into manageable chunks
+    const maxTimestamp = new Date(
+      Math.min(
+        minTimestamp.getTime() + frequencyIntervalMs,
+        uncappedMaxTimestamp.getTime(),
+      ),
+    );
+
+    logger.info(
+      `[BLOB INTEGRATION] Calculated maxTimestamp for project ${projectId}: ${maxTimestamp}, isValid: ${!isNaN(maxTimestamp.getTime())}, getTime: ${maxTimestamp.getTime()}, frequencyIntervalMs: ${frequencyIntervalMs}`,
+    );
+
+    // Skip export if the time window is empty or invalid
+    if (minTimestamp >= maxTimestamp) {
+      logger.info(
+        `[BLOB INTEGRATION] Skipping export for project ${projectId}: time window is empty (min: ${minTimestamp.toISOString()}, max: ${maxTimestamp.toISOString()})`,
+      );
+      // Update lastSyncAt to now so the integration doesn't get stuck in a catch-up loop
+      const nowForSkip = new Date();
+      await prisma.blobStorageIntegration.update({
+        where: { projectId },
+        data: {
+          lastSyncAt: nowForSkip,
+          nextSyncAt: new Date(nowForSkip.getTime() + frequencyIntervalMs),
+        },
+      });
+      return;
+    }
+
     // Process the export based on the integration configuration
     const executionConfig = {
       projectId,
