@@ -330,6 +330,16 @@ const BlobStorageIntegrationSettingsForm = ({
   const handleIntegrationTypeChange = (value: BlobStorageIntegrationType) => {
     setIntegrationType(value);
     blobStorageForm.setValue("type", value);
+    // Clear endpoint when switching to AWS S3 (it uses the standard endpoint)
+    if (value === BlobStorageIntegrationType.S3) {
+      blobStorageForm.setValue("endpoint", null);
+      blobStorageForm.setValue("forcePathStyle", false);
+    }
+    // Clear region when switching to Azure Blob Storage
+    if (value === BlobStorageIntegrationType.AZURE_BLOB_STORAGE) {
+      blobStorageForm.setValue("region", "auto");
+      blobStorageForm.setValue("forcePathStyle", false);
+    }
   };
 
   return (

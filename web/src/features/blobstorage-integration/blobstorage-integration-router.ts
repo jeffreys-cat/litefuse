@@ -113,10 +113,14 @@ export const blobStorageIntegrationRouter = createTRPCRouter({
         }
         // For FULL_HISTORY mode, exportStartDate remains null
 
+        // AWS S3 uses the standard endpoint; custom endpoint is only for S3-compatible providers
+        const normalizedEndpoint =
+          type === BlobStorageIntegrationType.S3 ? null : endpoint || null;
+
         const data: Partial<BlobStorageIntegration> = {
           type,
           bucketName,
-          endpoint: endpoint || null,
+          endpoint: normalizedEndpoint,
           region,
           prefix: prefix ?? "",
           exportFrequency,
