@@ -88,6 +88,10 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(1000),
+  LANGFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(90 * 1024 * 1024), // 90MB - flush when queue exceeds this to avoid hitting Doris BE 100MB Stream Load limit
   LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
     .number()
     .positive()
