@@ -111,7 +111,7 @@ export const getObservationsCountForPublicApi = async (props: QueryType) => {
 
   const query = `
     SELECT count(*) as count
-    FROM observations o
+    FROM observation_source o
     WHERE o.project_id = {projectId: String}
     ${traceFilter ? `AND EXISTS (SELECT 1 FROM traces t WHERE o.trace_id = t.id AND t.project_id = o.project_id AND ${traceFilter.apply().query})` : ""}
     ${filter.query ? `AND ${filter.query}` : ""}

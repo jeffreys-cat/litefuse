@@ -77,6 +77,7 @@ export const runEvaluationRouter = createTRPCRouter({
           filter: query.filter ?? [],
           searchQuery: query.searchQuery,
           searchType: query.searchType,
+          selectIOAndMetadata: false,
         };
 
         const observationCount =

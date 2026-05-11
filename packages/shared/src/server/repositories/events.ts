@@ -315,6 +315,7 @@ export const getObservationsForTraceFromEventsTable = async (params: {
         limit: MAX_OBSERVATIONS_PER_TRACE + 1,
         offset: 0,
         select: "rows",
+        selectIOAndMetadata: true,
         tags: { kind: "byTraceId" },
       },
     );
@@ -620,7 +621,7 @@ async function getObservationByIdFromEventsTableInternal({
       created_at,
       updated_at,
       event_ts
-    FROM observations
+    FROM ${fetchWithInputOutput ? "observations" : "observation_source"}
     WHERE project_id = {projectId: String}
     AND id = {id: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
@@ -939,7 +940,7 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
 
   const query = `
     SELECT count(*) as count
-    FROM observations o
+    FROM observation_source o
     WHERE ${appliedFilter.query}
     ${search.query}
   `;
@@ -1233,7 +1234,7 @@ export const getEventsGroupedByModel = async (
 
   const query = `
     SELECT o.provided_model_name as name, count(*) as count
-    FROM observations o
+    FROM observation_source o
     WHERE ${appliedFilter.query}
     AND o.provided_model_name IS NOT NULL
     AND length(o.provided_model_name) > 0
@@ -1329,7 +1330,7 @@ export const getEventsGroupedByName = async (
 
   const query = `
     SELECT o.name as name, count(*) as count
-    FROM observations o
+    FROM observation_source o
     WHERE ${appliedFilter.query}
     AND o.name IS NOT NULL
     AND length(o.name) > 0

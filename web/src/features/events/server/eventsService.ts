@@ -191,6 +191,7 @@ export async function getEventCount(params: GetObservationsCountParams) {
     orderBy: params.orderBy,
     limit: 1,
     offset: 0,
+    selectIOAndMetadata: false,
   };
 
   const totalCount = await getObservationsCountFromEventsTable(queryOpts);

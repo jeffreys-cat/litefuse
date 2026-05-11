@@ -344,7 +344,7 @@ export const getObservationForTraceIdByName = async ({
       created_at,
       updated_at,
       event_ts
-    FROM observations
+    FROM ${fetchWithInputOutput ? "observations" : "observation_source"}
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
     AND name = {name: String}
@@ -471,7 +471,7 @@ export const getObservationsById = async (
       created_at,
       updated_at,
       event_ts
-    FROM observations
+    FROM ${fetchWithInputOutput ? "observations" : "observation_source"}
     WHERE id IN ({ids: Array(String)})
     AND project_id = {projectId: String}
     ORDER BY event_ts DESC
@@ -547,7 +547,7 @@ const getObservationByIdInternal = async ({
         created_at,
         updated_at,
         event_ts
-      FROM observations
+      FROM ${fetchWithInputOutput ? "observations" : "observation_source"}
       WHERE id = {id: String}
       AND project_id = {projectId: String}
       ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
@@ -595,7 +595,7 @@ export type ObservationTableQuery = {
   searchType?: TracingSearchType[];
   limit?: number;
   offset?: number;
-  selectIOAndMetadata?: boolean;
+  selectIOAndMetadata: boolean;
   renderingProps?: RenderingProps;
 };
 
@@ -842,7 +842,7 @@ const getObservationsTableInternal = async <T>(
   const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
-      FROM observations o
+      FROM ${selectIOAndMetadata ? "observations" : "observation_source"} o
                ${traceTableFilter.length > 0 || orderByTraces || search.query ? "LEFT JOIN traces t ON t.id = o.trace_id AND t.project_id = o.project_id" : ""}
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.id` : ""}
       WHERE ${appliedObservationsFilter.query}
@@ -900,7 +900,7 @@ export const getObservationsGroupedByModel = async (
 
   const query = `
     SELECT o.provided_model_name as name
-    FROM observations o
+    FROM observation_source o
     WHERE ${appliedObservationsFilter.query}
     AND o.type = 'GENERATION'
     GROUP BY o.provided_model_name
@@ -985,7 +985,7 @@ export const getObservationsGroupedByName = async (
 
   const query = `
       SELECT o.name as name
-      FROM observations o
+      FROM observation_source o
       WHERE ${appliedObservationsFilter.query}
       AND o.type = 'GENERATION'
       GROUP BY o.name
@@ -1248,7 +1248,7 @@ export const getObservationsWithPromptName = async (
 ) => {
   const query = `
       SELECT count(*) as count, prompt_name
-      FROM observations
+      FROM observation_source
       WHERE project_id = {projectId: String}
       AND prompt_name IN ({promptNames: Array(String)})
       AND prompt_name IS NOT NULL

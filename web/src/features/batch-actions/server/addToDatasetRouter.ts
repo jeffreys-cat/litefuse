@@ -49,6 +49,7 @@ export const addToDatasetRouter = createTRPCRouter({
           filter: query.filter ?? [],
           limit: 1,
           offset: 0,
+          selectIOAndMetadata: false,
         };
         const observationCount = useEventsTable
           ? await getObservationsCountFromEventsTable(queryOpts)
