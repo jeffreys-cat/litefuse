@@ -163,9 +163,19 @@ export class DorisClient {
         typeCast: function (field: any, next: () => any) {
           if (field.type === "JSON") {
             const str = field.string("utf8");
+            if (!str) return str;
             try {
               return JSON.parse(str);
             } catch {
+              logger.warn(
+                `Doris typeCast: JSON.parse failed for column ${field.name}`,
+                {
+                  column: field.name,
+                  rawValue:
+                    str.substring(0, 200) + (str.length > 200 ? "..." : ""),
+                  valueLength: str.length,
+                },
+              );
               return str;
             }
           }

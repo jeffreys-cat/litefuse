@@ -1518,9 +1518,31 @@ export class IngestionService {
         span.setAttribute("projectId", projectId);
 
         // Convert query for Doris MySQL-compatible format
-        // Note: Doris doesn't support "LIMIT 1 BY" syntax, so we use regular LIMIT
+        // Use to_json() for MAP/ARRAY columns because Doris's MySQL protocol
+        // serialization of raw MAP columns does not properly escape quotes
+        // in TEXT values that contain nested JSON.
+        const mapColumns: Record<string, string[]> = {
+          [TableName.Traces]: ["metadata"],
+          [TableName.Observations]: [
+            "metadata",
+            "provided_usage_details",
+            "usage_details",
+            "provided_cost_details",
+            "cost_details",
+          ],
+          [TableName.Scores]: [],
+          [TableName.DatasetRunItems]: [
+            "dataset_run_metadata",
+            "dataset_item_metadata",
+          ],
+        };
+        const mapsForTable = mapColumns[table] || [];
+        const selectClause =
+          mapsForTable.length > 0
+            ? `SELECT * EXCEPT(${mapsForTable.join(", ")}), ${mapsForTable.map((c) => `to_json(${c}) as ${c}`).join(", ")}`
+            : `SELECT *`;
         let dorisQuery = `
-          SELECT *
+          ${selectClause}
           FROM ${table}
           WHERE project_id = {projectId: String}
           AND id = {entityId: String}
@@ -1602,9 +1624,18 @@ export class IngestionService {
           );
           return JSON.parse(fixed);
         }
+        // Regex didn't match — the malformation pattern is unknown
+        logger.warn(`Failed to parse JSON field (unfixable)`, {
+          originalError: e instanceof Error ? e.message : String(e),
+          field: fieldName,
+          table,
+          rawValue:
+            trimmed.substring(0, 100) + (trimmed.length > 100 ? "..." : ""),
+          valueLength: trimmed.length,
+        });
       } catch (fixError) {
-        logger.warn(`Failed to parse JSON field`, {
-          error: e instanceof Error ? e.message : String(e),
+        logger.warn(`Failed to parse JSON field (fix threw)`, {
+          originalError: e instanceof Error ? e.message : String(e),
           fixError:
             fixError instanceof Error ? fixError.message : String(fixError),
           field: fieldName,
@@ -1620,26 +1651,41 @@ export class IngestionService {
   }
 
   /**
-   * Fix malformed nested JSON strings using proven regex patterns
-   * Handles patterns like: "key":"{"nested":"value"}" -> "key":"{\"nested\":\"value\"}"
-   * Successfully tested with complex real-world examples
+   * Fix malformed nested JSON strings produced by Doris MAP serialization.
+   *
+   * Doris's MySQL protocol serialization of Map<String,String> columns does not
+   * properly escape quotes inside TEXT values that contain nested JSON. This
+   * produces patterns like "key":"[{"inner":"val"}]" where inner {, ", and }
+   * are unescaped, making the string invalid JSON.
+   *
+   * Recursively applies regex fixes for object values ("key":"{...}") and array
+   * values ("key":"[{...}]") until the string stabilizes (no more unescaped
+   * nested JSON patterns remain).
    */
   private fixMalformedNestedJson(str: string): string {
-    // Use regex to identify and fix nested JSON patterns
-    // Pattern: "key":"{"nested":"value",...}"
-    const nestedJsonPattern =
-      /"([^"]+)":"(\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\})"/g;
+    const objectPattern = /"([^"]+)":"(\{(?:[^{}]*(?:\{[^{}]*\}[^{}]*)*)*\})"/g;
+    const arrayPattern =
+      /"([^"]+)":"(\[(?:[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*)*\])"/g;
 
-    let fixed = str.replace(nestedJsonPattern, (match, key, jsonContent) => {
-      // Escape all quotes in the JSON content
-      const escapedContent = jsonContent.replace(/"/g, '\\"');
+    let fixed = str;
+
+    // Pass 1: escape unescaped quotes inside object values
+    fixed = fixed.replace(objectPattern, (_match, key, jsonContent) => {
+      const escapedContent = jsonContent.replace(/(?<!\\)"/g, '\\"');
       return `"${key}":"${escapedContent}"`;
     });
 
-    // Clean up other common issues
-    fixed = fixed.replace(/,(\s*[}\]])/g, "$1"); // Remove trailing commas
+    // Pass 2: escape unescaped quotes inside array values
+    fixed = fixed.replace(arrayPattern, (_match, key, jsonContent) => {
+      const escapedContent = jsonContent.replace(/(?<!\\)"/g, '\\"');
+      return `"${key}":"${escapedContent}"`;
+    });
 
-    return fixed;
+    // Remove trailing commas
+    fixed = fixed.replace(/,(\s*[}\]])/g, "$1");
+
+    // Recurse if changes were made (deeper nesting may now be exposed)
+    return fixed !== str ? this.fixMalformedNestedJson(fixed) : fixed;
   }
 
   /**
@@ -1669,8 +1715,8 @@ export class IngestionService {
         }
         return result;
       }
-      // If parsing failed or result is not an object, use fallback with original value
-      return { [fieldName]: fieldValue };
+      // If parsing failed or result is not an object, use fallback value
+      return fallbackValue;
     }
 
     if (typeof fieldValue === "object") {
