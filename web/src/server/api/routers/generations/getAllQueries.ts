@@ -59,6 +59,7 @@ export const getAllQueries = {
         filter: filterState,
         limit: 1,
         offset: 0,
+        selectIOAndMetadata: false,
       };
       const countQuery =
         env.LANGFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS === "true"
