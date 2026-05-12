@@ -24,10 +24,12 @@ export class DorisWriter {
   private static instance: DorisWriter | null = null;
   private static client: DorisClientType | null = null;
   batchSize: number;
+  maxQueueSizeBytes: number;
   writeInterval: number;
   gaugeInterval: number;
   maxAttempts: number;
   queue: DorisQueue;
+  queueSizeBytes: Map<TableName, number>;
 
   isIntervalFlushInProgress: boolean;
   intervalId: NodeJS.Timeout | null = null;
@@ -41,6 +43,8 @@ export class DorisWriter {
 
   private constructor() {
     this.batchSize = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
+    this.maxQueueSizeBytes =
+      workerEnv.LANGFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES;
     this.writeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
     this.gaugeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
     this.maxAttempts = sharedEnv.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
@@ -55,6 +59,8 @@ export class DorisWriter {
       [TableName.DatasetRunItems]: [],
       [TableName.ContentDict]: [],
     };
+
+    this.queueSizeBytes = new Map();
 
     this.start();
   }
@@ -77,7 +83,7 @@ export class DorisWriter {
 
   private start() {
     logger.info(
-      `Starting DorisWriter. Max interval: ${this.writeInterval} ms, Max batch size: ${this.batchSize}`,
+      `Starting DorisWriter. Max interval: ${this.writeInterval} ms, Max batch size: ${this.batchSize}, Max queue size: ${this.maxQueueSizeBytes} bytes`,
     );
 
     this.intervalId = setInterval(() => {
@@ -168,6 +174,15 @@ export class DorisWriter {
       fullQueue ? entityQueue.length : this.batchSize,
     );
 
+    const flushedBytes = queueItems.reduce(
+      (sum, item) => sum + item.estimatedSizeBytes,
+      0,
+    );
+    this.queueSizeBytes.set(
+      tableName,
+      (this.queueSizeBytes.get(tableName) ?? 0) - flushedBytes,
+    );
+
     // Log wait time
     queueItems.forEach((item) => {
       const waitTime = Date.now() - item.createdAt;
@@ -223,6 +238,10 @@ export class DorisWriter {
             ...item,
             attempts: item.attempts + 1,
           });
+          this.queueSizeBytes.set(
+            tableName,
+            (this.queueSizeBytes.get(tableName) ?? 0) + item.estimatedSizeBytes,
+          );
         } else {
           // TODO - Add to a dead letter queue in Redis rather than dropping
           recordIncrement("langfuse.queue.doris_writer.error");
@@ -240,11 +259,18 @@ export class DorisWriter {
     data: RecordInsertType<T>,
   ) {
     const entityQueue = this.queue[tableName];
+    const estimatedSizeBytes = Buffer.byteLength(JSON.stringify(data), "utf8");
     entityQueue.push({
       createdAt: Date.now(),
       attempts: 1,
       data,
+      estimatedSizeBytes,
     });
+
+    this.queueSizeBytes.set(
+      tableName,
+      (this.queueSizeBytes.get(tableName) ?? 0) + estimatedSizeBytes,
+    );
 
     // Per-push detail at debug level. Bump LOG_LEVEL=debug to inspect each push.
     logger.debug(
@@ -256,6 +282,16 @@ export class DorisWriter {
     if (entityQueue.length >= this.batchSize) {
       logger.info(
         `[DorisWriter.addToQueue] ${tableName} hit batch size ${this.batchSize}, flushing`,
+      );
+
+      this.flush(tableName).catch((err: any) => {
+        logger.error("DorisWriter.addToQueue flush", err);
+      });
+    }
+
+    if ((this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes) {
+      logger.info(
+        `[DorisWriter.addToQueue] ${tableName} hit max queue size ${this.maxQueueSizeBytes} bytes, flushing`,
       );
 
       this.flush(tableName).catch((err: any) => {
@@ -329,4 +365,5 @@ type DorisWriterQueueItem<T extends TableName> = {
   createdAt: number;
   attempts: number;
   data: RecordInsertType<T>;
+  estimatedSizeBytes: number;
 };
