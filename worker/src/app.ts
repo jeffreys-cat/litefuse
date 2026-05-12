@@ -23,20 +23,20 @@ import { cloudSpendAlertQueueProcessor } from "./queues/cloudSpendAlertQueue";
 import { cloudFreeTierUsageThresholdQueueProcessor } from "./queues/cloudFreeTierUsageThresholdQueue";
 import { WorkerManager } from "./queues/workerManager";
 import {
+  BlobStorageIntegrationQueue,
+  CloudFreeTierUsageThresholdQueue,
   CoreDataS3ExportQueue,
   DataRetentionQueue,
-  MeteringDataPostgresExportQueue,
-  PostHogIntegrationQueue,
-  MixpanelIntegrationQueue,
+  DeadLetterRetryQueue,
+  EventPropagationQueue,
   QueueName,
   logger,
-  BlobStorageIntegrationQueue,
-  DeadLetterRetryQueue,
   IngestionQueue,
+  MeteringDataPostgresExportQueue,
+  MixpanelIntegrationQueue,
   OtelIngestionQueue,
+  PostHogIntegrationQueue,
   TraceUpsertQueue,
-  CloudFreeTierUsageThresholdQueue,
-  EventPropagationQueue,
 } from "@langfuse/shared/src/server";
 import { env } from "./env";
 import { ingestionQueueProcessorBuilder } from "./queues/ingestionQueue";
@@ -85,8 +85,10 @@ import { MediaRetentionCleaner } from "./features/media-retention-cleaner";
 import { BatchTraceDeletionCleaner } from "./features/batch-trace-deletion-cleaner";
 import { BatchProjectMediaCleaner } from "./features/batch-project-media-cleaner";
 import { BatchProjectBlobCleaner } from "./features/batch-project-blob-cleaner";
+import { startPgBossScheduledJobs } from "./queues/pgBossScheduledJobs";
 
 const app = express();
+const usePgBossScheduling = env.LANGFUSE_PG_BOSS_ENABLED === "true";
 
 app.use(helmet());
 app.use(cors());
@@ -145,29 +147,56 @@ if (env.QUEUE_CONSUMER_CREATE_EVAL_QUEUE_IS_ENABLED === "true") {
   );
 }
 
+if (usePgBossScheduling) {
+  startPgBossScheduledJobs({
+    [QueueName.CoreDataS3ExportQueue]: coreDataS3ExportProcessor,
+    [QueueName.MeteringDataPostgresExportQueue]:
+      meteringDataPostgresExportProcessor,
+    [QueueName.CloudUsageMeteringQueue]: cloudUsageMeteringQueueProcessor,
+    [QueueName.CloudFreeTierUsageThresholdQueue]:
+      cloudFreeTierUsageThresholdQueueProcessor,
+    [QueueName.PostHogIntegrationQueue]: postHogIntegrationProcessor,
+    [QueueName.MixpanelIntegrationQueue]: mixpanelIntegrationProcessor,
+    [QueueName.BlobStorageIntegrationQueue]: blobStorageIntegrationProcessor,
+    [QueueName.DataRetentionQueue]: dataRetentionProcessor,
+    [QueueName.DeadLetterRetryQueue]: DlqRetryService.retryDeadLetterQueue,
+    [QueueName.EventPropagationQueue]: eventPropagationProcessor,
+  }).catch((err) => {
+    logger.error("Failed to start pg-boss scheduled jobs", err);
+  });
+}
+
 if (env.LANGFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  CoreDataS3ExportQueue.getInstance();
-  WorkerManager.register(
-    QueueName.CoreDataS3ExportQueue,
-    coreDataS3ExportProcessor,
-  );
+  if (usePgBossScheduling) {
+    logger.info("Core data S3 export schedule is managed by pg-boss");
+  } else {
+    // Instantiate the queue to trigger scheduled jobs
+    CoreDataS3ExportQueue.getInstance();
+    WorkerManager.register(
+      QueueName.CoreDataS3ExportQueue,
+      coreDataS3ExportProcessor,
+    );
+  }
 }
 
 if (env.LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  MeteringDataPostgresExportQueue.getInstance();
-  WorkerManager.register(
-    QueueName.MeteringDataPostgresExportQueue,
-    meteringDataPostgresExportProcessor,
-    {
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
+  if (usePgBossScheduling) {
+    logger.info("Metering data Postgres export schedule is managed by pg-boss");
+  } else {
+    // Instantiate the queue to trigger scheduled jobs
+    MeteringDataPostgresExportQueue.getInstance();
+    WorkerManager.register(
+      QueueName.MeteringDataPostgresExportQueue,
+      meteringDataPostgresExportProcessor,
+      {
+        limiter: {
+          // Process at most `max` jobs per 30 seconds
+          max: 1,
+          duration: 30_000,
+        },
       },
-    },
-  );
+    );
+  }
 }
 
 if (env.QUEUE_CONSUMER_TRACE_DELETE_QUEUE_IS_ENABLED === "true") {
@@ -342,18 +371,22 @@ if (
   env.QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED === "true" &&
   env.STRIPE_SECRET_KEY
 ) {
-  WorkerManager.register(
-    QueueName.CloudUsageMeteringQueue,
-    cloudUsageMeteringQueueProcessor,
-    {
-      concurrency: 1,
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
+  if (usePgBossScheduling) {
+    logger.info("Cloud usage metering schedule is managed by pg-boss");
+  } else {
+    WorkerManager.register(
+      QueueName.CloudUsageMeteringQueue,
+      cloudUsageMeteringQueueProcessor,
+      {
+        concurrency: 1,
+        limiter: {
+          // Process at most `max` jobs per 30 seconds
+          max: 1,
+          duration: 30_000,
+        },
       },
-    },
-  );
+    );
+  }
 }
 
 // Cloud Spend Alert Queue: Only enable in cloud environment with Stripe
@@ -383,20 +416,24 @@ if (
   env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION && // Only in cloud deployments
   env.STRIPE_SECRET_KEY
 ) {
-  // Instantiate the queue to trigger scheduled jobs
-  CloudFreeTierUsageThresholdQueue.getInstance();
-  WorkerManager.register(
-    QueueName.CloudFreeTierUsageThresholdQueue,
-    cloudFreeTierUsageThresholdQueueProcessor,
-    {
-      concurrency: 1,
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
+  if (usePgBossScheduling) {
+    logger.info("Free tier usage threshold schedule is managed by pg-boss");
+  } else {
+    // Instantiate the queue to trigger scheduled jobs
+    CloudFreeTierUsageThresholdQueue.getInstance();
+    WorkerManager.register(
+      QueueName.CloudFreeTierUsageThresholdQueue,
+      cloudFreeTierUsageThresholdQueueProcessor,
+      {
+        concurrency: 1,
+        limiter: {
+          // Process at most `max` jobs per 30 seconds
+          max: 1,
+          duration: 30_000,
+        },
       },
-    },
-  );
+    );
+  }
 }
 
 if (env.QUEUE_CONSUMER_EXPERIMENT_CREATE_QUEUE_IS_ENABLED === "true") {
@@ -410,16 +447,18 @@ if (env.QUEUE_CONSUMER_EXPERIMENT_CREATE_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_POSTHOG_INTEGRATION_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  PostHogIntegrationQueue.getInstance();
+  if (!usePgBossScheduling) {
+    // Instantiate the queue to trigger scheduled jobs
+    PostHogIntegrationQueue.getInstance();
 
-  WorkerManager.register(
-    QueueName.PostHogIntegrationQueue,
-    postHogIntegrationProcessor,
-    {
-      concurrency: 1,
-    },
-  );
+    WorkerManager.register(
+      QueueName.PostHogIntegrationQueue,
+      postHogIntegrationProcessor,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 
   WorkerManager.register(
     QueueName.PostHogIntegrationProcessingQueue,
@@ -443,16 +482,18 @@ if (env.QUEUE_CONSUMER_POSTHOG_INTEGRATION_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_MIXPANEL_INTEGRATION_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  MixpanelIntegrationQueue.getInstance();
+  if (!usePgBossScheduling) {
+    // Instantiate the queue to trigger scheduled jobs
+    MixpanelIntegrationQueue.getInstance();
 
-  WorkerManager.register(
-    QueueName.MixpanelIntegrationQueue,
-    mixpanelIntegrationProcessor,
-    {
-      concurrency: 1,
-    },
-  );
+    WorkerManager.register(
+      QueueName.MixpanelIntegrationQueue,
+      mixpanelIntegrationProcessor,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 
   WorkerManager.register(
     QueueName.MixpanelIntegrationProcessingQueue,
@@ -476,16 +517,18 @@ if (env.QUEUE_CONSUMER_MIXPANEL_INTEGRATION_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_BLOB_STORAGE_INTEGRATION_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  BlobStorageIntegrationQueue.getInstance();
+  if (!usePgBossScheduling) {
+    // Instantiate the queue to trigger scheduled jobs
+    BlobStorageIntegrationQueue.getInstance();
 
-  WorkerManager.register(
-    QueueName.BlobStorageIntegrationQueue,
-    blobStorageIntegrationProcessor,
-    {
-      concurrency: 1,
-    },
-  );
+    WorkerManager.register(
+      QueueName.BlobStorageIntegrationQueue,
+      blobStorageIntegrationProcessor,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 
   WorkerManager.register(
     QueueName.BlobStorageIntegrationProcessingQueue,
@@ -504,12 +547,18 @@ if (env.QUEUE_CONSUMER_BLOB_STORAGE_INTEGRATION_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  DataRetentionQueue.getInstance();
+  if (!usePgBossScheduling) {
+    // Instantiate the queue to trigger scheduled jobs
+    DataRetentionQueue.getInstance();
 
-  WorkerManager.register(QueueName.DataRetentionQueue, dataRetentionProcessor, {
-    concurrency: 1,
-  });
+    WorkerManager.register(
+      QueueName.DataRetentionQueue,
+      dataRetentionProcessor,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 
   WorkerManager.register(
     QueueName.DataRetentionProcessingQueue,
@@ -526,16 +575,20 @@ if (env.QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_DEAD_LETTER_RETRY_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  DeadLetterRetryQueue.getInstance();
+  if (usePgBossScheduling) {
+    logger.info("Dead letter retry schedule is managed by pg-boss");
+  } else {
+    // Instantiate the queue to trigger scheduled jobs
+    DeadLetterRetryQueue.getInstance();
 
-  WorkerManager.register(
-    QueueName.DeadLetterRetryQueue,
-    DlqRetryService.retryDeadLetterQueue,
-    {
-      concurrency: 1,
-    },
-  );
+    WorkerManager.register(
+      QueueName.DeadLetterRetryQueue,
+      DlqRetryService.retryDeadLetterQueue,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 }
 
 if (env.QUEUE_CONSUMER_WEBHOOK_QUEUE_IS_ENABLED === "true") {
@@ -558,16 +611,20 @@ if (
   env.QUEUE_CONSUMER_EVENT_PROPAGATION_QUEUE_IS_ENABLED === "true" &&
   env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
 ) {
-  // Instantiate the queue to trigger scheduled jobs
-  EventPropagationQueue.getInstance();
+  if (usePgBossScheduling) {
+    logger.info("Event propagation schedule is managed by pg-boss");
+  } else {
+    // Instantiate the queue to trigger scheduled jobs
+    EventPropagationQueue.getInstance();
 
-  WorkerManager.register(
-    QueueName.EventPropagationQueue,
-    eventPropagationProcessor,
-    {
-      concurrency: 1,
-    },
-  );
+    WorkerManager.register(
+      QueueName.EventPropagationQueue,
+      eventPropagationProcessor,
+      {
+        concurrency: 1,
+      },
+    );
+  }
 }
 
 if (env.QUEUE_CONSUMER_NOTIFICATION_QUEUE_IS_ENABLED === "true") {

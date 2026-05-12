@@ -4,10 +4,12 @@ This file covers package-local guidance for this package.
 Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 
 ## Purpose
+
 - Background job processor built on Express + BullMQ.
 - Owns queue consumers, async processors, and operational scripts.
 
 ## Maintenance Contract
+
 - `AGENTS.md` is a living document.
 - Update this file in the same PR for material worker-local changes:
   - new/renamed queue processors
@@ -17,8 +19,10 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
   likely `../packages/shared/AGENTS.md` too.
 
 ## High-Signal Entry Points
+
 - Bootstrap: `src/index.ts`, `src/app.ts`
 - Worker registration/lifecycle: `src/queues/workerManager.ts`
+- Optional pg-boss scheduled job registration: `src/queues/pgBossScheduledJobs.ts`
 - Queue processors: `src/queues/*`
 - Feature processors: `src/features/*`
 - Service layer: `src/services/*`
@@ -26,6 +30,7 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 - Tests: `src/__tests__/*`, `src/queues/__tests__/*`
 
 ## Quick Commands
+
 - Dev: `pnpm --filter worker run dev`
 - Lint: `pnpm --filter worker run lint`
 - Lint fix: `pnpm --filter worker run lint:fix`
@@ -35,6 +40,7 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 - Build: `pnpm --filter worker run build`
 
 ## Queue Playbook (Add/Change Queue Processor)
+
 1. Update queue schemas/contracts in `../packages/shared/src/server/queues.ts`
    if payload or queue type changes.
 2. Update queue accessors/helpers in
@@ -43,18 +49,31 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 4. Register/gate worker in `src/app.ts` (env flags, concurrency, limiter).
 5. Add/adjust tests in `src/__tests__/*` or `src/queues/__tests__/*`.
 
+## Scheduled Job Playbook
+
+1. Keep BullMQ repeatable queue helpers in `../packages/shared/src/server/redis/*`
+   as the default/fallback scheduler.
+2. Add pg-boss schedule definitions in
+   `../packages/shared/src/server/pgboss/pgBoss.ts` for the optional backend.
+3. Gate `src/app.ts` so only one scheduler backend starts a given trigger.
+4. Reuse existing processors where possible; pg-boss jobs should adapt to the
+   existing BullMQ processor shape.
+
 ## Processor Conventions
+
 - Keep queue handlers idempotent where possible.
 - Preserve metrics/tracing patterns in `workerManager` and queue processors.
 - Prefer explicit env-flag gating in `src/app.ts` for new consumers.
 - Keep queue payload parsing/schema validation centralized in shared contracts.
 
 ## Operational Scripts
+
 - Refill ingestion events: `pnpm --filter worker run refill-ingestion-events`
 - Refill billing event: `pnpm --filter worker run refill-billing-event`
 - Refill queue event: `pnpm --filter worker run refill-queue-event`
 
 ## Package-Specific Rules
+
 - Keep tests independent; no ordering assumptions.
 - Avoid editing `dist/*` directly.
 - Coordinate shared changes with `../packages/shared`.

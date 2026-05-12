@@ -1,13 +1,16 @@
 import { Processor } from "bullmq";
 import {
   CloudUsageMeteringQueue,
+  enqueuePgBossJob,
   logger,
   QueueJobs,
+  QueueName,
 } from "@langfuse/shared/src/server";
 import { handleCloudUsageMeteringJob } from "../ee/cloudUsageMetering/handleCloudUsageMeteringJob";
 import { cloudUsageMeteringDbCronJobName } from "../ee/cloudUsageMetering/constants";
 import { CloudUsageMeteringDbCronJobStates } from "../ee/cloudUsageMetering/constants";
 import { prisma } from "@langfuse/shared/src/db";
+import { env } from "../env";
 
 export const cloudUsageMeteringQueueProcessor: Processor = async (job) => {
   if (job.name === QueueJobs.CloudUsageMeteringJob) {
@@ -49,10 +52,18 @@ export const cloudUsageMeteringQueueProcessor: Processor = async (job) => {
       logger.info("Re-queuing Cloud Usage Metering Job after error", {
         timestamp: new Date().toISOString(),
       });
-      await CloudUsageMeteringQueue.getInstance()?.add(
-        QueueJobs.CloudUsageMeteringJob,
-        {},
-      );
+      if (env.LANGFUSE_PG_BOSS_ENABLED === "true") {
+        await enqueuePgBossJob(
+          QueueName.CloudUsageMeteringQueue,
+          QueueJobs.CloudUsageMeteringJob,
+          {},
+        );
+      } else {
+        await CloudUsageMeteringQueue.getInstance()?.add(
+          QueueJobs.CloudUsageMeteringJob,
+          {},
+        );
+      }
       throw error;
     }
   }

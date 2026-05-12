@@ -192,6 +192,15 @@ const EnvSchema = z.object({
   LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED: z
     .enum(["true", "false"])
     .default("false"),
+  LANGFUSE_PG_BOSS_ENABLED: z.enum(["true", "false"]).default("false"),
+  LANGFUSE_PG_BOSS_SCHEMA: z.string().default("pgboss"),
+  LANGFUSE_PG_BOSS_MIGRATE: z.enum(["true", "false"]).default("true"),
+  LANGFUSE_PG_BOSS_SCHEDULE_TZ: z.string().default("UTC"),
+  LANGFUSE_PG_BOSS_CONNECTION_TIMEOUT_MS: z.coerce
+    .number()
+    .positive()
+    .default(30_000),
+  LANGFUSE_PG_BOSS_POOL_MAX: z.coerce.number().positive().default(5),
 
   LANGFUSE_CUSTOM_SSO_EMAIL_CLAIM: z.string().default("email"),
   LANGFUSE_CUSTOM_SSO_NAME_CLAIM: z.string().default("name"),
