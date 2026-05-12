@@ -60,6 +60,8 @@ FROM observation_source o
 LEFT JOIN (
     SELECT
         o_inner.id,
+        o_inner.project_id,
+        o_inner.trace_id,
         CONCAT(
             '[',
             GROUP_CONCAT(CAST(c.content AS VARCHAR) ORDER BY t_inner.pos),
@@ -71,9 +73,9 @@ LEFT JOIN (
         ON t_inner.hash_item = c.content_hash
     WHERE o_inner.type = 'GENERATION'
       AND o_inner.input IS NOT NULL
-    GROUP BY o_inner.id
+    GROUP BY o_inner.id, o_inner.project_id, o_inner.trace_id
 ) t
-ON o.id = t.id
+ON o.id = t.id AND o.project_id = t.project_id AND o.trace_id = t.trace_id
 WHERE o.type = 'GENERATION' AND o.input IS NOT NULL
 
 UNION ALL
