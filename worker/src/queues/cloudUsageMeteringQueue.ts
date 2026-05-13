@@ -1,10 +1,9 @@
 import { Processor } from "bullmq";
+import { logger, QueueJobs } from "@langfuse/shared/src/server";
 import {
-  CloudUsageMeteringQueue,
-  logger,
-  QueueJobs,
-} from "@langfuse/shared/src/server";
-import { handleCloudUsageMeteringJob } from "../ee/cloudUsageMetering/handleCloudUsageMeteringJob";
+  enqueueCloudUsageMeteringJob,
+  handleCloudUsageMeteringJob,
+} from "../ee/cloudUsageMetering/handleCloudUsageMeteringJob";
 import { cloudUsageMeteringDbCronJobName } from "../ee/cloudUsageMetering/constants";
 import { CloudUsageMeteringDbCronJobStates } from "../ee/cloudUsageMetering/constants";
 import { prisma } from "@langfuse/shared/src/db";
@@ -49,10 +48,7 @@ export const cloudUsageMeteringQueueProcessor: Processor = async (job) => {
       logger.info("Re-queuing Cloud Usage Metering Job after error", {
         timestamp: new Date().toISOString(),
       });
-      await CloudUsageMeteringQueue.getInstance()?.add(
-        QueueJobs.CloudUsageMeteringJob,
-        {},
-      );
+      await enqueueCloudUsageMeteringJob();
       throw error;
     }
   }
