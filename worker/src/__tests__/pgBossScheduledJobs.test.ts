@@ -1,11 +1,33 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sharedServerMocks = vi.hoisted(() => ({
+  enqueuePgBossJob: vi.fn(),
+  ensurePgBossSchedules: vi.fn(),
+  registerPgBossWorker: vi.fn(),
+}));
+
+vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@langfuse/shared/src/server")>();
+  return {
+    ...actual,
+    enqueuePgBossJob: sharedServerMocks.enqueuePgBossJob,
+    ensurePgBossSchedules: sharedServerMocks.ensurePgBossSchedules,
+    registerPgBossWorker: sharedServerMocks.registerPgBossWorker,
+  };
+});
+
 import {
   PG_BOSS_SCHEDULE_DEFINITIONS,
   QueueJobs,
   QueueName,
 } from "@langfuse/shared/src/server";
 import { env } from "../env";
-import { getEnabledPgBossSchedules } from "../queues/pgBossScheduledJobs";
+import {
+  CLOUD_USAGE_METERING_BOOTSTRAP_JOB_ID,
+  getEnabledPgBossSchedules,
+  startPgBossScheduledJobs,
+} from "../queues/pgBossScheduledJobs";
 
 const schedule = (queueName: QueueName) =>
   PG_BOSS_SCHEDULE_DEFINITIONS.find(
@@ -59,6 +81,10 @@ const disableAllSchedules = () => {
 
 afterEach(() => {
   Object.assign(env, originalEnv);
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("PG_BOSS_SCHEDULE_DEFINITIONS", () => {
@@ -117,5 +143,45 @@ describe("getEnabledPgBossSchedules", () => {
       QueueName.CloudUsageMeteringQueue,
       QueueName.CloudFreeTierUsageThresholdQueue,
     ]);
+  });
+});
+
+describe("startPgBossScheduledJobs", () => {
+  it("enqueues a cloud usage metering bootstrap job when its pg-boss schedule is enabled", async () => {
+    disableAllSchedules();
+    env.QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED = "true";
+    env.STRIPE_SECRET_KEY = "sk_test";
+
+    await startPgBossScheduledJobs({
+      [QueueName.CloudUsageMeteringQueue]: vi.fn(),
+    });
+
+    expect(sharedServerMocks.ensurePgBossSchedules).toHaveBeenCalledWith([
+      expect.objectContaining({
+        queueName: QueueName.CloudUsageMeteringQueue,
+      }),
+    ]);
+    expect(sharedServerMocks.enqueuePgBossJob).toHaveBeenCalledWith(
+      QueueName.CloudUsageMeteringQueue,
+      QueueJobs.CloudUsageMeteringJob,
+      {},
+      { id: CLOUD_USAGE_METERING_BOOTSTRAP_JOB_ID },
+    );
+  });
+
+  it("does not enqueue a cloud usage metering bootstrap job when its schedule is not enabled", async () => {
+    disableAllSchedules();
+    env.QUEUE_CONSUMER_POSTHOG_INTEGRATION_QUEUE_IS_ENABLED = "true";
+
+    await startPgBossScheduledJobs({
+      [QueueName.PostHogIntegrationQueue]: vi.fn(),
+    });
+
+    expect(sharedServerMocks.ensurePgBossSchedules).toHaveBeenCalledWith([
+      expect.objectContaining({
+        queueName: QueueName.PostHogIntegrationQueue,
+      }),
+    ]);
+    expect(sharedServerMocks.enqueuePgBossJob).not.toHaveBeenCalled();
   });
 });

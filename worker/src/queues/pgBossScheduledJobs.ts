@@ -1,5 +1,6 @@
 import type { Job, Processor } from "bullmq";
 import {
+  enqueuePgBossJob,
   ensurePgBossSchedules,
   logger,
   PG_BOSS_SCHEDULE_DEFINITIONS,
@@ -52,6 +53,34 @@ const scheduleByQueueName = new Map<QueueName, PgBossScheduleDefinition>(
     definition,
   ]),
 );
+
+export const CLOUD_USAGE_METERING_BOOTSTRAP_JOB_ID =
+  "cloud-usage-metering-bootstrap";
+
+const enqueueCloudUsageMeteringBootstrapJob = async (
+  schedules: PgBossScheduleDefinition[],
+): Promise<void> => {
+  if (
+    !schedules.some(
+      (schedule) => schedule.queueName === QueueName.CloudUsageMeteringQueue,
+    )
+  ) {
+    return;
+  }
+
+  await enqueuePgBossJob(
+    QueueName.CloudUsageMeteringQueue,
+    QueueJobs.CloudUsageMeteringJob,
+    {},
+    { id: CLOUD_USAGE_METERING_BOOTSTRAP_JOB_ID },
+  );
+
+  logger.info("pg-boss bootstrap job enqueued", {
+    queueName: QueueName.CloudUsageMeteringQueue,
+    jobName: QueueJobs.CloudUsageMeteringJob,
+    jobId: CLOUD_USAGE_METERING_BOOTSTRAP_JOB_ID,
+  });
+};
 
 export const getEnabledPgBossSchedules = (): PgBossScheduleDefinition[] => {
   if (env.LANGFUSE_PG_BOSS_ENABLED !== "true") {
@@ -148,6 +177,7 @@ export const startPgBossScheduledJobs = async (
   }
 
   await ensurePgBossSchedules(schedules);
+  await enqueueCloudUsageMeteringBootstrapJob(schedules);
 
   for (const schedule of schedules) {
     const processor = processors[schedule.queueName];
