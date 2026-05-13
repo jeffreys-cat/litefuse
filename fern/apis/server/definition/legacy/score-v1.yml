@@ -19,7 +19,7 @@ service:
       path-parameters:
         scoreId:
           type: string
-          docs: The unique langfuse identifier of a score
+          docs: The unique litefuse identifier of a score
 types:
   CreateScoreRequest:
     properties:
@@ -45,7 +45,7 @@ types:
         docs: The data type of the score. When passing a configId this field is inferred. Otherwise, this field must be passed or will default to numeric.
       configId:
         type: optional<string>
-        docs: Reference a score config on a score. The unique langfuse identifier of a score config. When passing this field, the dataType and stringValue fields are automatically populated.
+        docs: Reference a score config on a score. The unique litefuse identifier of a score config. When passing this field, the dataType and stringValue fields are automatically populated.
     examples:
       - value:
           name: "novelty"
@@ -89,4 +89,4 @@ types:
     properties:
       id:
         type: string
-        docs: The id of the created object in Langfuse
+        docs: The id of the created object in Litefuse

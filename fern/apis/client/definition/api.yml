@@ -1,4 +1,4 @@
-name: langfuse
+name: litefuse
 error-discrimination:
   strategy: status-code
 auth: bearer

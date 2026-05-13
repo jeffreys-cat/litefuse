@@ -47,7 +47,7 @@ types:
     properties:
       htmlPath:
         type: string
-        docs: Path of trace in Langfuse UI
+        docs: Path of trace in Litefuse UI
       latency:
         type: optional<nullable<double>>
         docs: Latency of trace in seconds
@@ -65,7 +65,7 @@ types:
     properties:
       htmlPath:
         type: string
-        docs: Path of trace in Langfuse UI
+        docs: Path of trace in Litefuse UI
       latency:
         type: optional<nullable<double>>
         docs: Latency of trace in seconds
@@ -283,7 +283,7 @@ types:
         docs: The model name as provided by the user
       internalModelId:
         type: optional<nullable<string>>
-        docs: The internal model ID matched by Langfuse
+        docs: The internal model ID matched by Litefuse
       modelParameters:
         type: optional<unknown>
         docs: The parameters of the model used for the observation
@@ -890,7 +890,7 @@ types:
 
   # Utilities
   ModelUsageUnit:
-    docs: Unit of usage in Langfuse
+    docs: Unit of usage in Litefuse
     enum:
       - CHARACTERS
       - TOKENS
