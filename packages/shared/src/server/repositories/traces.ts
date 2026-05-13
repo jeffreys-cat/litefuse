@@ -19,7 +19,6 @@ import { env } from "../../env";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
 import { parseDorisStringArray } from "../utils/dorisArrays";
-import { logger } from "../logger";
 import {
   queryDoris,
   upsertDoris,
@@ -442,11 +441,6 @@ export const getTraceById = async ({
       kind: "byId",
       projectId,
     },
-  });
-
-  logger.info(`Doris getTraceById records:`, {
-    recordsCount: records.length,
-    records: records.length > 0 ? records : "No records found",
   });
 
   const res = records.map((r) => convertDorisToDomain(r));
