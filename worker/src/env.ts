@@ -22,8 +22,6 @@ const EnvSchema = z.object({
 
   STRIPE_SECRET_KEY: z.string().optional(),
 
-  LANGFUSE_PG_BOSS_ENABLED: z.enum(["true", "false"]).default("false"),
-
   LANGFUSE_CACHE_AUTOMATIONS_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_CACHE_AUTOMATIONS_TTL_SECONDS: z.coerce.number().default(60),
   LANGFUSE_S3_BATCH_EXPORT_ENABLED: z.enum(["true", "false"]).default("false"),

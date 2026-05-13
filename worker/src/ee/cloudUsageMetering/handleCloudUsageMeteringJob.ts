@@ -5,12 +5,10 @@ import { env } from "../../env";
 import {
   CloudUsageMeteringQueue,
   CloudSpendAlertQueue,
-  enqueuePgBossJob,
   getObservationCountsByProjectInCreationInterval,
   getScoreCountsByProjectInCreationInterval,
   getTraceCountsByProjectInCreationInterval,
   logger,
-  QueueName,
 } from "@langfuse/shared/src/server";
 import {
   cloudUsageMeteringDbCronJobName,
@@ -25,22 +23,6 @@ import { Job } from "bullmq";
 import { backOff } from "exponential-backoff";
 
 const delayFromStartOfInterval = 3600000 + 5 * 60 * 1000; // 5 minutes after the end of the interval
-
-export const enqueueCloudUsageMeteringJob = async () => {
-  if (env.LANGFUSE_PG_BOSS_ENABLED === "true") {
-    await enqueuePgBossJob(
-      QueueName.CloudUsageMeteringQueue,
-      QueueJobs.CloudUsageMeteringJob,
-      {},
-    );
-    return;
-  }
-
-  await CloudUsageMeteringQueue.getInstance()?.add(
-    QueueJobs.CloudUsageMeteringJob,
-    {},
-  );
-};
 
 export const handleCloudUsageMeteringJob = async (job: Job) => {
   if (!env.STRIPE_SECRET_KEY) {
@@ -345,6 +327,9 @@ export const handleCloudUsageMeteringJob = async (job: Job) => {
         unit: "jobs",
       },
     );
-    await enqueueCloudUsageMeteringJob();
+    await CloudUsageMeteringQueue.getInstance()?.add(
+      QueueJobs.CloudUsageMeteringJob,
+      {},
+    );
   }
 };

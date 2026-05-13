@@ -1,8 +1,4 @@
-import {
-  DorisClientManager,
-  logger,
-  stopPgBoss,
-} from "@langfuse/shared/src/server";
+import { DorisClientManager, logger } from "@langfuse/shared/src/server";
 import { redis } from "@langfuse/shared/src/server";
 
 import { DorisWriter } from "../services/DorisWriter";
@@ -54,8 +50,6 @@ export const onShutdown: NodeJS.SignalsListener = async (signal) => {
 
   // Shutdown workers (https://docs.bullmq.io/guide/going-to-production#gracefully-shut-down-workers)
   await WorkerManager.closeWorkers();
-  await stopPgBoss();
-  logger.info("pg-boss workers have been closed.");
 
   // Shutdown background migrations
   await BackgroundMigrationManager.close();
