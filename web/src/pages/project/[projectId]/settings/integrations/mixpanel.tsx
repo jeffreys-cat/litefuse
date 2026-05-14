@@ -93,7 +93,7 @@ export default function MixpanelIntegrationSettings() {
         <Link href="https://mixpanel.com" className="underline">
           Mixpanel
         </Link>{" "}
-        to sync your Langfuse traces, generations, and scores for advanced
+        to sync your Litefuse traces, generations, and scores for advanced
         product analytics. Upon activation, all historical data from your
         project will be synced. After the initial sync, new data is
         automatically synced every hour to keep your Mixpanel dashboards up to

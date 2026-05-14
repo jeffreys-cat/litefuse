@@ -27,7 +27,7 @@ export class AdminApiAuthService {
     ) {
       return {
         isAuthorized: false,
-        error: "Not accessible on Langfuse Cloud",
+        error: "Not accessible on Litefuse Cloud",
       };
     }
 

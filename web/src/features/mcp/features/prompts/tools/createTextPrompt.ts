@@ -72,7 +72,7 @@ const CreateTextPromptInputSchema = z.object({
 export const [createTextPromptTool, handleCreateTextPrompt] = defineTool({
   name: "createTextPrompt",
   description: [
-    "Create a new text prompt version in Langfuse.",
+    "Create a new text prompt version in Litefuse.",
     "",
     "Important:",
     "- Prompts are immutable - cannot modify existing versions",

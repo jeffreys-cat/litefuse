@@ -49,9 +49,9 @@ export async function stripeWebhookHandler(req: NextRequest) {
     );
 
   if (!env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION || !stripeClient) {
-    logger.error("[Stripe Webhook] Endpoint only available in Langfuse Cloud");
+    logger.error("[Stripe Webhook] Endpoint only available in Litefuse Cloud");
     return NextResponse.json(
-      { message: "Stripe webhook endpoint only available in Langfuse Cloud" },
+      { message: "Stripe webhook endpoint only available in Litefuse Cloud" },
       { status: 500 },
     );
   }
