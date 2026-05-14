@@ -40,7 +40,7 @@ import {
   disabledOptionsAtom,
   searchValueAtom,
 } from "store/discover";
-import { isValidTimeFieldType } from "utils/data";
+import { getInitialDiscoverDatabase, isValidTimeFieldType } from "utils/data";
 import { FORMAT_DATE } from "../../constants";
 import {
   getDatabases,
@@ -72,6 +72,7 @@ export default function DiscoverHeader(props: {
   const setDisabledOptions = useSetAtom(disabledOptionsAtom);
   const [searchType, setSearchType] = useAtom(searchTypeAtom);
   const [searchValue, setSearchValue] = useAtom(searchValueAtom);
+  const selectingDatabaseRef = React.useRef<string | null>(null);
 
   useEffect(() => {
     if (currentIndex.length > 0) {
@@ -80,45 +81,6 @@ export default function DiscoverHeader(props: {
       setDisabledOptions(["Search"]);
     }
   }, [currentIndex, setDisabledOptions]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    const subscription = getDatabases(projectId).subscribe({
-      next: ({ data, ok }: any) => {
-        if (!ok) {
-          return;
-        }
-
-        const rows = data?.rows ?? [];
-        if (!rows.length) {
-          setDatabases([]);
-          return;
-        }
-
-        const options = rows
-          .map((row: Record<string, unknown>) => firstStringValue(row))
-          .filter((item: string | undefined): item is string => Boolean(item))
-          .map((item: string) => ({
-            label: item,
-            value: item,
-          }));
-        setDatabases(options);
-
-        const initialDatabase =
-          discoverCurrent.database &&
-          options.some((o) => o.value === discoverCurrent.database)
-            ? discoverCurrent.database
-            : options[0]?.value;
-
-        if (initialDatabase) {
-          selectDatabase(initialDatabase);
-        }
-      },
-      error: (err: any) => console.log("Query error", err),
-    });
-
-    return () => subscription.unsubscribe();
-  }, [discoverCurrent.database, projectId, setDatabases]);
 
   const getFields = React.useCallback(
     (database: string, selectedTable: string) => {
@@ -184,7 +146,8 @@ export default function DiscoverHeader(props: {
       });
     },
     [
-      discoverCurrent,
+      discoverCurrent.timeField,
+      projectId,
       setDiscoverCurrent,
       setLoc,
       setTableFields,
@@ -242,7 +205,7 @@ export default function DiscoverHeader(props: {
         },
       });
     },
-    [setCurrentIndex, setIndexes],
+    [projectId, setCurrentIndex, setIndexes],
   );
 
   const selectTable = React.useCallback(
@@ -271,6 +234,14 @@ export default function DiscoverHeader(props: {
 
   const selectDatabase = React.useCallback(
     (database: string) => {
+      if (selectingDatabaseRef.current === database) {
+        return;
+      }
+      if (database === discoverCurrent.database && currentTable) {
+        return;
+      }
+
+      selectingDatabaseRef.current = database;
       setDiscoverCurrent((prev) => ({
         ...prev,
         database,
@@ -313,12 +284,63 @@ export default function DiscoverHeader(props: {
               selectTable(database, initialTable);
             }
           }
+          selectingDatabaseRef.current = null;
         },
-        error: (err: any) => console.log("Query error", err),
+        error: (err: any) => {
+          selectingDatabaseRef.current = null;
+          console.log("Query error", err);
+        },
       });
     },
-    [selectTable, setCurrentTable, setDiscoverCurrent, setLoc, setTables],
+    [
+      currentTable,
+      discoverCurrent.database,
+      projectId,
+      selectTable,
+      setCurrentTable,
+      setDiscoverCurrent,
+      setLoc,
+      setTables,
+    ],
   );
+
+  useEffect(() => {
+    if (!projectId) return;
+    const subscription = getDatabases(projectId).subscribe({
+      next: ({ data, ok }: any) => {
+        if (!ok) {
+          return;
+        }
+
+        const rows = data?.rows ?? [];
+        if (!rows.length) {
+          setDatabases([]);
+          return;
+        }
+
+        const options = rows
+          .map((row: Record<string, unknown>) => firstStringValue(row))
+          .filter((item: string | undefined): item is string => Boolean(item))
+          .map((item: string) => ({
+            label: item,
+            value: item,
+          }));
+        setDatabases(options);
+
+        const initialDatabase = getInitialDiscoverDatabase(
+          discoverCurrent.database,
+          options,
+        );
+
+        if (initialDatabase) {
+          selectDatabase(initialDatabase);
+        }
+      },
+      error: (err: any) => console.log("Query error", err),
+    });
+
+    return () => subscription.unsubscribe();
+  }, [discoverCurrent.database, projectId, selectDatabase, setDatabases]);
 
   const updateTimeRange = (nextRange: TimeRange) => {
     const absoluteRange = toAbsoluteTimeRange(nextRange);

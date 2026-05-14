@@ -233,7 +233,7 @@ export const slackRouter = createTRPCRouter({
             type: "header",
             text: {
               type: "plain_text",
-              text: "🎉 Test Message from Langfuse",
+              text: "🎉 Test Message from Litefuse",
               emoji: true,
             },
           },
@@ -241,7 +241,7 @@ export const slackRouter = createTRPCRouter({
             type: "section",
             text: {
               type: "mrkdwn",
-              text: "Hello from Langfuse! This is a test message to verify your Slack integration is working properly.",
+              text: "Hello from Litefuse! This is a test message to verify your Slack integration is working properly.",
             },
           },
           {
@@ -272,7 +272,7 @@ export const slackRouter = createTRPCRouter({
                 type: "button",
                 text: {
                   type: "plain_text",
-                  text: "Open Langfuse",
+                  text: "Open Litefuse",
                   emoji: true,
                 },
                 url: `${env.NEXTAUTH_URL}/project/${input.projectId}`,
@@ -286,7 +286,7 @@ export const slackRouter = createTRPCRouter({
           client,
           channelId: input.channelId,
           blocks: testBlocks,
-          text: "Test message from Langfuse",
+          text: "Test message from Litefuse",
         });
 
         await auditLog({

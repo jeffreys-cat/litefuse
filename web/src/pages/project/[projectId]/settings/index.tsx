@@ -280,7 +280,7 @@ const Integrations = (props: { projectId: string }) => {
           <PostHogLogo className="text-foreground mb-4 w-40" />
           <p className="text-primary mb-4 text-sm">
             We have teamed up with PostHog (OSS product analytics) to make
-            Langfuse Events/Metrics available in your Posthog Dashboards.
+            Litefuse Events/Metrics available in your Posthog Dashboards.
           </p>
           <div className="flex items-center gap-2">
             <ActionButton
@@ -304,7 +304,7 @@ const Integrations = (props: { projectId: string }) => {
         <Card className="p-3" hidden={true}>
           <MixpanelLogo className="text-foreground mb-4 w-20" />
           <p className="text-primary mb-4 text-sm">
-            Integrate with Mixpanel to sync your Langfuse traces, generations,
+            Integrate with Mixpanel to sync your Litefuse traces, generations,
             and scores for advanced product analytics and insights.
           </p>
           <div className="flex items-center gap-2">
@@ -360,7 +360,7 @@ const Integrations = (props: { projectId: string }) => {
           </div>
           <p className="text-primary mb-4 text-sm">
             Connect a Slack workspace and create channel automations to receive
-            Langfuse alerts natively in Slack.
+            Litefuse alerts natively in Slack.
           </p>
           <div className="flex items-center gap-2">
             <ActionButton

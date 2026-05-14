@@ -88,7 +88,7 @@ export const naturalLanguageFilterRouter = createTRPCRouter({
         if (!env.LANGFUSE_AI_FEATURES_PROJECT_ID) {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: "Langfuse AI Features not configured.",
+            message: "Litefuse AI Features not configured.",
           });
         }
 

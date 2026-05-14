@@ -19,7 +19,7 @@ export default withMiddlewares({
     fn: async ({ query, auth }) => {
       if (env.LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS !== "true") {
         throw new LangfuseNotFoundError(
-          "v2 APIs are currently in beta and only available on Langfuse Cloud",
+          "v2 APIs are currently in beta and only available on Litefuse Cloud",
         );
       }
 

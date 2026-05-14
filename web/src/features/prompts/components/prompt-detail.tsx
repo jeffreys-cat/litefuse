@@ -72,7 +72,7 @@ const getPythonCode = (
   labels: string[],
 ) => `from langfuse import Langfuse
 
-# Initialize Langfuse client
+# Initialize Litefuse client
 langfuse = Langfuse()
 
 # Get production prompt
@@ -92,7 +92,7 @@ const getJsCode = (
   labels: string[],
 ) => `import { LangfuseClient } from "@langfuse/client";
 
-// Initialize the Langfuse client
+// Initialize the Litefuse client
 const langfuse = new LangfuseClient();
 
 // Get production prompt

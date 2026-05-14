@@ -128,7 +128,7 @@ async function verifyAdminApiKeyAuth(req: NextApiRequest): Promise<
   if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
     throw {
       status: 403,
-      message: "Admin API key auth is not available on Langfuse Cloud",
+      message: "Admin API key auth is not available on Litefuse Cloud",
     };
   }
 

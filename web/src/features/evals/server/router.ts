@@ -921,7 +921,7 @@ export const evalRouter = createTRPCRouter({
             if (!cloneSourceTemplate) {
               throw new TRPCError({
                 code: "NOT_FOUND",
-                message: "Langfuse managed template not found",
+                message: "Litefuse managed template not found",
               });
             }
 

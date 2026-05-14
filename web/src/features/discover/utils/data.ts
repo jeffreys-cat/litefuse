@@ -77,6 +77,23 @@ export const DISCOVER_DEFAULT_STATUS: DiscoverCurrent = {
   date: [],
 };
 
+export function getInitialDiscoverDatabase(
+  currentDatabase: string | undefined,
+  options: Array<{ value: string }>,
+) {
+  if (
+    currentDatabase &&
+    options.some((option) => option.value === currentDatabase)
+  ) {
+    return currentDatabase;
+  }
+
+  return (
+    options.find((option) => option.value.startsWith("litefuse_"))?.value ??
+    options[0]?.value
+  );
+}
+
 export enum SearchableEnum {
   ANY = "ANY",
   YES = "YES",

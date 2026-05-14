@@ -42,7 +42,7 @@ import {
 export const promptsFeature: McpFeatureModule = {
   name: "prompts",
   description:
-    "Manage Langfuse prompts - create, retrieve, and update prompt versions",
+    "Manage Litefuse prompts - create, retrieve, and update prompt versions",
 
   tools: [
     {

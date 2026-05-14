@@ -1,5 +1,9 @@
 // @ts-nocheck
-import { convertColumnToRow, convertColumnToRowViaFieldsType } from "./data";
+import {
+  convertColumnToRow,
+  convertColumnToRowViaFieldsType,
+  getInitialDiscoverDatabase,
+} from "./data";
 
 describe("discover data variant parsing", () => {
   it("keeps VARIANT object values as-is in convertColumnToRow", () => {
@@ -121,5 +125,36 @@ describe("discover data variant parsing", () => {
     expect(consoleErrorSpy).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
+  });
+});
+
+describe("getInitialDiscoverDatabase", () => {
+  it("keeps the current database when it exists in the discovered options", () => {
+    expect(
+      getInitialDiscoverDatabase("langfuse", [
+        { value: "information_schema" },
+        { value: "langfuse" },
+        { value: "litefuse_project_langfuse" },
+      ]),
+    ).toBe("langfuse");
+  });
+
+  it("prefers a litefuse_ database when the current default is unavailable", () => {
+    expect(
+      getInitialDiscoverDatabase("langfuse", [
+        { value: "information_schema" },
+        { value: "litefuse_2ze75b81sis90m1l4_langfuse_zdh72e4p" },
+        { value: "mysql" },
+      ]),
+    ).toBe("litefuse_2ze75b81sis90m1l4_langfuse_zdh72e4p");
+  });
+
+  it("falls back to the first discovered database when no litefuse_ database exists", () => {
+    expect(
+      getInitialDiscoverDatabase("langfuse", [
+        { value: "information_schema" },
+        { value: "mysql" },
+      ]),
+    ).toBe("information_schema");
   });
 });

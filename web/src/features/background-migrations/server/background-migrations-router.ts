@@ -11,7 +11,7 @@ const denyOnLangfuseCloud = () => {
   if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Background migrations are not available in Langfuse Cloud",
+      message: "Background migrations are not available in Litefuse Cloud",
     });
   }
 };
