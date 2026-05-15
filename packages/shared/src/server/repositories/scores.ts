@@ -959,11 +959,18 @@ const getScoresUiGeneric = async <T>(props: {
   scoresFilter.push(
     ...createDorisFilterFromFilterState(filter, scoresTableUiColumnDefinitions),
   );
-  const scoresFilterRes = scoresFilter.apply();
+
+  // Separate trace filters from score filters so the subquery branch can
+  // apply them to the outer query (after the LEFT JOIN). The flat branch
+  // applies both inline since the JOIN is at the same level.
+  const traceFilters = scoresFilter.filter((f) => f.table === "traces");
+  const scoreOnlyFilters = scoresFilter.filter((f) => f.table !== "traces");
+  const scoresOnlyRes = scoreOnlyFilters.apply();
+  const traceFiltersRes = traceFilters.apply();
 
   // Only join traces for rows or if there is a trace filter on counts
   const performTracesJoin =
-    props.select === "rows" || scoresFilter.some((f) => f.table === "traces");
+    props.select === "rows" || traceFilters.length() > 0;
 
   const orderBySQL = orderByToDorisSQL(
     orderBy ?? null,
@@ -974,11 +981,15 @@ const getScoresUiGeneric = async <T>(props: {
       ? `limit {limit: Int32} offset {offset: Int32}`
       : "";
 
-  const baseWhere = `
+  const scoresWhere = `
         WHERE s.project_id = {projectId: String}
         AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-        ${scoresFilterRes?.query ? `AND ${scoresFilterRes.query}` : ""}
+        ${scoresOnlyRes?.query ? `AND ${scoresOnlyRes.query}` : ""}
       `;
+
+  const traceWhere = traceFiltersRes?.query
+    ? `WHERE ${traceFiltersRes.query}`
+    : "";
 
   let query: string;
 
@@ -986,6 +997,8 @@ const getScoresUiGeneric = async <T>(props: {
     // Subquery pattern: compute has_metadata before LEFT JOIN to avoid
     // Doris 5.7.99 bug with CASE/map_size on a MAP column inside LEFT JOIN
     // (__DORIS_GLOBAL_ROWID_COL__ type mismatch).
+    // Trace filters are applied to the outer query because the subquery
+    // only contains scores — the t alias doesn't exist inside it.
     query = `
         SELECT
             sm.id,
@@ -1018,23 +1031,38 @@ const getScoresUiGeneric = async <T>(props: {
                 CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0
                      THEN 1 ELSE 0 END AS has_metadata
             FROM scores s
-            ${baseWhere}
+            ${scoresWhere}
             ${orderBySQL}
             ${limitSQL}
         ) sm
         LEFT JOIN traces t
             ON sm.trace_id = t.id AND t.project_id = sm.project_id
+        ${traceWhere}
         ORDER BY sm.timestamp DESC
       `;
   } else {
     // Flat query — CASE on MAP is safe when there is no LEFT JOIN
-    const traceSelect = performTracesJoin
-      ? `, t.user_id, t.name as trace_name, t.tags as trace_tags`
-      : "";
+    // For count queries, trace columns are only needed by the WHERE clause
+    // (via the JOIN), not the SELECT. Including them alongside count(*)
+    // triggers "not in aggregate's output" in Doris.
+    const traceSelect =
+      performTracesJoin && props.select === "rows"
+        ? `, t.user_id, t.name as trace_name, t.tags as trace_tags`
+        : "";
     const hasMetadataSQL = includeHasMetadataFlag
       ? ", CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata"
       : "";
 
+    // For the flat branch, trace filters can be applied inline since the
+    // JOIN is at the same level. Merge both filter result params.
+    const flatWhereRes = scoreOnlyFilters.apply();
+    // Re-apply trace filters to get their query too (for the inline WHERE)
+    const flatWhere = `
+        WHERE s.project_id = {projectId: String}
+        AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
+        ${flatWhereRes?.query ? `AND ${flatWhereRes.query}` : ""}
+        ${traceFiltersRes?.query ? `AND ${traceFiltersRes.query}` : ""}
+      `;
     query = `
         SELECT
             ${dorisSelect}
@@ -1042,7 +1070,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${traceSelect}
         FROM scores s
         ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
-        ${baseWhere}
+        ${flatWhere}
         ${orderBySQL}
         ${limitSQL}
       `;
@@ -1052,7 +1080,8 @@ const getScoresUiGeneric = async <T>(props: {
     query: query,
     params: {
       projectId: projectId,
-      ...(scoresFilterRes ? scoresFilterRes.params : {}),
+      ...(scoresOnlyRes?.params ?? {}),
+      ...(traceFiltersRes?.params ?? {}),
       limit: limit,
       offset: offset,
     },
