@@ -32,6 +32,7 @@ import {
   isV2BreakdownChart,
   buildWidgetOrderBy,
 } from "@/src/features/query/validateQuery";
+import { LangfuseIcon } from "@/src/components/LangfuseLogo";
 
 export interface WidgetPlacement {
   id: string;
@@ -313,11 +314,13 @@ export function DashboardWidget({
       className={`group bg-background flex h-full w-full flex-col overflow-hidden rounded-lg border p-4`}
     >
       <div className="flex items-center justify-between">
-        <span className="truncate font-medium" title={widget.data.name}>
-          {widget.data.name}{" "}
-          {dashboardOwner === "PROJECT" && widget.data.owner === "LANGFUSE"
-            ? " ( 🪢 )"
-            : null}
+        <span className="flex min-w-0 items-center gap-1 font-medium">
+          <span className="truncate" title={widget.data.name}>
+            {widget.data.name}
+          </span>
+          {dashboardOwner === "PROJECT" && widget.data.owner === "LANGFUSE" ? (
+            <LangfuseIcon size={14} className="h-3.5 w-3.5 shrink-0" />
+          ) : null}
         </span>
         <div className="flex space-x-2">
           {hasCUDAccess && (

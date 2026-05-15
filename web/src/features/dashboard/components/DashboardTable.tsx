@@ -27,6 +27,7 @@ import { DeleteDashboardButton } from "@/src/components/deleteButton";
 import { EditDashboardDialog } from "@/src/features/dashboard/components/EditDashboardDialog";
 import { User as UserIcon } from "lucide-react";
 import { useRouter } from "next/router";
+import { LangfuseIcon } from "@/src/components/LangfuseLogo";
 
 type DashboardTableRow = {
   id: string;
@@ -197,10 +198,8 @@ export function DashboardTable() {
       size: 80,
       cell: (row) => {
         return row.row.original.owner === "LANGFUSE" ? (
-          <span className="flex gap-1 px-2 py-0.5 text-xs">
-            <span role="img" aria-label="Litefuse">
-              🪢
-            </span>
+          <span className="flex items-center gap-1 px-2 py-0.5 text-xs">
+            <LangfuseIcon size={12} className="h-3 w-3" />
             Litefuse
           </span>
         ) : (
