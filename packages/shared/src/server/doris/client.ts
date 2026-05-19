@@ -55,6 +55,13 @@ export type DorisClientType = DorisClient;
  */
 export class DorisClient {
   private httpClient: AxiosInstance;
+  // Dedicated instance for Stream Load PUTs. Shares agents + interceptors with
+  // httpClient but omits the instance-level `auth` config — Stream Load callers
+  // build their own Authorization header (manual 307 handling), and axios'
+  // instance auth would silently overwrite it.
+  private streamLoadClient: AxiosInstance;
+  private httpAgent: http.Agent;
+  private httpsAgent: https.Agent;
   private config: Required<DorisClientConfig>;
   private connectionPool: mysql.Pool | null = null;
 
@@ -78,14 +85,23 @@ export class DorisClient {
       maxSockets,
     } as Required<DorisClientConfig>;
 
-    const httpAgent = new http.Agent({ maxSockets });
-    const httpsAgent = new https.Agent({ maxSockets });
+    // keepAlive + maxFreeSockets so stream-load sockets get reused instead of
+    // accumulating one TCP connection per request. socket-level timeout closes
+    // half-dead connections that upstream (LB/proxy/BE) has already abandoned.
+    const agentOptions = {
+      maxSockets,
+      keepAlive: true,
+      maxFreeSockets: Math.max(8, Math.floor(maxSockets / 4)),
+      timeout: 60_000,
+    };
+    this.httpAgent = new http.Agent(agentOptions);
+    this.httpsAgent = new https.Agent(agentOptions);
 
     this.httpClient = axios.create({
       baseURL: this.config.feHttpUrl,
       timeout: this.config.timeout,
-      httpAgent,
-      httpsAgent,
+      httpAgent: this.httpAgent,
+      httpsAgent: this.httpsAgent,
       auth: {
         username: this.config.username,
         password: this.config.password,
@@ -110,27 +126,51 @@ export class DorisClient {
       },
     });
 
-    // Add request interceptor for OpenTelemetry tracing
-    this.httpClient.interceptors.request.use((config: any) => {
+    // Stream Load PUTs go through a separate instance so they can inherit
+    // agents + interceptors without inheriting instance-level basic auth (which
+    // would clobber the manually constructed Authorization header used for the
+    // FE→BE 307 dance).
+    this.streamLoadClient = axios.create({
+      baseURL: this.config.feHttpUrl,
+      timeout: this.config.timeout,
+      httpAgent: this.httpAgent,
+      httpsAgent: this.httpsAgent,
+      // Mirror httpClient default headers so user-supplied this.config.headers
+      // still flow through Stream Load just like every other Doris HTTP call.
+      headers: {
+        "Content-Type": "application/json",
+        ...this.config.headers,
+      },
+    });
+
+    // OTel + error-log interceptors apply to both clients. Hand them the same
+    // function refs so behavior stays in lockstep.
+    const otelInjectInterceptor = (config: any) => {
       const activeSpan = getCurrentSpan();
       if (activeSpan && config.headers) {
         propagation.inject(context.active(), config.headers);
       }
       return config;
-    });
+    };
+    const errorLogInterceptor = (error: any) => {
+      logger.error("Doris HTTP request failed", {
+        url: error.config?.url,
+        method: error.config?.method,
+        status: error.response?.status,
+        message: error.message,
+      });
+      return Promise.reject(error);
+    };
 
-    // Add response interceptor for error handling
+    this.httpClient.interceptors.request.use(otelInjectInterceptor);
     this.httpClient.interceptors.response.use(
       (response: any) => response,
-      (error: any) => {
-        logger.error("Doris HTTP request failed", {
-          url: error.config?.url,
-          method: error.config?.method,
-          status: error.response?.status,
-          message: error.message,
-        });
-        return Promise.reject(error);
-      },
+      errorLogInterceptor,
+    );
+    this.streamLoadClient.interceptors.request.use(otelInjectInterceptor);
+    this.streamLoadClient.interceptors.response.use(
+      (response: any) => response,
+      errorLogInterceptor,
     );
 
     // Initialize MySQL connection pool for queries
@@ -425,6 +465,32 @@ export class DorisClient {
   }
 
   /**
+   * Issue the PUT used by Stream Load. Both the FE call (relative path against
+   * httpClient.baseURL) and the BE redirect call (absolute URL) go through this
+   * helper so they share the same keep-alive http(s).Agent — otherwise the BE
+   * leg falls back to axios' default global agent, opens a brand-new TCP per
+   * request, and at high ingest rate exhausts the local ephemeral port range.
+   */
+  private async streamLoadPut(
+    urlOrPath: string,
+    jsonData: string,
+    authHeaders: Record<string, string>,
+  ) {
+    const isAbsolute = /^https?:\/\//i.test(urlOrPath);
+    return this.streamLoadClient.put(urlOrPath, jsonData, {
+      headers: authHeaders,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      maxRedirects: 0,
+      // Absolute URLs (BE redirect target) must not inherit the FE baseURL.
+      // Pass an empty string rather than undefined; axios falls back to the
+      // instance baseURL when the config value is missing.
+      baseURL: isAbsolute ? "" : this.config.feHttpUrl,
+      validateStatus: (status: number) => status >= 200 && status < 400,
+    });
+  }
+
+  /**
    * Stream Load data into Doris table using HTTP API
    * @param table Target table name
    * @param data Array of records to insert
@@ -485,13 +551,8 @@ export class DorisClient {
         headers: authHeaders,
       });
 
-      let response = await this.httpClient.put(url, jsonData, {
-        headers: authHeaders,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-        maxRedirects: 0, // Disable automatic redirects
-        validateStatus: (status: number) => status >= 200 && status < 400, // Accept redirect status codes
-      });
+      // Manual 307 handling — Doris FE always redirects stream loads to a BE.
+      let response = await this.streamLoadPut(url, jsonData, authHeaders);
 
       // Handle redirect manually if we get a 307 (this is normal behavior for Doris FE)
       if (response.status === 307 && response.headers?.location) {
@@ -500,24 +561,21 @@ export class DorisClient {
           redirectUrl: response.headers.location,
         });
 
-        // Clean the redirect URL (remove embedded credentials)
+        // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
+        // in the Location header). Supports both http:// and https://.
         const redirectUrl = response.headers.location.replace(
-          /^http:\/\/[^@]+@/,
-          "http://",
+          /^(https?:\/\/)[^@/]+@/,
+          "$1",
         );
 
         logger.debug("DorisClient: Sending PUT request to BE (redirect)", {
           redirectUrl,
-          headers: authHeaders,
         });
 
-        // Make the request to the redirect URL with proper auth
-        response = await axios.put(redirectUrl, jsonData, {
-          headers: authHeaders,
-          timeout: this.config.timeout,
-          maxBodyLength: Infinity,
-          maxContentLength: Infinity,
-        });
+        // Make the request to the redirect URL with proper auth, reusing the
+        // same keep-alive agents as the FE call so we don't open one TCP per
+        // stream load.
+        response = await this.streamLoadPut(redirectUrl, jsonData, authHeaders);
       }
 
       // Check load result
