@@ -759,7 +759,8 @@ export class DorisClient {
       this.connectionPool = null;
       logger.debug("Doris MySQL connection pool closed");
     }
-    // Axios doesn't require explicit connection closing
+    this.httpAgent.destroy();
+    this.httpsAgent.destroy();
     logger.debug("Doris client closed");
   }
 }
