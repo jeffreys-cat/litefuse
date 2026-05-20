@@ -29,8 +29,15 @@ type QueryType = {
 
 export const generateObservationsForPublicApi = async (props: QueryType) => {
   const chFilter = generateFilter(props);
-  const appliedFilter = chFilter.apply();
-  const traceFilter = chFilter.find((f) => f.table === "traces");
+  // Trace-table filters must live inside the EXISTS subquery (where `t` is in
+  // scope). The fork uses EXISTS instead of LEFT JOIN to dodge a Doris Nereids
+  // crash, so re-applying them in the outer WHERE references an undefined `t`
+  // alias and errors with "Unknown column 'user_id' in 't'".
+  const traceFilters = chFilter.filter((f) => f.table === "traces");
+  const observationFilters = chFilter.filter((f) => f.table !== "traces");
+  const appliedObservationFilter = observationFilters.apply();
+  const appliedTraceFilter =
+    traceFilters.length() > 0 ? traceFilters.apply() : null;
 
   // Doris query - no FINAL modifier needed
   const query = `
@@ -67,8 +74,8 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       event_ts
     FROM observations o
     WHERE o.project_id = {projectId: String}
-      ${traceFilter ? `AND EXISTS (SELECT 1 FROM traces t WHERE o.trace_id = t.id AND t.project_id = o.project_id AND ${traceFilter.apply().query})` : ""}
-      ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
+      ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM traces t WHERE o.trace_id = t.id AND t.project_id = o.project_id AND ${appliedTraceFilter.query})` : ""}
+      ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
     ORDER BY start_time DESC
     ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
   `;
@@ -78,8 +85,8 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
     projectId: props.projectId,
     input: {
       params: {
-        ...appliedFilter.params,
-        ...(traceFilter ? traceFilter.apply().params : {}),
+        ...appliedObservationFilter.params,
+        ...(appliedTraceFilter ? appliedTraceFilter.params : {}),
         projectId: props.projectId,
         ...(props.limit !== undefined ? { limit: props.limit } : {}),
         ...(props.page !== undefined
@@ -106,15 +113,18 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
 
 export const getObservationsCountForPublicApi = async (props: QueryType) => {
   const chFilter = generateFilter(props);
-  const filter = chFilter.apply();
-  const traceFilter = chFilter.find((f) => f.table === "traces");
+  const traceFilters = chFilter.filter((f) => f.table === "traces");
+  const observationFilters = chFilter.filter((f) => f.table !== "traces");
+  const appliedObservationFilter = observationFilters.apply();
+  const appliedTraceFilter =
+    traceFilters.length() > 0 ? traceFilters.apply() : null;
 
   const query = `
     SELECT count(*) as count
     FROM observation_source o
     WHERE o.project_id = {projectId: String}
-    ${traceFilter ? `AND EXISTS (SELECT 1 FROM traces t WHERE o.trace_id = t.id AND t.project_id = o.project_id AND ${traceFilter.apply().query})` : ""}
-    ${filter.query ? `AND ${filter.query}` : ""}
+    ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM traces t WHERE o.trace_id = t.id AND t.project_id = o.project_id AND ${appliedTraceFilter.query})` : ""}
+    ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
   `;
 
   return measureAndReturn({
@@ -122,8 +132,8 @@ export const getObservationsCountForPublicApi = async (props: QueryType) => {
     projectId: props.projectId,
     input: {
       params: {
-        ...filter.params,
-        ...(traceFilter ? traceFilter.apply().params : {}),
+        ...appliedObservationFilter.params,
+        ...(appliedTraceFilter ? appliedTraceFilter.params : {}),
         projectId: props.projectId,
       },
       tags: {
