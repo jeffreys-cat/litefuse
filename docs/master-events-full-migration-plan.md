@@ -231,13 +231,14 @@ master 上这套 backfill 设施（队列 + 893 行 handler + Doris SQL）齐全
 
 ## 6. Out-of-scope（独立 PR）
 
-### 6.1 历史数据迁移（traces / observation_source → events_full）
+### 6.1 历史数据迁移（traces / observation_source → events_full）—— **不做**
 
-本次 PR 不处理。合 PR 后 events_full 只有合并之后的新数据，PR 合并前的历史 trace / observation 在新 read path 下不可见。
+合 PR 后 events_full 只有合并之后的新数据。PR 合并前的历史 trace / observation 在新 read path 下不可见——**接受这一损失**，不做历史回填。
 
-参考：`~/work/langfuse-main/worker/src/backgroundMigrations/backfillEventsHistoric.ts` + `backfillEventsHistoricFromParts.ts`。
-
-**合 master 前必须先完成本条**，否则 hard regression。
+理由（用户决定）：
+- 历史数据迁移工程量大、需要分块写入 + Doris stream load 调优
+- 业务上接受 PR 合并 = 新起点，老数据通过 legacy 表仍可查（必要时手动查 Doris 老表）
+- 比真正合 master 前要做：在 dev 环境用 v4/v5 SDK 跑通端到端 ingestion + UI 显示
 
 ### 6.2 ~~experiment_* 异步 backfill 功能~~（**已实现**，留作引用）
 
