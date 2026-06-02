@@ -42,18 +42,15 @@ const getMinTimestampForExport = async (
     case BlobStorageExportMode.FULL_HISTORY:
       // Query Doris for the actual minimum timestamp from traces, observations, and scores tables
       try {
+        // OTel-only events_full: traces and observations are now a single
+        // span table — one events_full SELECT replaces the two-branch UNION
+        // ALL over traces / observations. scores stays untouched.
         const result = await queryDoris<{ min_timestamp: number | null }>({
           query: `
               SELECT min(UNIX_TIMESTAMP(ts)) * 1000 as min_timestamp
               FROM (
-                SELECT min(timestamp) as ts
-                FROM traces
-                WHERE project_id = {projectId: String}
-
-                UNION ALL
-
                 SELECT min(start_time) as ts
-                FROM observations
+                FROM events_full
                 WHERE project_id = {projectId: String}
 
                 UNION ALL

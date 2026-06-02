@@ -56,7 +56,7 @@
 | **F** | legacy public API endpoints 收口 | 见下表。 |
 | **G** | `EventRecordInsertType` schema 字段对齐 | 删 V3 残留字段（`metadata` Map / `metadata_hashes` / `metadata_long_values`），rename `metadata_raw_values` → `metadata_values`，`prompt_version` 类型 string → int。这不是删除代码，是修正字段名以匹配事实上的 events_full 表 schema。 |
 | **H** | trace 读侧聚合策略 | 抄 lightweight `traces.ts:buildTraceAggregationQuery` 两 CTE 模式（`trace_scalars` 用 `MAX_BY(IF(cond, val, NULL), event_ts)` 等价上游 `argMaxIf`；`trace_root` 用 `ROW_NUMBER() OVER (...) WHERE rn=1 AND parent_span_id=''` 取 Array / Variant 字段）。 |
-| **I** | experiment_* 列处理 | **路径 1（ingestion-time inline）**：master 的 `createEventRecord` 已经把 SDK 上传的 12 个 experiment 字段 inline 到 events_full 行。本次 PR 激活 writeEventRecord stub 之后这条 path 真正落库——`experiment.run()` 主动跑实验的场景**功能完整**。**路径 2（UI 创建 dataset_run → 异步 backfill）**：master 上 `handleExperimentBackfill.ts` 893 行 + queue 都在，但 writeEventRecord 是 stub no-op，**功能从未真正跑通过**。本次 PR **不激活**这条 path（与 master 现状一致），保留代码作为参考。如需要 UI 路径，留**独立 follow-up PR** 修 SQL + 验证。 |
+| **I** | experiment_* 列处理 | **路径 1（ingestion-time inline）**：`createEventRecord` 把 SDK 上传的 12 个 experiment 字段 inline 到 events_full 行。本次 PR 激活 writeEventRecord 后真正落库——`experiment.run()` 主动跑实验场景**功能完整**。**路径 2（UI 创建 dataset_run → 异步 backfill）**：master 上 `handleExperimentBackfill.ts` + `EventPropagationQueue` 一直存在但因 writeEventRecord 是 stub 而从未跑通。本次 PR **激活 + 修 SQL**——getRelevantTraces/Observations 读 events_full（根/非根 span），prefiltered_events CTE 也指向 events_full（按 `experiment_id != ''` 反向筛已 enrich 的 trace）。后端到端可用。 |
 | **J** | `handleEventPropagationJob.ts` | 整段 retire。它的目标设计（`observations_batch_staging → events` 中转）已被 langfuse-main 抛弃；改成 early return + `logger.info("deprecated, see events_full direct write")`。代码保留。 |
 
 ### 决策 F：endpoint 收口表
@@ -239,23 +239,17 @@ master 上这套 backfill 设施（队列 + 893 行 handler + Doris SQL）齐全
 
 **合 master 前必须先完成本条**，否则 hard regression。
 
-### 6.2 ⚠️ experiment_* 异步 backfill 功能（UI 创建 dataset_run → events_full）—— **未实现**
+### 6.2 ~~experiment_* 异步 backfill 功能~~（**已实现**，留作引用）
 
-**status**：master 上的 `worker/src/features/eventPropagation/handleExperimentBackfill.ts`（893 行）+ `EventPropagationQueue` 触发链 + Doris SQL 一应俱全，**但从未跑通过**——`IngestionService.writeEventRecord` 在 master 上原本是 stub no-op (`"events table is not supported in Doris, skipping"`)。
+> 状态更新：本次 PR 已激活该路径。保留小节作为决策历史。
 
-本次 PR 的状态：
-- ✅ 激活了 `writeEventRecord`（写 events_full）—— path 1（ingestion-time inline，SDK `experiment.run()` 主动跑实验）现在端到端工作
-- ❌ **path 2（UI 创建 dataset run 后异步 backfill 已有 trace）仍然不工作**——因为 backfill SQL 仍读 `traces` 表（OTel-only 后不再写入，永远空），输出无数据
-- ⚠️ `handleExperimentBackfill.ts` 文件不删，`eventPropagationProcessor` 仍调用它，**但每次跑出空集**（无害）
+`handleExperimentBackfill.ts` 现在端到端可用：
+- `getRelevantTraces`：读 events_full 根 span（`parent_span_id = ''`），trace-level 字段直接从 denormalized 列拿
+- `getRelevantObservations`：读 events_full 非根 span（`parent_span_id != ''`），列名对齐（id → span_id、internal_model_id → model_id、metadata Map → metadata_names/metadata_values 在 TS 侧 zip）
+- `prefiltered_events` CTE：从 events_full 找已被 enrich 过的 trace（`experiment_id != ''`），LEFT ANTI JOIN 排除——避免重复回填
+- 写入路径：`IngestionService.writeEventRecord` 已激活（§2.5），enriched span 直接落 events_full；Doris UNIQUE KEY MoW 保证 replay idempotent
 
-**对用户行为的实际影响**：
-- 通过 SDK 的 `experiment.run()` 主动跑实验：events_full 上 experiment_* 字段正确填充 ✅
-- 在 UI 上手动创建 dataset run 关联已有 trace：events_full 上 **experiment_* 字段不会被填**。UI 显示 dataset run ↔ trace 关联只能靠 `dataset_run_items_rmt` 表 JOIN events_full（master 当前也是这种方式，没有回归）
-
-未来若需要 path 2 真正工作，独立 PR 范围：
-- SQL 改读 events_full root span（替代 traces JOIN）
-- 字段名对齐 backfill 内部对应（`metadata_raw_values` → `metadata_values`）
-- 端到端测试 UI 创建 dataset run 后 events_full 接收 enrichment
+路径 1（SDK `experiment.run()`）和路径 2（UI 创建 dataset run 后异步回填）都端到端工作。
 
 ---
 
