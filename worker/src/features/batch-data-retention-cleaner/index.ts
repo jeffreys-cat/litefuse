@@ -15,13 +15,13 @@ import { getRetentionCutoffDate } from "../utils";
 import { PeriodicExclusiveRunner } from "../../utils/PeriodicExclusiveRunner";
 
 // Tables for batch data retention cleaning (Doris only; also no dataset_run_items)
+// events_core / events are upstream-only intermediate tables that this fork
+// never provisions — see master events_full migration plan §0.
 export const BATCH_DATA_RETENTION_TABLES = [
   "traces",
   "observations",
   "scores",
   "events_full",
-  "events_core",
-  "events",
 ] as const;
 
 export type BatchDataRetentionTable =
@@ -37,8 +37,6 @@ export const TIMESTAMP_COLUMN_MAP: Record<BatchDataRetentionTable, string> = {
   observations: "start_time",
   scores: "timestamp",
   events_full: "start_time",
-  events_core: "start_time",
-  events: "start_time",
 };
 
 interface ProjectWorkload {

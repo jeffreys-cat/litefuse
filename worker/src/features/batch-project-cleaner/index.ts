@@ -7,13 +7,13 @@ import {
   recordIncrement,
 } from "@langfuse/shared/src/server";
 
+// events_core / events are upstream-only intermediate tables that this fork
+// never provisions — see master events_full migration plan §0.
 export const BATCH_DELETION_TABLES = [
   "traces",
   "observations",
   "scores",
   "events_full",
-  "events_core",
-  "events",
   "dataset_run_items_rmt",
 ] as const;
 import { env } from "../../env";
