@@ -329,6 +329,27 @@ export class IngestionService {
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
 
+    // Content dedup for GENERATION input: hash the input into content_dict
+    // and store the hash array in events_full.input. events_full_view's
+    // LATERAL VIEW POSEXPLODE rehydrates the hash array back to the
+    // original content at read time. Without this, GENERATION input is
+    // stored as a raw string and the view's CAST(input AS ARRAY<VARCHAR>)
+    // returns NULL, hiding the row from UI reads.
+    let resolvedInput: string | null | undefined = eventData.input;
+    if (
+      eventData.type === "GENERATION" &&
+      eventData.input != null &&
+      this.dorisWriter
+    ) {
+      const { transformedInput, contentEntries } = deduplicateInputContent(
+        eventData.input,
+      );
+      for (const entry of contentEntries) {
+        this.dorisWriter.addToQueue(TableName.ContentDict, entry);
+      }
+      resolvedInput = this.stringify(transformedInput);
+    }
+
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
       id: eventData.spanId,
@@ -407,8 +428,9 @@ export class IngestionService {
       tool_calls: eventData.toolCalls ?? [],
       tool_call_names: eventData.toolCallNames ?? [],
 
-      // I/O
-      input: eventData.input,
+      // I/O — `resolvedInput` is the hash array for GENERATION rows (see
+      // dedup block above), the raw input otherwise.
+      input: resolvedInput,
       output: eventData.output,
 
       // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
