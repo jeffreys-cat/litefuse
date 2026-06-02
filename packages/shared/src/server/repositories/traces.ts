@@ -18,19 +18,152 @@ import {
 import { env } from "../../env";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
-import { parseDorisStringArray } from "../utils/dorisArrays";
 import {
-  queryDoris,
-  upsertDoris,
-  commandDoris,
-  queryDorisStream,
-} from "./doris";
-import {
-  dorisSearchCondition,
-  DorisSearchContext,
-} from "../queries/doris-sql/search";
+  parseDorisStringArray,
+  zipDorisMetadataArrays,
+} from "../utils/dorisArrays";
+import { queryDoris, commandDoris, queryDorisStream } from "./doris";
+import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
+
+/**
+ * Build a Doris CTE that aggregates events_full rows into one row per
+ * trace. Mirrors upstream langfuse-main's `eventsTracesAggregation`
+ * (ClickHouse `argMaxIf` idiom) but adapted to Doris constraints:
+ *
+ *   - Doris `MAX_BY(val, sort_key)` does NOT support `Array<>` or
+ *     `Variant` column types as `val` (Doris throws
+ *     `Illegal type Array(...) of argument of aggregate function
+ *     min/max_by`). So we split the aggregation into two CTEs that
+ *     get JOINed:
+ *       * `trace_scalars`: MAX_BY for scalar trace-level fields and
+ *         MIN/MAX/SUM for time/cost aggregates. One row per trace.
+ *       * `trace_root`: LIMIT 1 over `parent_span_id = ''` rows per
+ *         trace to lift array (tags, metadata_*) and Variant (input,
+ *         output) columns from the root span. One row per trace.
+ *     The final SELECT joins them on (trace_id, project_id).
+ *
+ *   - MAX_BY ignores NULLs, so `MAX_BY(IF(cond, val, NULL), event_ts)`
+ *     implements upstream's `argMaxIf(val, event_ts, cond)` exactly.
+ *
+ * `whereSql` is injected into both inner SELECTs; it must scope rows
+ * to the desired trace_id(s) and project_id and never reference
+ * aliased columns (the CTEs do not alias the inner table).
+ *
+ * Column contract matches `TraceRecordReadType` so downstream
+ * (zipDorisMetadataArrays + convertDorisToDomain) keeps working.
+ */
+const buildTraceAggregationQuery = (params: {
+  whereSql: string;
+  extraOrderBy?: string;
+  extraLimit?: string;
+  /**
+   * When true, the `trace_root` CTE reads from `events_full_view`
+   * instead of raw `events_full`. The view resolves GENERATION-row
+   * `input` from a SHA-256 hash array (stored at write time by
+   * `deduplicateInputContent` + `content_dict`) back into the original
+   * content JSON via a LEFT JOIN + POSEXPLODE on content_dict (see
+   * migration 0039). Without this, a trace whose root span happens to
+   * be a GENERATION returns its `input` as a literal hex array, which
+   * the UI / API consumers cannot render.
+   *
+   * Single-trace lookups (getTraceById, byIdWithObservationsAndScores)
+   * should pass true. Trace list / aggregation queries can leave it
+   * false to avoid paying the JOIN cost across every row scanned.
+   *
+   * The `trace_scalars` CTE never reads input/output, so it stays on
+   * the raw `events_full` table either way.
+   */
+  resolveContentDict?: boolean;
+}): string => {
+  const {
+    whereSql,
+    extraOrderBy = "",
+    extraLimit = "",
+    resolveContentDict = false,
+  } = params;
+  const rootSource = resolveContentDict ? "events_full_view" : "events_full";
+  return `
+    WITH trace_scalars AS (
+      SELECT
+        trace_id,
+        project_id,
+        MIN(start_time) AS \`timestamp\`,
+        MAX_BY(IF(trace_name <> '', trace_name, NULL), event_ts) AS name,
+        MAX_BY(IF(user_id <> '', user_id, NULL), event_ts) AS user_id,
+        MAX_BY(IF(session_id <> '', session_id, NULL), event_ts) AS session_id,
+        MAX_BY(IF(${dq("release")} <> '', ${dq("release")}, NULL), event_ts) AS ${dq("release")},
+        MAX_BY(IF(version <> '', version, NULL), event_ts) AS version,
+        MAX_BY(IF(environment <> '', environment, NULL), event_ts) AS environment,
+        MAX_BY(IF(parent_span_id = '', bookmarked, NULL), event_ts) AS bookmarked,
+        MAX(${dq("public")}) AS ${dq("public")},
+        MIN(created_at) AS created_at,
+        MAX(updated_at) AS updated_at,
+        MAX(event_ts) AS event_ts,
+        MIN(is_deleted) AS is_deleted
+      FROM events_full
+      WHERE ${whereSql}
+      GROUP BY trace_id, project_id
+    ),
+    trace_root AS (
+      -- Pick array / Variant columns from the root span per trace.
+      -- ROW_NUMBER over event_ts DESC + filter rn=1 gives "latest root span".
+      SELECT
+        trace_id,
+        project_id,
+        tags,
+        input,
+        output,
+        metadata_names,
+        metadata_values
+      FROM (
+        SELECT
+          trace_id,
+          project_id,
+          tags,
+          input,
+          output,
+          metadata_names,
+          metadata_values,
+          ROW_NUMBER() OVER (
+            PARTITION BY trace_id, project_id
+            ORDER BY event_ts DESC
+          ) AS rn
+        FROM ${rootSource}
+        WHERE ${whereSql}
+          AND parent_span_id = ''
+      ) ranked
+      WHERE rn = 1
+    )
+    SELECT
+      s.trace_id AS id,
+      s.project_id,
+      s.\`timestamp\`,
+      s.name,
+      s.user_id,
+      s.session_id,
+      s.${dq("release")},
+      s.version,
+      s.environment,
+      s.bookmarked,
+      s.${dq("public")},
+      s.created_at,
+      s.updated_at,
+      s.event_ts,
+      s.is_deleted,
+      r.tags,
+      r.input,
+      r.output,
+      r.metadata_names,
+      r.metadata_values
+    FROM trace_scalars s
+    LEFT JOIN trace_root r
+      ON r.trace_id = s.trace_id AND r.project_id = s.project_id
+    ${extraOrderBy}
+    ${extraLimit}
+  `;
+};
 
 /**
  * Checks if trace exists in Doris.
@@ -79,7 +212,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
     ),
     new DorisStringFilter({
       table: "t",
-      field: "id",
+      field: "trace_id",
       operator: "=",
       value: traceId,
       tablePrefix: "t",
@@ -98,7 +231,10 @@ export const checkTraceExistsAndGetTimestamp = async ({
     return adjustedDate.toISOString().replace("T", " ").replace("Z", "");
   };
 
-  // Doris version of the complex query
+  // Phase C: parent_span_id = '' identifies the root span of a trace
+  // (one row per trace). Trace-level fields are denormalized onto root
+  // spans by createEventRecord, so trace identity / existence is a
+  // single-row filter without aggregation.
   const query = `
     WITH observations_agg AS (
         SELECT
@@ -114,24 +250,25 @@ export const checkTraceExistsAndGetTimestamp = async ({
             COUNT(CASE WHEN level = 'DEBUG' THEN 1 END) as debug_count,
             trace_id,
             project_id
-        FROM observations o
+        FROM events_full o
         WHERE o.project_id = '${projectId}'
         ${timeStampFilter ? `AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'` : ""}
         AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'
         GROUP BY trace_id, project_id
     )
     SELECT
-      t.id as id,
+      t.trace_id as id,
       t.project_id as project_id
-    FROM traces t
-    ${observationFilterRes ? `INNER JOIN observations_agg o ON t.id = o.trace_id AND t.project_id = o.project_id` : ""}
+    FROM events_full t
+    ${observationFilterRes ? `INNER JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id` : ""}
     WHERE ${tracesFilterRes.query}
     AND t.project_id = '${projectId}'
-    AND timestamp >= '${toDorisDateTime(timestamp, -172800)}'
-    ${maxTimeStamp ? `AND timestamp <= '${toDorisDateTime(maxTimeStamp)}'` : ""}
-    ${!maxTimeStamp ? `AND timestamp <= '${toDorisDateTime(timestamp, 172800)}'` : ""}
-    ${exactTimestamp ? `AND timestamp = '${toDorisDateTime(exactTimestamp)}'` : ""}
-    GROUP BY t.id, t.project_id
+    AND t.parent_span_id = ''
+    AND t.start_time >= '${toDorisDateTime(timestamp, -172800)}'
+    ${maxTimeStamp ? `AND t.start_time <= '${toDorisDateTime(maxTimeStamp)}'` : ""}
+    ${!maxTimeStamp ? `AND t.start_time <= '${toDorisDateTime(timestamp, 172800)}'` : ""}
+    ${exactTimestamp ? `AND t.start_time = '${toDorisDateTime(exactTimestamp)}'` : ""}
+    GROUP BY t.trace_id, t.project_id
   `;
 
   const rows = await queryDoris<{ id: string; project_id: string }>({
@@ -147,61 +284,27 @@ export const checkTraceExistsAndGetTimestamp = async ({
   return { exists: rows.length > 0 };
 };
 
-/**
- * Accepts a trace in a Clickhouse-ready format.
- * id, project_id, and timestamp must always be provided.
- */
-export const upsertTrace = async (trace: Partial<TraceRecordReadType>) => {
-  if (!["id", "project_id", "timestamp"].every((key) => key in trace)) {
-    throw new Error("Identifier fields must be provided to upsert Trace.");
-  }
-
-  await upsertDoris({
-    table: "traces",
-    records: [trace as TraceRecordReadType],
-    eventBodyMapper: convertDorisToDomain,
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "upsert",
-      projectId: trace.project_id ?? "",
-    },
-  });
-};
-
 export const getTracesByIds = async (
   traceIds: string[],
   projectId: string,
   timestamp?: Date,
 ) => {
-  const query = `
-    SELECT
-      id,
-      timestamp,
-      name,
-      user_id,
-      metadata,
-      environment,
-      ${dq("release")},
-      version,
-      project_id,
-      ${dq("public")},
-      bookmarked,
-      tags,
-      input,
-      output,
-      session_id,
-      created_at,
-      updated_at,
-      event_ts,
-      is_deleted
-    FROM traces
-    WHERE id IN ({traceIds: Array(String)})
+  const whereSql = `
+    trace_id IN ({traceIds: Array(String)})
     AND project_id = {projectId: String}
-    ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
-    ORDER BY event_ts DESC`;
+    ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
+  `;
+  const query = buildTraceAggregationQuery({
+    whereSql,
+    extraOrderBy: "ORDER BY event_ts DESC",
+  });
 
-  const records = await queryDoris<TraceRecordReadType>({
+  const rawRecords = await queryDoris<
+    Omit<TraceRecordReadType, "metadata"> & {
+      metadata_names?: unknown;
+      metadata_values?: unknown;
+    }
+  >({
     query,
     params: {
       traceIds,
@@ -216,6 +319,11 @@ export const getTracesByIds = async (
     },
   });
 
+  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
+    ...r,
+    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+  })) as TraceRecordReadType[];
+
   return records.map((r) => convertDorisToDomain(r));
 };
 
@@ -224,35 +332,25 @@ export const getTracesBySessionId = async (
   sessionIds: string[],
   timestamp?: Date,
 ) => {
-  // Doris implementation using window function to achieve LIMIT 1 BY semantics
-  const query = `
-    SELECT
-      id,
-      timestamp,
-      name,
-      user_id,
-      metadata,
-      environment,
-      ${dq("release")},
-      version,
-      project_id,
-      ${dq("public")},
-      bookmarked,
-      tags,
-      input,
-      output,
-      session_id,
-      created_at,
-      updated_at,
-      event_ts,
-      is_deleted
-    FROM traces
-    WHERE session_id IN ({sessionIds: Array(String)})
+  // session_id is denormalized onto every observation row by
+  // createEventRecord, so filtering by session_id in the inner scan
+  // is sufficient — the aggregation collapses to one row per trace.
+  const whereSql = `
+    session_id IN ({sessionIds: Array(String)})
     AND project_id = {projectId: String}
-    ${timestamp ? `AND timestamp >= {timestamp: DateTime}` : ""}
-    ORDER BY event_ts DESC`;
+    ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
+  `;
+  const query = buildTraceAggregationQuery({
+    whereSql,
+    extraOrderBy: "ORDER BY event_ts DESC",
+  });
 
-  const records = await queryDoris<TraceRecordReadType>({
+  const rawRecords = await queryDoris<
+    Omit<TraceRecordReadType, "metadata"> & {
+      metadata_names?: unknown;
+      metadata_values?: unknown;
+    }
+  >({
     query,
     params: {
       sessionIds,
@@ -266,6 +364,11 @@ export const getTracesBySessionId = async (
       projectId,
     },
   });
+
+  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
+    ...r,
+    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+  })) as TraceRecordReadType[];
 
   const traces = records.map((r) => convertDorisToDomain(r));
 
@@ -282,8 +385,9 @@ export const getTracesBySessionId = async (
 export const hasAnyTrace = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM traces
+    FROM events_full
     WHERE project_id = {projectId: String}
+    AND parent_span_id = ''
     LIMIT 1
   `;
 
@@ -314,8 +418,9 @@ export const getTraceCountsByProjectInCreationInterval = async ({
     SELECT
       project_id,
       count(*) as count
-    FROM traces
-    WHERE created_at >= {start: DateTime}
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND created_at >= {start: DateTime}
     AND created_at < {end: DateTime}
     GROUP BY project_id
   `;
@@ -349,8 +454,9 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
   const query = `
     SELECT
       count(*) as count
-    FROM traces
-    WHERE project_id IN ({projectIds: Array(String)})
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id IN ({projectIds: Array(String)})
     AND created_at >= {start: DateTime}
   `;
 
@@ -393,37 +499,32 @@ export const getTraceById = async ({
   /** When true, sets input/output columns to empty in the query to reduce database load */
   excludeInputOutput?: boolean;
 }) => {
-  const query = `
-    SELECT
-      id,
-      timestamp,
-      name,
-      user_id,
-      to_json(metadata) as metadata,
-      environment,
-      ${dq("release")},
-      version,
-      project_id,
-      ${dq("public")},
-      bookmarked,
-      tags,
-      input,
-      output,
-      session_id,
-      created_at,
-      updated_at,
-      event_ts,
-      is_deleted
-    FROM traces
-    WHERE id = {traceId: String}
+  // Phase C alignment with upstream langfuse-main's eventsTracesAggregation:
+  // trace identity is derived from the set of observations sharing
+  // trace_id, not from a synthetic `t-<trace_id>` row.
+  const whereSql = `
+    trace_id = {traceId: String}
     AND project_id = {projectId: String}
-    ${timestamp ? `AND DATE(timestamp) = DATE({timestamp: DateTime})` : ""}
-    ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime}` : ""}
-    ORDER BY event_ts DESC
-    LIMIT 1
+    ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
+    ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
+  const query = buildTraceAggregationQuery({
+    whereSql,
+    extraLimit: "LIMIT 1",
+    // Single-trace lookup must resolve content_dict hashes so consumers
+    // (UI trace detail, byIdWithObservationsAndScores) receive the real
+    // input JSON instead of a SHA-256 array when the root span is a
+    // GENERATION. List/aggregation callers above leave this off to
+    // avoid the LEFT JOIN cost on broad scans.
+    resolveContentDict: true,
+  });
 
-  const records = await queryDoris<TraceRecordReadType>({
+  const rawRecords = await queryDoris<
+    Omit<TraceRecordReadType, "metadata"> & {
+      metadata_names?: unknown;
+      metadata_values?: unknown;
+    }
+  >({
     query,
     params: {
       traceId,
@@ -443,6 +544,13 @@ export const getTraceById = async ({
     },
   });
 
+  // Zip parallel metadata arrays back into the Record<string, string>
+  // shape that the rest of the read path expects.
+  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
+    ...r,
+    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+  })) as TraceRecordReadType[];
+
   const res = records.map((r) => convertDorisToDomain(r));
 
   res.forEach((trace) => {
@@ -450,7 +558,7 @@ export const getTraceById = async ({
       "langfuse.query_by_id_age",
       new Date().getTime() - trace.timestamp.getTime(),
       {
-        table: "traces",
+        table: "events_full",
       },
     );
   });
@@ -475,8 +583,9 @@ export const getTracesGroupedByName = async (
       select
         name as name,
         count(*) as count
-      from traces t
+      from events_full t
       WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       AND t.name IS NOT NULL
       ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
       GROUP BY name
@@ -532,8 +641,9 @@ export const getTracesGroupedBySessionId = async (
       select
         session_id as session_id,
         count(*) as count
-      from traces t
+      from events_full t
       WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       AND t.session_id IS NOT NULL
       AND t.session_id != ''
       ${tracesFilterRes?.query ? `AND ${tracesFilterRes.query}` : ""}
@@ -588,8 +698,9 @@ export const getTracesGroupedByUsers = async (
     select
       user_id as user,
       count(*) as count
-    from traces t
+    from events_full t
     WHERE t.project_id = {projectId: String}
+    AND t.parent_span_id = ''
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
@@ -640,9 +751,10 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
   // Doris uses LATERAL VIEW explode to unnest array elements (standard syntax)
   const query = `
     select distinct(tag) as value
-    from traces t
+    from events_full t
     LATERAL VIEW explode(tags) tmp as tag
     WHERE t.project_id = {projectId: String}
+    AND t.parent_span_id = ''
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
     LIMIT 1000;
   `;
@@ -673,16 +785,17 @@ export const getTracesIdentifierForSession = async (
   // Use window function to achieve LIMIT 1 BY semantics in Doris
   const query = `
     SELECT
-      id,
+      trace_id AS id,
       user_id,
       name,
-      timestamp,
+      start_time AS timestamp,
       project_id,
       environment
-    FROM traces
-    WHERE (project_id = {projectId: String})
-    AND (session_id = {sessionId: String})
-    ORDER BY timestamp ASC;
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id = {projectId: String}
+    AND session_id = {sessionId: String}
+    ORDER BY start_time ASC;
   `;
 
   const rows = await queryDoris<{
@@ -719,9 +832,9 @@ export const getTracesIdentifierForSession = async (
 
 export const deleteTraces = async (projectId: string, traceIds: string[]) => {
   const query = `
-    DELETE FROM traces
+    DELETE FROM events_full
     WHERE project_id = {projectId: String}
-    AND id IN ({traceIds: Array(String)});
+    AND trace_id IN ({traceIds: Array(String)});
   `;
   await commandDoris({
     query: query,
@@ -744,9 +857,10 @@ export const hasAnyTraceOlderThan = async (
 ) => {
   const query = `
     SELECT 1
-    FROM traces
-    WHERE project_id = {projectId: String}
-    AND timestamp < {cutoffDate: DateTime}
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id = {projectId: String}
+    AND start_time < {cutoffDate: DateTime}
     LIMIT 1
   `;
 
@@ -777,9 +891,10 @@ export const deleteTracesOlderThanDays = async (
   }
 
   const query = `
-    DELETE FROM traces
-    WHERE project_id = {projectId: String}
-    AND timestamp < {cutoffDate: DateTime};
+    DELETE FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id = {projectId: String}
+    AND start_time < {cutoffDate: DateTime};
   `;
   await commandDoris({
     query: query,
@@ -806,7 +921,7 @@ export const deleteTracesByProjectId = async (
   }
 
   const query = `
-    DELETE FROM traces
+    DELETE FROM events_full
     WHERE project_id = {projectId: String};
   `;
   await commandDoris({
@@ -827,8 +942,9 @@ export const deleteTracesByProjectId = async (
 export const hasAnyUser = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM traces
-    WHERE project_id = {projectId: String}
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id = {projectId: String}
     AND user_id IS NOT NULL
     AND user_id != ''
     LIMIT 1
@@ -873,8 +989,9 @@ export const getTotalUserCount = async (
 
   const query = `
     SELECT COUNT(DISTINCT t.user_id) AS totalCount
-    FROM traces t
-    WHERE ${tracesFilterRes.query}
+    FROM events_full t
+    WHERE t.parent_span_id = ''
+    AND ${tracesFilterRes.query}
     ${search.query}
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
@@ -927,20 +1044,23 @@ export const getUserMetrics = async (
   const tracesFilterRes = tracesFilter.apply();
 
   const timestampFilter = tracesFilter.find(
-    (f) => f.field === "timestamp" && f.operator === ">=",
+    (f) => f.field === "start_time" && f.operator === ">=",
   ) as DorisDateTimeFilter | undefined;
 
-  // Doris version using map format with proper null handling
+  // Phase C: parent_span_id = '' selects each trace's root span — one
+  // row per trace, with user_id denormalized by createEventRecord.
+  // The self-join produces (root span × all spans) groups so we can
+  // pick user_id from the root while summing observation totals.
   const query = `
       WITH stats as (
         SELECT
             t.user_id as user_id,
             MAX(t.environment) as environment,
-            count(distinct o.id) as obs_count,
+            count(distinct o.span_id) as obs_count,
             sum(o.total_cost) as sum_total_cost,
-            max(t.timestamp) as max_timestamp,
-            min(t.timestamp) as min_timestamp,
-            count(distinct t.id) as trace_count,
+            max(t.start_time) as max_timestamp,
+            min(t.start_time) as min_timestamp,
+            count(distinct t.trace_id) as trace_count,
             sum(if(MAP_CONTAINS_KEY(o.usage_details,'input'),o.usage_details['input'],0)) as input_usage,
             sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'),o.usage_details['output'],0)) as output_usage,
             sum(if(MAP_CONTAINS_KEY(o.usage_details,'total'),o.usage_details['total'],0)) as total_usage
@@ -951,37 +1071,39 @@ export const getUserMetrics = async (
                     o.trace_id,
                     o.usage_details,
                     o.total_cost,
-                    o.id
+                    o.span_id
                 FROM
-                    observations o
+                    events_full o
                 WHERE
                     o.project_id = {projectId: String}
                     ${timestampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
                     AND o.trace_id in (
                         SELECT
-                            distinct id
+                            distinct trace_id
                         from
-                            traces t
+                            events_full t
                         where
                             user_id IN ({userIds: Array(String) })
                             AND project_id = {projectId: String}
+                            AND parent_span_id = ''
                             ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
                     )
             ) as o
             JOIN (
                 SELECT
-                    t.id,
+                    t.trace_id,
                     t.user_id,
                     t.project_id,
-                    t.timestamp,
+                    t.start_time,
                     t.environment
                 FROM
-                    traces t
+                    events_full t
                 WHERE
                     t.user_id IN ({userIds: Array(String) })
                     AND t.project_id = {projectId: String}
+                    AND t.parent_span_id = ''
                     ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
-            ) as t on t.id = o.trace_id
+            ) as t on t.trace_id = o.trace_id
             and t.project_id = o.project_id
         group by
             t.user_id
@@ -1055,12 +1177,13 @@ export const getTracesForBlobStorageExport = function (
 ) {
   const query = `
     SELECT
-      id,
-      timestamp,
+      trace_id AS id,
+      start_time AS timestamp,
       name,
       environment,
       project_id,
-      metadata,
+      metadata_names,
+      metadata_values,
       user_id,
       session_id,
       ${dq("release")},
@@ -1070,10 +1193,11 @@ export const getTracesForBlobStorageExport = function (
       tags,
       input,
       output
-    FROM traces
-    WHERE project_id = {projectId: String}
-    AND timestamp >= {minTimestamp: DateTime}
-    AND timestamp <= {maxTimestamp: DateTime}
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND project_id = {projectId: String}
+    AND start_time >= {minTimestamp: DateTime}
+    AND start_time <= {maxTimestamp: DateTime}
   `;
 
   const records = queryDorisStream<Record<string, unknown>>({
@@ -1110,30 +1234,31 @@ export const getTracesForAnalyticsIntegrations = async function* (
                CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
                CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
              ) as latency_milliseconds
-      FROM observations o
+      FROM events_full o
       WHERE o.project_id = {projectId: String}
       AND o.start_time >= DATE_SUB({minTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})
       GROUP BY o.project_id, o.trace_id
     )
 
     SELECT
-      t.id as id,
-      t.timestamp as timestamp,
+      t.trace_id as id,
+      t.start_time as \`timestamp\`,
       t.name as name,
       t.session_id as session_id,
       t.user_id as user_id,
       t.${dq("release")} as ${dq("release")},
       t.version as version,
       t.tags as tags,
-      t.metadata['$posthog_session_id'] as posthog_session_id,
+      element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id')) as posthog_session_id,
       o.total_cost as total_cost,
       o.latency_milliseconds / 1000 as latency,
       o.observation_count as observation_count
-    FROM traces t
-    LEFT JOIN observations_agg o ON t.id = o.trace_id AND t.project_id = o.project_id
+    FROM events_full t
+    LEFT JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
     WHERE t.project_id = {projectId: String}
-    AND t.timestamp >= {minTimestamp: DateTime}
-    AND t.timestamp <= {maxTimestamp: DateTime}
+    AND t.parent_span_id = ''
+    AND t.start_time >= {minTimestamp: DateTime}
+    AND t.start_time <= {maxTimestamp: DateTime}
   `;
 
   const records = queryDorisStream<Record<string, unknown>>({
@@ -1185,9 +1310,10 @@ export const getTracesForAnalyticsIntegrations = async function* (
  */
 export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   const query = `
-      SELECT id, project_id
-      FROM traces
-      WHERE id IN ({traceIds: Array(String)})
+      SELECT trace_id AS id, project_id
+      FROM events_full
+      WHERE parent_span_id = ''
+      AND trace_id IN ({traceIds: Array(String)})
       ORDER BY event_ts DESC;`;
   const records = await queryDoris<{
     id: string;
@@ -1215,9 +1341,10 @@ export const traceWithSessionIdExists = async (
   sessionId: string,
 ) => {
   const query = `
-    SELECT id, project_id
-    FROM traces
-    WHERE session_id = {sessionId: String}
+    SELECT trace_id AS id, project_id
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND session_id = {sessionId: String}
     AND project_id = {projectId: String}
     LIMIT 1
   `;
@@ -1249,16 +1376,16 @@ export async function getAgentGraphData(params: {
 
   const query = `
           SELECT
-            id,
-            parent_observation_id,
+            span_id AS id,
+            parent_span_id AS parent_observation_id,
             type,
             name,
             CAST(start_time AS STRING) AS start_time,
             CAST(end_time AS STRING) AS end_time,
-            metadata['langgraph_node'] AS node,
-            metadata['langgraph_step'] AS step
+            element_at(metadata_values, array_position(metadata_names, 'langgraph_node')) AS node,
+            element_at(metadata_values, array_position(metadata_names, 'langgraph_step')) AS step
           FROM
-            observations
+            events_full
           WHERE
             project_id = {projectId: String}
             AND trace_id = {traceId: String}
@@ -1316,11 +1443,12 @@ export const getTraceCountsByProjectAndDay = async ({
     SELECT
       count(*) as count,
       project_id,
-      toDate(timestamp) as date
-    FROM traces
-    WHERE timestamp >= {startDate: DateTime}
-    AND timestamp < {endDate: DateTime}
-    GROUP BY project_id, toDate(timestamp)
+      DATE(start_time) as date
+    FROM events_full
+    WHERE parent_span_id = ''
+    AND start_time >= {startDate: DateTime}
+    AND start_time < {endDate: DateTime}
+    GROUP BY project_id, DATE(start_time)
   `;
 
   const rows = await queryDoris<{
