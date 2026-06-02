@@ -49,19 +49,20 @@ export const getSessionTracesFromEvents = async (props: {
   projectId: string;
   sessionId: string;
 }) => {
-  // Doris version - direct query on traces table
+  // Reads synthetic trace spans (parent_span_id = '') from events_full.
   const query = `
     SELECT
-      id,
+      trace_id AS id,
       name,
-      timestamp,
+      start_time AS \`timestamp\`,
       environment,
       user_id
-    FROM traces t
+    FROM events_full t
     WHERE t.session_id = {sessionId: String}
       AND t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       AND t.is_deleted = 0
-    ORDER BY timestamp ASC
+    ORDER BY start_time ASC
   `;
 
   const rows = await queryDoris<{
@@ -179,8 +180,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
     (f) => f instanceof DorisStringOptionsFilter && f.field === "session_id",
   ) as DorisStringOptionsFilter | undefined;
 
-  // Build the base query with Doris-compatible SQL
-  // Doris uses a simpler approach than ClickHouse's distributed CTEs
+  // Build the base query with Doris SQL.
   let sqlSelect: string;
   switch (select) {
     case "count":
@@ -189,12 +189,15 @@ const getSessionsTableFromEventsGeneric = async <T>(
     case "rows":
       sqlSelect = `
         t.session_id,
-        max(t.timestamp) as max_timestamp,
-        min(t.timestamp) as min_timestamp,
-        collect_set(t.id) AS trace_ids,
+        max(t.start_time) as max_timestamp,
+        min(t.start_time) as min_timestamp,
+        collect_set(t.trace_id) AS trace_ids,
         collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
-        count(DISTINCT t.id) as trace_count,
-        collect_set(t.tags) AS trace_tags,
+        count(DISTINCT t.trace_id) as trace_count,
+        -- Doris collect_set/collect_list don't accept ARRAY inputs directly
+        -- (returns "unexpected type for collect"), so we collect_list to
+        -- ARRAY<ARRAY>, flatten, then distinct.
+        array_distinct(array_flatten(collect_list(t.tags))) AS trace_tags,
         any_value(t.environment) as environment
       `;
       break;
@@ -203,7 +206,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
   }
 
   const traceTimestampFilterClause = traceTimestampFilter
-    ? `AND t.timestamp >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)`
+    ? `AND t.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)`
     : "";
 
   const traceTimestampValue = traceTimestampFilter
@@ -212,8 +215,9 @@ const getSessionsTableFromEventsGeneric = async <T>(
 
   const query = `
     SELECT ${sqlSelect}
-    FROM traces t
+    FROM events_full t
     WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       AND t.session_id IS NOT NULL
       ${traceTimestampFilterClause}
       ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}

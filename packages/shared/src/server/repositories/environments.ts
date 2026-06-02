@@ -13,19 +13,14 @@ export const getEnvironmentsForProject = async (
   const query = `
       SELECT DISTINCT environment FROM (
         SELECT DISTINCT environment
-        FROM traces
+        FROM events_full
         WHERE project_id = {projectId: String}
-        ${fromTimestamp ? "AND timestamp >= {fromTimestamp: DateTime64(3)}" : ""}
-        UNION ALL
-        SELECT DISTINCT environment
-        FROM observations
-        WHERE project_id = {projectId: String}
-        ${fromTimestamp ? "AND start_time >= {fromTimestamp: DateTime64(3)}" : ""}
+        ${fromTimestamp ? "AND start_time >= {fromTimestamp: DateTime}" : ""}
         UNION ALL
         SELECT DISTINCT environment
         FROM scores
         WHERE project_id = {projectId: String}
-        ${fromTimestamp ? "AND timestamp >= {fromTimestamp: DateTime64(3)}" : ""}
+        ${fromTimestamp ? "AND timestamp >= {fromTimestamp: DateTime}" : ""}
       ) t
     `;
 

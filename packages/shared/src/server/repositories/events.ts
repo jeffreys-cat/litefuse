@@ -38,7 +38,8 @@ import { UiColumnMappings } from "../../tableDefinitions";
 import { eventsTableCols } from "../../eventsTable";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import { convertDateToAnalyticsDateTime } from "./analytics";
+import { zipDorisMetadataArrays } from "../utils/dorisArrays";
+import { convertDateToAnalyticsDateTime, dq } from "./analytics";
 import {
   dorisSearchCondition,
   DorisSearchContext,
@@ -74,7 +75,7 @@ type ObservationsTableQueryResultWitouhtTraceFields = Omit<
  * Uses events-specific converter to include userId and sessionId
  * Supports both V1 (complete observations) and V2 (partial observations with field groups)
  *
- * @param observationRecords - Raw observation records from ClickHouse
+ * @param observationRecords - Raw observation records from Doris
  * @param projectId - Project ID for model lookup
  * @param parseIoAsJson - Whether to parse input/output as JSON
  * @param requestedFields - Field groups for V2 API (null = V1 API, returns complete observations)
@@ -151,7 +152,7 @@ async function enrichObservationsWithModelData(
 
     const enriched = {
       ...converted,
-      // Use ClickHouse-calculated latency/timeToFirstToken if available, otherwise use what converter calculated
+      // Use Doris-calculated latency/timeToFirstToken if available, otherwise use what converter calculated
       latency:
         o.latency !== undefined
           ? o.latency
@@ -223,7 +224,7 @@ const PUBLIC_API_EVENTS_COLUMN_MAPPING: ApiColumnMapping[] =
   createPublicApiObservationsColumnMapping(
     "observations",
     "o",
-    "parent_observation_id",
+    "parent_span_id",
   );
 
 /**
@@ -315,7 +316,6 @@ export const getObservationsForTraceFromEventsTable = async (params: {
         limit: MAX_OBSERVATIONS_PER_TRACE + 1,
         offset: 0,
         select: "rows",
-        selectIOAndMetadata: true,
         tags: { kind: "byTraceId" },
       },
     );
@@ -414,7 +414,7 @@ async function getObservationsFromEventsTableInternal<T>(
     opts.select === "count"
       ? "count(*) as count"
       : `
-        o.id as id,
+        o.span_id as id,
         o.type as type,
         o.project_id as project_id,
         o.name as name,
@@ -431,7 +431,7 @@ async function getObservationsFromEventsTableInternal<T>(
         o.environment as environment,
         o.status_message as status_message,
         o.version as version,
-        o.parent_observation_id as parent_observation_id,
+        o.parent_span_id as parent_observation_id,
         o.created_at as created_at,
         o.updated_at as updated_at,
         o.provided_model_name as provided_model_name,
@@ -439,7 +439,7 @@ async function getObservationsFromEventsTableInternal<T>(
         o.prompt_id as prompt_id,
         o.prompt_name as prompt_name,
         o.prompt_version as prompt_version,
-        o.internal_model_id as internal_model_id,
+        o.model_id as internal_model_id,
         if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
         if(o.completion_start_time is null, null, milliseconds_diff(o.completion_start_time, o.start_time)) as time_to_first_token
       `;
@@ -447,7 +447,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const dorisSelectString = selectIOAndMetadata
     ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, o.metadata` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, o.metadata_names, o.metadata_values` : ""}
     `
     : dorisSelect;
 
@@ -498,8 +498,8 @@ async function getObservationsFromEventsTableInternal<T>(
   const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
-      FROM observations o
-               ${hasScoresFilter ? "LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.id" : ""}
+      FROM events_full o
+               ${hasScoresFilter ? "LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id" : ""}
       WHERE ${appliedFilter.query}
                    ${search.query}
         ${dorisOrderBy}
@@ -519,6 +519,19 @@ async function getObservationsFromEventsTableInternal<T>(
       projectId,
     },
   });
+
+  if (selectIOAndMetadata && opts.select === "rows") {
+    return res.map((r) => {
+      const row = r as Record<string, unknown>;
+      row.metadata = zipDorisMetadataArrays(
+        row.metadata_names,
+        row.metadata_values,
+      );
+      delete row.metadata_names;
+      delete row.metadata_values;
+      return row as T;
+    });
+  }
 
   return res;
 }
@@ -593,11 +606,11 @@ async function getObservationByIdFromEventsTableInternal({
 }) {
   const query = `
     SELECT
-      id,
+      span_id AS id,
       trace_id,
       project_id,
       type,
-      parent_observation_id,
+      parent_span_id AS parent_observation_id,
       environment,
       start_time,
       end_time,
@@ -607,7 +620,7 @@ async function getObservationByIdFromEventsTableInternal({
       version,
       ${fetchWithInputOutput ? "input, output," : ""}
       provided_model_name,
-      internal_model_id,
+      model_id AS internal_model_id,
       model_parameters,
       provided_usage_details,
       usage_details,
@@ -621,9 +634,9 @@ async function getObservationByIdFromEventsTableInternal({
       created_at,
       updated_at,
       event_ts
-    FROM ${fetchWithInputOutput ? "observations" : "observation_source"}
+    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full_trace_view"}
     WHERE project_id = {projectId: String}
-    AND id = {id: String}
+    AND span_id = {id: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
     ${type ? `AND type = {type: String}` : ""}
     ${traceId ? `AND trace_id = {traceId: String}` : ""}
@@ -670,31 +683,38 @@ export const getTraceByIdFromEventsTable = async ({
 }) => {
   const query = `
     SELECT
-      t.id,
+      t.trace_id AS id,
       t.name,
       t.user_id,
-      t.metadata,
-      t.release,
+      t.metadata_names,
+      t.metadata_values,
+      t.${dq("release")},
       t.version,
       t.project_id,
       t.environment,
-      t.public,
+      t.${dq("public")},
       t.bookmarked,
       t.tags,
       t.session_id,
-      t.timestamp,
+      t.start_time AS \`timestamp\`,
       t.created_at,
       t.updated_at,
       0 as is_deleted
-    FROM traces t
+    FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.id = {traceId: String}
-    ${timestamp ? `AND DATE(t.timestamp) = DATE({timestamp: DateTime})` : ""}
-    ORDER BY t.timestamp DESC
+    AND t.trace_id = {traceId: String}
+    AND t.parent_span_id = ''
+    ${timestamp ? `AND DATE(t.start_time) = DATE({timestamp: DateTime})` : ""}
+    ORDER BY t.start_time DESC
     LIMIT 1
   `;
 
-  const records = await queryDoris<TraceRecordReadType>({
+  const rawRecords = await queryDoris<
+    Omit<TraceRecordReadType, "metadata"> & {
+      metadata_names?: unknown;
+      metadata_values?: unknown;
+    }
+  >({
     query,
     params: {
       projectId,
@@ -710,6 +730,11 @@ export const getTraceByIdFromEventsTable = async ({
       projectId,
     },
   });
+
+  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
+    ...r,
+    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+  })) as TraceRecordReadType[];
 
   const res = records.map((record) =>
     convertDorisToDomain(record, renderingProps),
@@ -748,7 +773,7 @@ export const OBSERVATION_FIELD_GROUPS = [
 
 export type ObservationFieldGroup = (typeof OBSERVATION_FIELD_GROUPS)[number];
 
-type PublicApiObservationsQuery = {
+export type PublicApiObservationsQuery = {
   projectId: string;
   page: number;
   limit: number;
@@ -781,26 +806,34 @@ type PublicApiObservationsQuery = {
 };
 
 /**
- * Build observation query components for Doris
- * Simplified version using direct SQL instead of ClickHouse query builders
+ * Build observation query components for Doris using direct SQL.
+ *
+ * Exported so unit tests can inspect the generated SQL + params directly
+ * without standing up a Doris cluster. Not part of the public API surface.
  */
-function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
+export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
   baseQuery: string;
   params: Record<string, unknown>;
 } {
   const { projectId, advancedFilters, ...filterParams } = opts;
 
-  // Build filter using Doris filter factory
-  const { observationsFilter } = getDorisProjectIdDefaultFilter(projectId, {
-    tracesPrefix: "t",
-  });
-
-  observationsFilter.push(
-    ...createDorisFilterFromFilterState(
-      advancedFilters ?? [],
-      eventsTableUiColumnDefinitionsForDoris,
-    ),
+  // Merge simple-param filters (fromStartTime, toStartTime, traceId, userId,
+  // name, type, level, parentObservationId, version, environment) with the
+  // advanced JSON filter via the shared deriveFilters helper. The simple
+  // params live in PUBLIC_API_EVENTS_COLUMN_MAPPING (defined above in this
+  // file); userId is routed to the traces table with prefix "t", everything
+  // else stays on observations/o. deriveFilters lets advancedFilters override
+  // simple params on the same field.
+  const observationsFilter = deriveFilters(
+    { ...filterParams, projectId },
+    PUBLIC_API_EVENTS_COLUMN_MAPPING,
+    advancedFilters,
+    eventsTableUiColumnDefinitionsForDoris,
   );
+
+  // userId references t.user_id; JOIN events_full as the root-span table
+  // only when at least one filter targets the traces side.
+  const hasTraceFilter = observationsFilter.some((f) => f.table === "traces");
 
   const appliedFilter = observationsFilter.apply();
 
@@ -811,25 +844,26 @@ function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
 
   const baseQuery = `
     SELECT
-      o.id,
+      o.span_id AS id,
       o.type,
       o.project_id,
       o.name,
       o.start_time,
       o.end_time,
       o.trace_id,
-      o.parent_observation_id,
+      o.parent_span_id AS parent_observation_id,
       o.environment,
       o.level,
       o.status_message,
       o.version,
       o.input,
       o.output,
-      o.metadata,
+      o.metadata_names,
+      o.metadata_values,
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
-      o.internal_model_id,
+      o.model_id AS internal_model_id,
       o.provided_model_name,
       o.usage_details,
       o.cost_details,
@@ -838,8 +872,10 @@ function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.created_at,
       o.updated_at,
       o.event_ts
-    FROM observations o
-    WHERE ${appliedFilter.query}
+    FROM events_full o
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    WHERE o.project_id = {projectId: String}
+      ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
   `;
 
@@ -853,6 +889,16 @@ function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
   };
 }
 
+// Stable secondary sort keys for both pagination strategies. Without these,
+// rows with identical start_time can come back in any order from Doris on
+// each query — under cursor pagination this causes duplicates / skips on
+// page boundaries; under offset pagination it makes page N+1 contain rows
+// that were already in page N. Tying ORDER BY to (start_time, trace_id,
+// span_id) DESC matches the keyset predicate used by the cursor branch
+// below, which advances over the same triple.
+const STABLE_ORDER_BY =
+  "ORDER BY o.start_time DESC, o.trace_id DESC, o.span_id DESC";
+
 function applyOffsetPagination(
   opts: PublicApiObservationsQuery,
   baseQuery: string,
@@ -860,7 +906,7 @@ function applyOffsetPagination(
 ): { query: string; params: Record<string, unknown> } {
   const offset = (opts.page - 1) * opts.limit;
   return {
-    query: `${baseQuery} ORDER BY o.start_time DESC LIMIT ${opts.limit} OFFSET ${offset}`,
+    query: `${baseQuery} ${STABLE_ORDER_BY} LIMIT ${opts.limit} OFFSET ${offset}`,
     params,
   };
 }
@@ -872,17 +918,35 @@ function applyCursorPagination(
 ): { query: string; params: Record<string, unknown> } {
   if (!opts.cursor) {
     return {
-      query: `${baseQuery} ORDER BY o.start_time DESC LIMIT ${opts.limit + 1}`,
+      query: `${baseQuery} ${STABLE_ORDER_BY} LIMIT ${opts.limit + 1}`,
       params,
     };
   }
 
   const cursor = opts.cursor;
+  // Doris does not support tuple/row comparisons `(a, b, c) < (x, y, z)`
+  // (works in ClickHouse / PostgreSQL but not Doris). Expand the keyset
+  // predicate into its boolean-equivalent form so it parses cleanly:
+  //
+  //   start_time <  X
+  //   OR (start_time = X AND trace_id <  Y)
+  //   OR (start_time = X AND trace_id =  Y AND span_id < Z)
+  //
+  // Combined with the outer `start_time <= X` upper bound this matches
+  // strict-less-than ordering on the (start_time, trace_id, span_id) key
+  // tuple — same semantics as the original tuple compare. The ORDER BY
+  // must include the full triple too (STABLE_ORDER_BY), otherwise rows
+  // with equal start_time can land on the wrong side of the cursor and
+  // duplicate / skip across pages.
   return {
     query: `${baseQuery}
       AND o.start_time <= {lastStartTime: String}
-      AND (o.start_time, o.trace_id, o.id) < ({lastStartTime: String}, {lastTraceId: String}, {lastId: String})
-      ORDER BY o.start_time DESC
+      AND (
+        o.start_time < {lastStartTime: String}
+        OR (o.start_time = {lastStartTime: String} AND o.trace_id < {lastTraceId: String})
+        OR (o.start_time = {lastStartTime: String} AND o.trace_id = {lastTraceId: String} AND o.span_id < {lastId: String})
+      )
+      ${STABLE_ORDER_BY}
       LIMIT ${opts.limit + 1}`,
     params: {
       ...params,
@@ -899,7 +963,7 @@ async function getObservationsRowsFromDoris<T>(
   params: Record<string, unknown>,
   operationName: string = "getObservationsFromEventsTableForPublicApi_rows",
 ): Promise<Array<T>> {
-  return await queryDoris<T>({
+  const res = await queryDoris<T>({
     query,
     params,
     tags: {
@@ -908,6 +972,18 @@ async function getObservationsRowsFromDoris<T>(
       kind: "publicApiRows",
       projectId,
     },
+  });
+  return res.map((r) => {
+    const row = r as Record<string, unknown>;
+    if ("metadata_names" in row || "metadata_values" in row) {
+      row.metadata = zipDorisMetadataArrays(
+        row.metadata_names,
+        row.metadata_values,
+      );
+      delete row.metadata_names;
+      delete row.metadata_values;
+    }
+    return row as T;
   });
 }
 
@@ -919,18 +995,17 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
 ): Promise<Array<{ count: string }>> {
   const { projectId, advancedFilters, ...filterParams } = opts;
 
-  // Build filter using Doris filter factory
-  const { observationsFilter } = getDorisProjectIdDefaultFilter(projectId, {
-    tracesPrefix: "t",
-  });
-
-  observationsFilter.push(
-    ...createDorisFilterFromFilterState(
-      advancedFilters ?? [],
-      eventsTableUiColumnDefinitionsForDoris,
-    ),
+  // Merge simple-param filters with the advanced JSON filter the same way
+  // buildObservationsQueryDoris does, so v1 totalItems respects fromStartTime
+  // /traceId/userId/etc. instead of returning the unfiltered project count.
+  const observationsFilter = deriveFilters(
+    { ...filterParams, projectId },
+    PUBLIC_API_EVENTS_COLUMN_MAPPING,
+    advancedFilters,
+    eventsTableUiColumnDefinitionsForDoris,
   );
 
+  const hasTraceFilter = observationsFilter.some((f) => f.table === "traces");
   const appliedFilter = observationsFilter.apply();
 
   // Build search condition
@@ -940,8 +1015,10 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
 
   const query = `
     SELECT count(*) as count
-    FROM observation_source o
-    WHERE ${appliedFilter.query}
+    FROM events_full o
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    WHERE o.project_id = {projectId: String}
+      ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
   `;
 
@@ -993,8 +1070,11 @@ export const getObservationsFromEventsTableForPublicApi = async (
 export const getObservationsV2FromEventsTableForPublicApi = async (
   opts: PublicApiObservationsQuery & { fields: ObservationFieldGroup[] },
 ): Promise<Array<EventsObservationPublic>> => {
-  const { baseQuery, params } = buildObservationsQueryDoris(opts);
-  const { query } = applyCursorPagination(opts, baseQuery, params);
+  const { baseQuery, params: baseParams } = buildObservationsQueryDoris(opts);
+  // applyCursorPagination adds lastStartTime / lastTraceId / lastId to the
+  // returned params map — must use *those* params, not baseParams, otherwise
+  // the {lastStartTime: String} placeholders go to Doris unsubstituted.
+  const { query, params } = applyCursorPagination(opts, baseQuery, baseParams);
 
   const records =
     await getObservationsRowsFromDoris<ObservationsTableQueryResultWitouhtTraceFields>(
@@ -1050,7 +1130,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
   const { projectId, page, limit, orderBy } = opts;
 
   // Build order by clause
-  let orderByClause = "ORDER BY t.project_id DESC, t.timestamp DESC";
+  let orderByClause = "ORDER BY t.project_id DESC, t.start_time DESC";
   if (orderBy) {
     orderByClause = orderByToDorisSQL(
       orderBy ? [orderBy] : [],
@@ -1061,8 +1141,9 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
   if (opts.select === "count") {
     const countQuery = `
       SELECT count(*) as count
-      FROM traces t
+      FROM events_full t
       WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
     `;
 
     const result = await queryDoris<{ count: string }[]>({
@@ -1080,9 +1161,9 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
 
   const query = `
     SELECT
-      t.id,
+      t.trace_id AS id,
       t.project_id,
-      t.timestamp,
+      t.start_time AS \`timestamp\`,
       t.name,
       t.environment,
       t.session_id,
@@ -1092,11 +1173,12 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
       t.updated_at,
       t.tags,
       t.bookmarked,
-      t.public,
-      t.release,
-      CONCAT('/project/', t.project_id, '/traces/', t.id) as htmlPath
-    FROM traces t
+      t.${dq("public")},
+      t.${dq("release")},
+      CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath
+    FROM events_full t
     WHERE t.project_id = {projectId: String}
+    AND t.parent_span_id = ''
     ${orderByClause}
     LIMIT {limit: Int32}
     OFFSET {offset: Int32}
@@ -1167,10 +1249,10 @@ export const getTracesCountFromEventsTableForPublicApi = async (
   return Number(countResult[0].count);
 };
 
-const updateableEventKeys = ["bookmarked", "public"] as const;
-
 type UpdateableEventFields = {
-  [K in (typeof updateableEventKeys)[number]]?: boolean;
+  bookmarked?: boolean;
+  public?: boolean;
+  tags?: string[];
 };
 
 /**
@@ -1195,17 +1277,17 @@ export const updateEvents = async (
   // Build where conditions
   const where: Record<string, unknown> = { project_id: projectId };
   if (selector.spanIds && selector.spanIds.length > 0) {
-    where.id = selector.spanIds;
+    where.span_id = selector.spanIds;
   }
   if (selector.traceIds && selector.traceIds.length > 0) {
     where.trace_id = selector.traceIds;
   }
   if (selector.rootOnly === true) {
-    where.parent_observation_id = "";
+    where.parent_span_id = "";
   }
 
   await partialUpdateDoris({
-    table: "observations",
+    table: "events_full",
     where,
     set: updates,
   });
@@ -1234,7 +1316,7 @@ export const getEventsGroupedByModel = async (
 
   const query = `
     SELECT o.provided_model_name as name, count(*) as count
-    FROM observation_source o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.provided_model_name IS NOT NULL
     AND length(o.provided_model_name) > 0
@@ -1281,12 +1363,12 @@ export const getEventsGroupedByModelId = async (
   const appliedFilter = observationsFilter.apply();
 
   const query = `
-    SELECT o.internal_model_id as modelId, count(*) as count
-    FROM observations o
+    SELECT o.model_id as modelId, count(*) as count
+    FROM events_full o
     WHERE ${appliedFilter.query}
-    AND o.internal_model_id IS NOT NULL
-    AND length(o.internal_model_id) > 0
-    GROUP BY o.internal_model_id
+    AND o.model_id IS NOT NULL
+    AND length(o.model_id) > 0
+    GROUP BY o.model_id
     ORDER BY count(*) DESC
     LIMIT 1000
   `;
@@ -1330,7 +1412,7 @@ export const getEventsGroupedByName = async (
 
   const query = `
     SELECT o.name as name, count(*) as count
-    FROM observation_source o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.name IS NOT NULL
     AND length(o.name) > 0
@@ -1379,7 +1461,7 @@ export const getEventsGroupedByTraceName = async (
 
   const query = `
     SELECT o.trace_name as traceName, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.trace_name IS NOT NULL
     AND length(o.trace_name) > 0
@@ -1429,7 +1511,7 @@ export const getEventsGroupedByTraceTags = async (
   // In Doris, we use UNNEST to explode array columns
   const query = `
     SELECT DISTINCT tag
-    FROM observations o,
+    FROM events_full o,
     UNNEST(o.tags) as t(tag)
     WHERE ${appliedFilter.query}
     AND size(o.tags) > 0
@@ -1476,7 +1558,7 @@ export const getEventsGroupedByPromptName = async (
 
   const query = `
     SELECT o.prompt_name as promptName, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.type = 'GENERATION'
     AND o.prompt_name IS NOT NULL
@@ -1526,7 +1608,7 @@ export const getEventsGroupedByType = async (
 
   const query = `
     SELECT o.type as type, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.type IS NOT NULL
     AND length(o.type) > 0
@@ -1575,7 +1657,7 @@ export const getEventsGroupedByUserId = async (
 
   const query = `
     SELECT o.user_id as userId, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.user_id IS NOT NULL
     AND length(o.user_id) > 0
@@ -1623,7 +1705,7 @@ export const getEventsGroupedByVersion = async (
 
   const query = `
     SELECT o.version as version, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.version IS NOT NULL
     AND length(o.version) > 0
@@ -1671,7 +1753,7 @@ export const getEventsGroupedBySessionId = async (
 
   const query = `
     SELECT o.session_id as sessionId, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.session_id IS NOT NULL
     AND length(o.session_id) > 0
@@ -1719,7 +1801,7 @@ export const getEventsGroupedByLevel = async (
 
   const query = `
     SELECT o.level as level, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.level IS NOT NULL
     AND length(o.level) > 0
@@ -1767,7 +1849,7 @@ export const getEventsGroupedByEnvironment = async (
 
   const query = `
     SELECT o.environment as environment, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.environment IS NOT NULL
     AND length(o.environment) > 0
@@ -1818,7 +1900,7 @@ export const getEventsGroupedByExperimentDatasetId = async (
 
   const query = `
     SELECT o.experiment_dataset_id as experimentDatasetId, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.experiment_dataset_id IS NOT NULL
     AND length(o.experiment_dataset_id) > 0
@@ -1869,7 +1951,7 @@ export const getEventsGroupedByExperimentId = async (
 
   const query = `
     SELECT o.experiment_id as experimentId, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.experiment_id IS NOT NULL
     AND length(o.experiment_id) > 0
@@ -1920,7 +2002,7 @@ export const getEventsGroupedByExperimentName = async (
 
   const query = `
     SELECT o.experiment_name as experimentName, count(*) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.experiment_name IS NOT NULL
     AND length(o.experiment_name) > 0
@@ -1970,10 +2052,10 @@ export const getEventsGroupedByHasParentObservation = async (
   const appliedFilter = observationsFilter.apply();
 
   const query = `
-    SELECT (o.parent_observation_id != '') as hasParentObservation, count(*) as count
-    FROM observations o
+    SELECT (o.parent_span_id != '') as hasParentObservation, count(*) as count
+    FROM events_full o
     WHERE ${appliedFilter.query}
-    GROUP BY (o.parent_observation_id != '')
+    GROUP BY (o.parent_span_id != '')
     ORDER BY hasParentObservation ASC
     LIMIT 2
   `;
@@ -2036,7 +2118,7 @@ export const deleteEventsByTraceIds = async (
         min(start_time) as min_ts,
         max(start_time) as max_ts,
         count(*) as cnt
-      FROM observations
+      FROM events_full
       WHERE project_id = {projectId: String} AND trace_id IN ({traceIds: Array(String)})
     `,
     params: { projectId, traceIds },
@@ -2064,7 +2146,7 @@ export const deleteEventsByTraceIds = async (
 
   await commandDoris({
     query: `
-      DELETE FROM observations
+      DELETE FROM events_full
       WHERE project_id = {projectId: String}
       AND trace_id IN ({traceIds: Array(String)})
     `,
@@ -2081,7 +2163,7 @@ export const deleteEventsByTraceIds = async (
 export const hasAnyEvent = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM observations
+    FROM events_full
     WHERE project_id = {projectId: String}
     LIMIT 1
   `;
@@ -2113,7 +2195,7 @@ export const deleteEventsByProjectId = async (
   }
 
   await commandDoris({
-    query: `DELETE FROM observations WHERE project_id = {projectId: String}`,
+    query: `DELETE FROM events_full WHERE project_id = {projectId: String}`,
     params: { projectId },
     tags: {
       feature: "tracing",
@@ -2134,18 +2216,18 @@ export async function getAgentGraphDataFromEventsTable(params: {
 }) {
   const { projectId, traceId, chMinStartTime, chMaxStartTime } = params;
 
-  // In Doris, metadata is stored as a JSON object, not separate names/values arrays
+  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
   const query = `
     SELECT
-      e.id,
-      e.parent_observation_id,
+      e.span_id AS id,
+      e.parent_span_id AS parent_observation_id,
       e.type,
       e.name,
       e.start_time,
       e.end_time,
-      e.metadata['langgraph_node'] AS node,
-      e.metadata['langgraph_step'] AS step
-    FROM observations e
+      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_node')) AS node,
+      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_step')) AS step
+    FROM events_full e
     WHERE
       e.project_id = {projectId: String}
       AND e.trace_id = {traceId: String}
@@ -2171,7 +2253,7 @@ export const hasAnyEventOlderThan = async (
 ) => {
   const query = `
     SELECT 1
-    FROM observations
+    FROM events_full
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: String}
     LIMIT 1
@@ -2208,7 +2290,7 @@ export const deleteEventsOlderThanDays = async (
   }
 
   const deleteQuery = `
-    DELETE FROM observations
+    DELETE FROM events_full
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: String}
   `;
@@ -2268,13 +2350,14 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
 
   const query = `
     SELECT
-      e.id,
+      e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
-      e.metadata
-    FROM observations e
+      e.metadata_names,
+      e.metadata_values
+    FROM events_full_view e
     WHERE e.project_id = {projectId: String}
-      AND e.id IN ({observationIds: Array(String)})
+      AND e.span_id IN ({observationIds: Array(String)})
       AND e.trace_id IN ({traceIds: Array(String)})
       AND e.start_time >= {minTimestamp: String}
       AND e.start_time <= {maxTimestamp: String}
@@ -2284,7 +2367,8 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
     id: string;
     input: string | null;
     output: string | null;
-    metadata: Record<string, string>;
+    metadata_names: unknown;
+    metadata_values: unknown;
   }>({
     query,
     params: {
@@ -2312,8 +2396,9 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       r.output !== undefined
         ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
         : null,
-    metadata:
-      r.metadata !== undefined ? parseMetadataCHRecordToDomain(r.metadata) : {},
+    metadata: parseMetadataCHRecordToDomain(
+      zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+    ),
   }));
 };
 
@@ -2362,7 +2447,7 @@ export const getUsersFromEventsTable = async (
 
   const query = `
     SELECT o.user_id as user, count(DISTINCT o.trace_id) as count
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.user_id IS NOT NULL
     AND length(o.user_id) > 0
@@ -2418,7 +2503,7 @@ export const getUsersCountFromEventsTable = async (
 
   const query = `
     SELECT count(DISTINCT o.user_id) AS totalCount
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.user_id IS NOT NULL
     AND length(o.user_id) > 0
@@ -2473,7 +2558,7 @@ export const getUserMetricsFromEventsTable = async (
     SELECT
       o.user_id as user_id,
       any(o.environment) as environment,
-      count(DISTINCT o.id) as obs_count,
+      count(DISTINCT o.span_id) as obs_count,
       count(DISTINCT o.trace_id) as trace_count,
       sum(if(MAP_CONTAINS_KEY(o.usage_details,'input'), o.usage_details['input'], 0)) as input_usage,
       sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'), o.usage_details['output'], 0)) as output_usage,
@@ -2481,7 +2566,7 @@ export const getUserMetricsFromEventsTable = async (
       sum(o.total_cost) as sum_total_cost,
       min(o.start_time) as min_timestamp,
       max(o.start_time) as max_timestamp
-    FROM observations o
+    FROM events_full o
     WHERE ${appliedFilter.query}
     AND o.user_id IN ({userIds: Array(String)})
     AND o.user_id IS NOT NULL
@@ -2538,7 +2623,7 @@ export const hasAnyUserFromEventsTable = async (
 ): Promise<boolean> => {
   const query = `
     SELECT 1
-    FROM observations
+    FROM events_full
     WHERE project_id = {projectId: String}
     AND user_id IS NOT NULL
     AND length(user_id) > 0
@@ -2567,10 +2652,10 @@ export const getEventsForBlobStorageExport = function (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
-  // Build the query for blob storage export using observations table
+  // Build the query for blob storage export using events_full table
   const query = `
     SELECT
-      o.id,
+      o.span_id AS id,
       o.trace_id,
       o.name,
       o.type,
@@ -2580,22 +2665,23 @@ export const getEventsForBlobStorageExport = function (
       o.user_id,
       o.session_id,
       o.tags,
-      o.release,
+      o.${dq("release")},
       o.trace_name,
       o.total_cost,
-      o.latency,
+      if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.input,
       o.output,
-      o.metadata,
+      o.metadata_names,
+      o.metadata_values,
       o.start_time,
       o.end_time,
-      o.model,
+      o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
       o.status_message,
-      o.parent_observation_id,
+      o.parent_span_id AS parent_observation_id,
       o.version as event_version
-    FROM observations o
+    FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.start_time >= {minTimestamp: String}
     AND o.start_time <= {maxTimestamp: String}
@@ -2628,10 +2714,10 @@ export const getEventsForAnalyticsIntegrations = async function* (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
-  // In Doris, metadata is stored as JSON object, and usage/cost details are also maps
+  // In events_full, metadata is stored as parallel arrays and usage/cost details are maps
   const query = `
     SELECT
-      o.id,
+      o.span_id AS id,
       o.trace_id,
       o.name,
       o.type,
@@ -2641,21 +2727,22 @@ export const getEventsForAnalyticsIntegrations = async function* (
       o.user_id,
       o.session_id,
       o.tags,
-      o.release,
+      o.${dq("release")},
       o.trace_name,
       o.total_cost,
-      o.latency,
+      if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.start_time,
       o.end_time,
-      o.model,
+      o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
-      o.metadata,
+      o.metadata_names,
+      o.metadata_values,
       o.usage_details,
       o.cost_details,
       o.provided_model_name,
-      o.time_to_first_token
-    FROM observations o
+      if(o.completion_start_time is null, null, milliseconds_diff(o.completion_start_time, o.start_time)) as time_to_first_token
+    FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.start_time >= {minTimestamp: String}
     AND o.start_time <= {maxTimestamp: String}
@@ -2678,6 +2765,10 @@ export const getEventsForAnalyticsIntegrations = async function* (
 
   const baseUrl = env.NEXTAUTH_URL?.replace("/api/auth", "");
   for await (const record of records) {
+    const metadata = zipDorisMetadataArrays(
+      record.metadata_names,
+      record.metadata_values,
+    );
     yield {
       timestamp: record.start_time,
       langfuse_observation_name: record.name,
@@ -2706,8 +2797,8 @@ export const getEventsForAnalyticsIntegrations = async function* (
       langfuse_tags: record.tags,
       langfuse_environment: record.environment,
       langfuse_event_version: "1.0.0",
-      posthog_session_id: record.metadata?.posthog_session_id ?? null,
-      mixpanel_session_id: record.metadata?.mixpanel_session_id ?? null,
+      posthog_session_id: metadata?.posthog_session_id ?? null,
+      mixpanel_session_id: metadata?.mixpanel_session_id ?? null,
     } satisfies AnalyticsObservationEvent;
   }
 };
@@ -2721,8 +2812,9 @@ export const hasAnySessionFromEventsTable = async (
 ): Promise<boolean> => {
   const query = `
     SELECT 1
-    FROM observations
+    FROM events_full
     WHERE project_id = {projectId: String}
+    AND parent_span_id = ''
     AND session_id IS NOT NULL
     AND length(session_id) > 0
     LIMIT 1
@@ -2754,13 +2846,14 @@ export const getTraceMetadataByIdsFromEvents = async (props: {
 
   const query = `
     SELECT
-      t.id,
+      t.trace_id AS id,
       t.name,
       t.user_id,
       t.tags
-    FROM traces t
+    FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.id IN ({traceIds: Array(String)})
+    AND t.parent_span_id = ''
+    AND t.trace_id IN ({traceIds: Array(String)})
   `;
 
   return queryDoris<{
@@ -2790,19 +2883,19 @@ export const getAvgCostByEvaluatorIds = async (
 > => {
   if (evaluatorIds.length === 0) return [];
 
-  // In Doris, metadata is stored as JSON object, not separate names/values arrays
+  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
   const query = `
     SELECT
-      o.metadata['job_configuration_id'] as evaluator_id,
+      element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) as evaluator_id,
       avg(o.total_cost) as avg_cost,
       count(*) as execution_count
-    FROM observations o
+    FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.type = 'GENERATION'
-    AND o.metadata['job_configuration_id'] IS NOT NULL
-    AND o.metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
+    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IS NOT NULL
+    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IN ({evaluatorIds: Array(String)})
     AND o.start_time >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 7 DAY)
-    GROUP BY o.metadata['job_configuration_id']
+    GROUP BY element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id'))
   `;
 
   const rows = await queryDoris<{
@@ -2873,7 +2966,8 @@ type DorisAnalyticsObservationRecord = {
   model: string | null;
   prompt_name: string | null;
   prompt_version: number | null;
-  metadata: Record<string, unknown>;
+  metadata_names: unknown;
+  metadata_values: unknown;
   usage_details: Record<string, number>;
   cost_details: Record<string, number>;
   provided_model_name: string | null;
@@ -2897,10 +2991,10 @@ export const getSessionMetricsFromEvents = async (props: {
       o.session_id,
       max(o.start_time) as max_timestamp,
       min(o.start_time) as min_timestamp,
-      group_distinct(o.trace_id) as trace_ids,
-      group_distinct(o.user_id) as user_ids,
+      array_distinct(collect_list(o.trace_id)) as trace_ids,
+      array_distinct(collect_list(o.user_id)) as user_ids,
       count(DISTINCT o.trace_id) as trace_count,
-      group_distinct(o.tags) as trace_tags,
+      array_distinct(array_flatten(collect_list(o.tags))) as trace_tags,
       any(o.environment) as environment,
       count(*) as total_observations,
       max(o.start_time) - min(o.start_time) as duration,
@@ -2910,7 +3004,7 @@ export const getSessionMetricsFromEvents = async (props: {
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'input'), o.cost_details['input'], 0)) as session_input_cost,
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'output'), o.cost_details['output'], 0)) as session_output_cost,
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'total'), o.cost_details['total'], 0)) as session_total_cost
-    FROM observations o
+    FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.session_id IN ({sessionIds: Array(String)})
     AND o.session_id IS NOT NULL
