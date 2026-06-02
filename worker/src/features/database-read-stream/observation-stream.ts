@@ -190,46 +190,82 @@ export const getObservationStream = async (props: {
         ) tmp
         GROUP BY trace_id, observation_id
       )
+      ,
+      trace_root AS (
+        SELECT
+          trace_id,
+          project_id,
+          name AS trace_name,
+          tags,
+          start_time AS trace_timestamp,
+          user_id
+        FROM (
+          SELECT
+            trace_id,
+            project_id,
+            trace_name AS name,
+            tags,
+            start_time,
+            user_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY trace_id, project_id
+              ORDER BY event_ts DESC
+            ) AS rn
+          FROM events_full
+          WHERE project_id = {projectId: String}
+            AND parent_span_id = ''
+        ) ranked
+        WHERE rn = 1
+      )
       SELECT
-        o.id,
-        o.type,
-        o.project_id,
-        o.name,
-        o.model_parameters,
-        o.start_time,
-        o.end_time,
-        o.trace_id,
-        o.completion_start_time,
-        o.provided_usage_details,
-        o.usage_details,
-        o.provided_cost_details,
-        o.cost_details,
-        o.level,
-        o.environment,
-        o.status_message,
-        o.version,
-        o.parent_observation_id,
-        o.created_at,
-        o.updated_at,
-        o.provided_model_name,
-        o.total_cost,
-        o.prompt_id,
-        o.prompt_name,
-        o.prompt_version,
-        o.internal_model_id,
-        o.input,
-        o.output,
-        o.metadata,
-        t.name as traceName,
-        t.tags as traceTags,
-        t.timestamp as traceTimestamp,
-        t.user_id as userId,
-        s.scores_avg,
-        s.score_categories
-      FROM observations o
-        LEFT JOIN traces t ON t.id = o.trace_id AND t.project_id = o.project_id
-        LEFT JOIN scores_agg s ON s.trace_id = o.trace_id AND s.observation_id = o.id
+        o.span_id AS id,
+        o.type AS type,
+        o.project_id AS project_id,
+        o.name AS name,
+        o.model_parameters AS model_parameters,
+        o.start_time AS start_time,
+        o.end_time AS end_time,
+        o.trace_id AS trace_id,
+        o.completion_start_time AS completion_start_time,
+        o.provided_usage_details AS provided_usage_details,
+        o.usage_details AS usage_details,
+        o.provided_cost_details AS provided_cost_details,
+        o.cost_details AS cost_details,
+        o.level AS level,
+        o.environment AS environment,
+        o.status_message AS status_message,
+        o.version AS version,
+        o.parent_span_id AS parent_observation_id,
+        o.created_at AS created_at,
+        o.updated_at AS updated_at,
+        o.provided_model_name AS provided_model_name,
+        o.total_cost AS total_cost,
+        o.prompt_id AS prompt_id,
+        o.prompt_name AS prompt_name,
+        o.prompt_version AS prompt_version,
+        o.model_id AS internal_model_id,
+        o.input AS input,
+        o.output AS output,
+        o.metadata_names AS metadata_names,
+        o.metadata_values AS metadata_values,
+        t.trace_name AS traceName,
+        t.tags AS traceTags,
+        t.trace_timestamp AS traceTimestamp,
+        t.user_id AS userId,
+        s.scores_avg AS scores_avg,
+        s.score_categories AS score_categories
+      -- events_full_view rehydrates GENERATION input hashes from content_dict
+      -- so exports see the original prompt JSON, not the hash array.
+      FROM events_full_view o
+        LEFT JOIN trace_root t
+          ON t.trace_id = o.trace_id AND t.project_id = o.project_id
+        LEFT JOIN scores_agg s
+          ON s.trace_id = o.trace_id AND s.observation_id = o.span_id
       WHERE ${appliedObservationsFilter.query}
+        -- observation rows only; the synthetic-trace-row filter from the
+        -- legacy schema is replaced by parent_span_id != '' (root span
+        -- carries no observation semantics).
+        AND o.parent_span_id != ''
         ${search.query}
       ORDER BY o.start_time DESC
       LIMIT {rowLimit: Int64}

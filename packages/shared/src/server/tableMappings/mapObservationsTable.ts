@@ -35,31 +35,43 @@ export const observationsTableTraceUiColumnDefinitions: UiColumnMappings = [
     select: "t.`environment`",
   },
 ];
+// Trace-level fields on observation rows: best-effort denormalised at write
+// time onto o.*, authoritatively present on the synthetic trace span row
+// (joined as t). COALESCE prefers the denormalised value (no JOIN row read
+// needed in the common case) and falls back to the trace span when an obs
+// landed before its trace (e.g. OTel child spans without trace attributes).
+// tableName: "traces" keeps the JOIN trigger in the existing filter machinery.
 export const observationsTableTraceUiColumnDefinitionsForDoris: UiColumnMappings =
   [
     {
       uiTableName: "Trace Tags",
       uiTableId: "traceTags",
       tableName: "traces",
-      select: "t.tags",
+      select: "COALESCE(o.tags, t.tags)",
     },
     {
       uiTableName: "User ID",
       uiTableId: "userId",
       tableName: "traces",
-      select: "t.user_id",
+      select: "COALESCE(NULLIF(o.user_id, ''), t.user_id)",
+    },
+    {
+      uiTableName: "Session ID",
+      uiTableId: "sessionId",
+      tableName: "traces",
+      select: "COALESCE(NULLIF(o.session_id, ''), t.session_id)",
     },
     {
       uiTableName: "Trace Name",
       uiTableId: "traceName",
       tableName: "traces",
-      select: "t.name",
+      select: "COALESCE(NULLIF(o.trace_name, ''), t.name)",
     },
     {
       uiTableName: "Trace Environment",
       uiTableId: "traceEnvironment",
       tableName: "traces",
-      select: "t.environment",
+      select: "COALESCE(NULLIF(o.environment, ''), t.environment)",
     },
   ];
 
@@ -310,7 +322,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "ID",
     uiTableId: "id",
     tableName: "observations",
-    select: "o.id",
+    select: "o.span_id",
   },
   {
     uiTableName: "Type",
@@ -348,8 +360,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "timeToFirstToken",
     tableName: "observations",
     select:
-      "if(isNull(completion_start_time), NULL,  milliseconds_diff(completion_start_time,start_time) / 1000)",
-    // If we use the default of Decimal64(12), we cannot filter for more than ~40min due to an overflow
+      "if(isNull(o.completion_start_time), NULL, milliseconds_diff(o.completion_start_time, o.start_time) / 1000)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -357,8 +368,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "latency",
     tableName: "observations",
     select:
-      "if(isNull(end_time), NULL, milliseconds_diff(end_time, start_time) / 1000)",
-    // If we use the default of Decimal64(12), we cannot filter for more than ~40min due to an overflow
+      "if(isNull(o.end_time), NULL, milliseconds_diff(o.end_time, o.start_time) / 1000)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -366,28 +376,31 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokensPerSecond",
     tableName: "observations",
     select:
-      "if(isNull(end_time) OR milliseconds_diff(end_time, start_time) = 0, NULL, COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0) / (milliseconds_diff(end_time, start_time) / 1000))",
+      "if(isNull(o.end_time) OR milliseconds_diff(o.end_time, o.start_time) = 0, NULL, COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details))), 0) / (milliseconds_diff(o.end_time, o.start_time) / 1000))",
   },
   {
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     tableName: "observations",
     select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.cost_details), map_keys(o.cost_details))), 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     tableName: "observations",
     select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.cost_details), map_keys(o.cost_details))), 0)",
   },
   {
     uiTableName: "Total Cost ($)",
     uiTableId: "totalCost",
     tableName: "observations",
-    select:
-      "if(MAP_CONTAINS_KEY(cost_details,'total'), cost_details['total'], NULL)",
+    // Mirror inputCost / outputCost: missing cost is treated as 0 so a
+    // range filter "0–N" includes obs without any cost data. The displayed
+    // Total Cost column in the obs list (selected as o.total_cost) still
+    // renders NULL as "n/a"; only the filter expression coerces to 0.
+    select: "COALESCE(o.total_cost, 0)",
   },
   {
     uiTableName: "Level",
@@ -411,14 +424,14 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Model ID",
     uiTableId: "modelId",
     tableName: "observations",
-    select: "o.internal_model_id",
+    select: "o.model_id",
   },
   {
     uiTableName: "Input Tokens",
     uiTableId: "inputTokens",
     tableName: "observations",
     select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.usage_details), map_keys(o.usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -426,7 +439,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "outputTokens",
     tableName: "observations",
     select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)",
+      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details))), 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -434,7 +447,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "totalTokens",
     tableName: "observations",
     select:
-      "if(MAP_CONTAINS_KEY(usage_details,'total'), usage_details['total'], NULL)",
+      "if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], NULL)",
     typeOverwrite: "Decimal64(3)",
   },
   {
@@ -442,7 +455,7 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokens",
     tableName: "observations",
     select:
-      "if(MAP_CONTAINS_KEY(usage_details,'total'), usage_details['total'], NULL)",
+      "if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], NULL)",
     typeOverwrite: "Decimal64(3)",
   },
   {

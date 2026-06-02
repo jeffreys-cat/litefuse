@@ -34,6 +34,7 @@ export * from "./utils/DatabaseReadStream";
 export * from "./utils/transforms";
 export * from "./utils/billingCycleHelpers";
 export * from "./utils/compareVersions";
+export * from "./utils/dorisArrays";
 export * from "./otel/utils";
 export * from "./otel/directWriteHelpers";
 export * from "./doris/client";

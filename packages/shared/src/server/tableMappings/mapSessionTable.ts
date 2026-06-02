@@ -1,7 +1,7 @@
 import { UiColumnMappings } from "../../tableDefinitions";
 
 export const sessionCols: UiColumnMappings = [
-  // we do not access the traces scores in ClickHouse. We default back to the trace timestamps.
+  // we do not access the scores when building session column mappings; fall back to trace timestamps.
 
   {
     uiTableName: "⭐️",
