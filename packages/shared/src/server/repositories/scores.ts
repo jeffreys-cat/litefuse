@@ -136,7 +136,7 @@ export const getScoresByIds = async (
 };
 
 /**
- * Accepts a score in a Clickhouse-ready format.
+ * Accepts a score in the Doris stream-load row shape.
  * id, project_id, name, and timestamp must always be provided.
  */
 export const upsertScore = async (score: Partial<ScoreRecordReadType>) => {
@@ -802,7 +802,7 @@ export const getCategoricalScoresGroupedByName = async (
 export const getScoresUiCount = async (props: {
   projectId: string;
   filter: FilterState;
-  orderBy: OrderByState;
+  orderBy?: OrderByState;
   limit?: number;
   offset?: number;
 }) => {
@@ -909,7 +909,7 @@ const getScoresUiGeneric = async <T>(props: {
   select: "count" | "rows";
   projectId: string;
   filter: FilterState;
-  orderBy: OrderByState;
+  orderBy?: OrderByState;
   limit?: number;
   offset?: number;
   tags?: Record<string, string>;
@@ -1022,10 +1022,8 @@ const getScoresUiGeneric = async <T>(props: {
             sm.queue_id,
             sm.is_deleted,
             sm.event_ts,
-            sm.has_metadata,
-            t.user_id,
-            t.name as trace_name,
-            t.tags as trace_tags
+            sm.has_metadata
+            ${props.select === "rows" ? `, t.user_id, t.name as trace_name, t.tags as trace_tags` : ""}
         FROM (
             SELECT s.*,
                 CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0
@@ -1035,8 +1033,8 @@ const getScoresUiGeneric = async <T>(props: {
             ${orderBySQL}
             ${limitSQL}
         ) sm
-        LEFT JOIN traces t
-            ON sm.trace_id = t.id AND t.project_id = sm.project_id
+        LEFT JOIN events_full t
+            ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id AND t.parent_span_id = ''
         ${traceWhere}
         ORDER BY sm.timestamp DESC
       `;
@@ -1069,7 +1067,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${hasMetadataSQL}
             ${traceSelect}
         FROM scores s
-        ${performTracesJoin ? "LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id" : ""}
+        ${performTracesJoin ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''" : ""}
         ${flatWhere}
         ${orderBySQL}
         ${limitSQL}
@@ -1099,7 +1097,7 @@ const getScoresUiGeneric = async <T>(props: {
 export const getScoresUiCountFromEvents = async (props: {
   projectId: string;
   filter: FilterState;
-  orderBy: OrderByState;
+  orderBy?: OrderByState;
   limit?: number;
   offset?: number;
 }) => {
@@ -1377,7 +1375,7 @@ export const getNumericScoreHistogram = async (
   const query = `
       SELECT s.value
       FROM scores s
-      ${traceFilter ? `LEFT JOIN traces t ON s.trace_id = t.id AND t.project_id = s.project_id` : ""}
+      ${traceFilter ? `LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''` : ""}
       WHERE s.project_id = {projectId: String}
       ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
       ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
@@ -1417,10 +1415,10 @@ export const getAggregatedScoresForPrompts = async (
         s.data_type,
         s.comment,
         CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata
-      FROM scores s LEFT JOIN observations o 
-        ON o.trace_id = s.trace_id 
-        AND o.project_id = s.project_id 
-        ${fetchScoreRelation === "observation" ? "AND o.id = s.observation_id" : ""}
+      FROM scores s LEFT JOIN events_full o
+        ON o.trace_id = s.trace_id
+        AND o.project_id = s.project_id
+        ${fetchScoreRelation === "observation" ? "AND o.span_id = s.observation_id" : ""}
       WHERE o.project_id = {projectId: String}
       AND s.project_id = {projectId: String}
       AND o.prompt_id IN ({promptIds: Array(String)})
@@ -1628,16 +1626,16 @@ export const getScoresForAnalyticsIntegrations = async function* (
         t.user_id as trace_user_id,
         t.${dq("release")} as trace_release,
         t.tags as trace_tags,
-        t.metadata['$posthog_session_id'] as posthog_session_id
+        element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id')) as posthog_session_id
       FROM scores s
-      LEFT JOIN traces t ON s.trace_id = t.id AND s.project_id = t.project_id
+      LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.parent_span_id = ''
       WHERE s.project_id = {projectId: String}
       AND t.project_id = {projectId: String}
       AND s.timestamp >= {minTimestamp: DateTime}
       AND s.timestamp <= {maxTimestamp: DateTime}
       AND s.data_type IN (${AGGREGATABLE_SCORE_TYPES.map((t) => `'${t}'`).join(", ")})
-      AND t.timestamp >= DATE_SUB({minTimestamp: DateTime}, INTERVAL 7 DAY)
-      AND t.timestamp <= {maxTimestamp: DateTime}
+      AND t.start_time >= DATE_SUB({minTimestamp: DateTime}, INTERVAL 7 DAY)
+      AND t.start_time <= {maxTimestamp: DateTime}
     `;
 
   const records = queryDorisStream<Record<string, unknown>>({
