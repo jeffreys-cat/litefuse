@@ -87,6 +87,18 @@ export function checkHeaderBasedDirectWrite(params: {
   return false;
 }
 
+/**
+ * Master events_full migration: the legacy dual-write path (mergeAndWrite
+ * to traces / observation_source) is gated off by this sentinel. Defined
+ * as a function call so TypeScript does not constant-fold the value and
+ * mark the legacy branch as unreachable — keeping the preserved-for-
+ * reference code type-checked. Flip to `true` to restore the dual-write
+ * path in an emergency (not expected on master).
+ */
+function legacyDualWrite(): boolean {
+  return false;
+}
+
 function extractBaseSdkVersion(sdkVersion: string): string {
   const version = sdkVersion.trim();
 
@@ -363,33 +375,46 @@ export const otelIngestionQueueProcessor: Processor = async (
       !useDirectEventWrite &&
       env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
-    // Running everything concurrently might be detrimental to the event loop, but has probably
-    // the highest possible throughput. Therefore, we start with a Promise.all.
-    // If necessary, we may use a for each instead.
+    // OTel-only contract (master events_full migration): events_full is the
+    // single write target. The legacy mergeAndWrite-to-traces /
+    // processEventBatch-to-traces dual write block below is preserved as
+    // reference but never executes. The events_full row is written further
+    // down via createEventRecord + writeEventRecord (unconditionally — the
+    // shouldWriteToEventsTable gate below is also kept for reference but
+    // forced true).
+    //
+    // We keep the indirection via legacyDualWrite() so TypeScript does not
+    // constant-fold and mark the legacy branch unreachable; the original
+    // 30-odd lines below stay type-checked and visible.
+    if (legacyDualWrite()) {
+      // Running everything concurrently might be detrimental to the event loop, but has probably
+      // the highest possible throughput. Therefore, we start with a Promise.all.
+      // If necessary, we may use a for each instead.
 
-    // Process observations via mergeAndWrite
-    const observationWritePromise = Promise.all(
-      observations.map((observation) =>
-        ingestionService.mergeAndWrite(
-          getDorisEntityType(observation.type),
-          auth.scope.projectId,
-          observation.body.id || "", // id is always defined for observations
-          new Date(), // Use the current timestamp as event time
-          [observation],
-          shouldForwardToEventsTable,
+      // Process observations via mergeAndWrite
+      const observationWritePromise = Promise.all(
+        observations.map((observation) =>
+          ingestionService.mergeAndWrite(
+            getDorisEntityType(observation.type),
+            auth.scope.projectId,
+            observation.body.id || "", // id is always defined for observations
+            new Date(), // Use the current timestamp as event time
+            [observation],
+            shouldForwardToEventsTable,
+          ),
         ),
-      ),
-    );
+      );
 
-    // Process traces and observations concurrently
-    await Promise.all([
-      observationWritePromise,
-      processEventBatch(traces, auth, {
-        delay: 0,
-        source: "otel",
-        forwardToEventsTable: shouldForwardToEventsTable,
-      }),
-    ]);
+      // Process traces and observations concurrently
+      await Promise.all([
+        observationWritePromise,
+        processEventBatch(traces, auth, {
+          delay: 0,
+          source: "otel",
+          forwardToEventsTable: shouldForwardToEventsTable,
+        }),
+      ]);
+    }
 
     // Process events for observation evals and direct event writes
     // This phase handles two independent concerns:
@@ -404,10 +429,13 @@ export const otelIngestionQueueProcessor: Processor = async (
       return;
     }
 
-    // Determine what processing is needed
-    const shouldWriteToEventsTable =
-      env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true" &&
-      useDirectEventWrite;
+    // Determine what processing is needed.
+    // Master events_full migration: events_full IS the production write
+    // target for trace/observation, so we no longer gate writes on the
+    // legacy LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE flag. The
+    // useDirectEventWrite check stays as a safety net — the OTel route
+    // already SDK-gates v3 clients, so this is effectively always true.
+    const shouldWriteToEventsTable = useDirectEventWrite;
 
     const evalConfigs = await fetchObservationEvalConfigs(projectId).catch(
       (error) => {
