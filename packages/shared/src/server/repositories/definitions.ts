@@ -683,7 +683,9 @@ export const eventRecordBaseSchema = z.object({
   // Prompt
   prompt_id: z.string().nullish(),
   prompt_name: z.string().nullish(),
-  prompt_version: z.string().nullish(),
+  // events_full.prompt_version is `int` — align the schema with the actual
+  // column type to avoid a string ↔ int mismatch at insert time.
+  prompt_version: z.number().int().nullish(),
 
   // Model
   model_id: z.string().nullish(),
@@ -708,9 +710,12 @@ export const eventRecordBaseSchema = z.object({
   input: z.string().nullish(),
   output: z.string().nullish(),
 
-  // Metadata
-  metadata: z.record(z.string(), z.string()),
+  // Flattened metadata (parallel arrays, matches langfuse-main V4 events_full).
+  // The previous fork shape — a separate `metadata` Map plus `metadata_hashes`
+  // + `metadata_long_values` — was a transitional design that langfuse-main
+  // has since dropped. Doris events_full only carries the two parallel arrays.
   metadata_names: z.array(z.string()).default([]),
+  metadata_values: z.array(z.string().nullish()).default([]),
 
   // Experiment properties
   experiment_id: z.string().nullish(),
@@ -746,9 +751,6 @@ export const eventRecordBaseSchema = z.object({
 export type EventRecordBaseType = z.infer<typeof eventRecordBaseSchema>;
 
 export const eventRecordReadSchema = eventRecordBaseSchema.extend({
-  metadata_values: z.array(z.string()).default([]),
-  metadata_hashes: z.array(z.number().int()).default([]),
-  metadata_long_values: z.record(z.number().int(), z.string()).default({}),
   total_cost: z.number().nullish(),
 
   start_time: dorisStringDateSchema,
@@ -761,7 +763,7 @@ export const eventRecordReadSchema = eventRecordBaseSchema.extend({
 export type EventRecordReadType = z.infer<typeof eventRecordReadSchema>;
 
 export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
-  metadata_raw_values: z.array(z.string().nullish()).default([]),
+  total_cost: z.number().nullish(),
   start_time: z.number(),
   end_time: z.number().nullish(),
   completion_start_time: z.number().nullish(),

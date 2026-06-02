@@ -325,9 +325,6 @@ export class IngestionService {
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
 
-    // Stringify metadata for the JSON column (Record<string, string>)
-    const metadata = convertRecordValuesToString(eventData.metadata ?? {});
-
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
       id: eventData.spanId,
@@ -368,7 +365,11 @@ export class IngestionService {
       // Prompt
       prompt_id: prompt?.id || "",
       prompt_name: eventData.promptName,
-      prompt_version: eventData.promptVersion,
+      // events_full.prompt_version is `int`; coerce SDK-supplied string form.
+      prompt_version:
+        typeof eventData.promptVersion === "string"
+          ? parseInt(eventData.promptVersion, 10)
+          : (eventData.promptVersion ?? null),
 
       // Model
       model_id: generationUsage?.internal_model_id || "",
@@ -399,10 +400,12 @@ export class IngestionService {
       input: eventData.input,
       output: eventData.output,
 
-      // Metadata
-      metadata,
+      // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
+      // shape was a transitional fork artifact; events_full uses just the two
+      // arrays — same as langfuse-main V4. Cross-batch metadata merge does not
+      // happen here (OTel-only ingestion has no create/update split).
       metadata_names: metadataNames,
-      metadata_raw_values: metadataValues,
+      metadata_values: metadataValues,
 
       // Source/instrumentation metadata
       source: eventData.source,
