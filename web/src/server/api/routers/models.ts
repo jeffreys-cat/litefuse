@@ -205,13 +205,13 @@ export const modelRouter = createTRPCRouter({
 
       const lastUsedQuery = `
         SELECT
-          internal_model_id as modelId,
+          model_id as modelId,
           MAX(start_time) as lastUsed
-        FROM observations
+        FROM events_full
         WHERE project_id = {projectId: String}
           AND type = 'GENERATION'
-          AND internal_model_id IN ({modelIds: Array(String)})
-        GROUP BY internal_model_id
+          AND model_id IN ({modelIds: Array(String)})
+        GROUP BY model_id
       `;
 
       const queryFn = queryDoris;

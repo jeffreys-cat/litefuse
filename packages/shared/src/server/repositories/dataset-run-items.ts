@@ -276,8 +276,7 @@ const getDatasetRunsTableInternal = async <T>(
       // NOTE: `dataset_run_created_at` is intentionally projected here even
       // though it is not consumed by `convertDatasetRunsMetricsRecord`. The
       // outer query is `SELECT DISTINCT ... ORDER BY drm.dataset_run_created_at`
-      // (default order added below for metrics). ClickHouse allows ORDER BY
-      // columns outside the DISTINCT projection, but Doris Nereids enforces
+      // (default order added below for metrics). Doris Nereids enforces
       // standard SQL — the ORDER BY column must appear in SELECT DISTINCT,
       // otherwise it raises "dataset_run_created_at should be grouped by".
       // Adding the column is a no-op for row uniqueness because `drm` already
@@ -419,30 +418,29 @@ const getDatasetRunsTableInternal = async <T>(
   const filteredObservationsCte = `
    observations_filtered AS (
       SELECT
-        o.id,
+        o.span_id AS id,
         o.trace_id,
         o.project_id,
         o.start_time,
         o.end_time,
         o.total_cost
-      FROM observations o
+      FROM events_full o
       WHERE o.project_id = {projectId: String}
         AND o.start_time >= (
-          SELECT min(dri.dataset_run_created_at) - INTERVAL 1 DAY 
-          FROM dataset_run_items_rmt dri 
+          SELECT min(dri.dataset_run_created_at) - INTERVAL 1 DAY
+          FROM dataset_run_items_rmt dri
           WHERE ${baseFilter.query}
         )
         AND o.start_time <= (
-          SELECT max(dri.dataset_run_created_at) + INTERVAL 1 DAY 
-          FROM dataset_run_items_rmt dri 
+          SELECT max(dri.dataset_run_created_at) + INTERVAL 1 DAY
+          FROM dataset_run_items_rmt dri
           WHERE ${baseFilter.query}
         )
         AND o.trace_id in  (
           SELECT dri.trace_id
-          FROM dataset_run_items_rmt dri 
+          FROM dataset_run_items_rmt dri
           WHERE ${baseFilter.query}
         )
-      QUALIFY ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY o.event_ts DESC) = 1
     ),
   `;
 
