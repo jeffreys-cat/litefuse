@@ -1,3 +1,31 @@
+// ⚠️ NOT FUNCTIONAL — master events_full migration
+//
+// This handler is the async path that should backfill experiment_* fields
+// into events_full when a user creates a dataset run in the UI relating to
+// existing traces (langfuse-main pattern).
+//
+// On this fork it has NEVER actually worked end-to-end:
+//   * Pre-events_full PR: writeEventRecord was a stub no-op
+//     ("events table is not supported in Doris, skipping"), so any rows
+//     this handler computed went nowhere.
+//   * Post-events_full PR (current): writeEventRecord writes to
+//     events_full, but the SQL below still reads `FROM traces t` — and
+//     after the OTel-only migration the traces table receives no new
+//     writes, so this handler picks up nothing to backfill.
+//
+// SDK-initiated experiments (the `experiment.run()` path) DO work — those
+// flow through createEventRecord at ingestion time, which inlines all 12
+// experiment_* fields onto the events_full row directly.
+//
+// To make UI-initiated backfill work, future work needs to:
+//   1. Rewrite the SQL below to read events_full (root span row) instead
+//      of the traces / observation_source legacy tables.
+//   2. Align internal field names with the new schema
+//      (metadata_raw_values → metadata_values, etc.).
+//   3. End-to-end test UI-create-dataset-run → events_full enrichment.
+//
+// See docs/master-events-full-migration-plan.md §6.2 for the full record.
+
 import {
   logger,
   queryDoris,
