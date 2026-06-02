@@ -448,18 +448,32 @@ export class IngestionService {
   }
 
   /**
-   * Writes an event record directly to the events table.
+   * Writes an event record directly to the events_full table.
    * Use createEventRecord() first to get the record, then call this to write.
    *
-   * Note: Events table is not supported in Doris - this is a no-op for Doris backend.
+   * Master fork is OTel-only for trace/observation ingestion: events_full
+   * is the single denormalized analytic store. Each call enqueues exactly
+   * one row into DorisWriter's events_full queue; the writer batches and
+   * flushes via Stream Load.
    *
    * @param eventRecord - The event record to write
    */
   public writeEventRecord(eventRecord: EventRecordInsertType): void {
-    // Events table is not supported in Doris - skip writing
+    if (!this.dorisWriter) {
+      logger.debug(
+        "writeEventRecord called but DorisWriter is not initialized, skipping",
+      );
+      return;
+    }
+    this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
     logger.debug(
-      "writeEventRecord called but events table is not supported in Doris, skipping",
+      `[writeEventRecord] queued events_full row for span ${eventRecord.span_id} (trace ${eventRecord.trace_id})`,
     );
+    recordIncrement("langfuse.ingestion.write", 1, {
+      object: "event",
+      backend: "doris",
+      target: "events_full",
+    });
   }
 
   private async processDatasetRunItemEventList(params: {
