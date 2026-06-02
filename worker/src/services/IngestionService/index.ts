@@ -314,7 +314,11 @@ export class IngestionService {
         : null,
     ]);
 
-    const now = this.getMicrosecondTimestamp();
+    // Doris DateTime(3) is millisecond-precision; the upstream langfuse-main
+    // uses microseconds for ClickHouse DateTime64(6). Use ms here so
+    // start_time_date partition derivation and the column values match
+    // events_full's DateTime(3) shape (otherwise dates land in year 58000+).
+    const now = this.getMillisecondTimestamp();
 
     // Flatten raw metadata first (before stringification destroys nested structure)
     const flattened = eventData.metadata
@@ -333,7 +337,13 @@ export class IngestionService {
       span_id: eventData.spanId,
 
       // Optional identifiers
-      parent_span_id: eventData.parentSpanId,
+      // OTel root spans arrive with parentSpanId=null/undefined.
+      // events_full read queries (buildTraceAggregationQuery,
+      // getObservationsForTrace, batch streams, etc.) identify the root
+      // span via `parent_span_id = ''`. Coerce NULL -> '' here so the
+      // wire-level invariant holds — same shape upstream langfuse-main
+      // uses against ClickHouse's non-nullable String column.
+      parent_span_id: eventData.parentSpanId ?? "",
 
       // Core properties with defaults
       name: eventData.name ?? "",
@@ -356,10 +366,11 @@ export class IngestionService {
       status_message: eventData.statusMessage,
 
       // Timestamps
-      start_time: this.getMicrosecondTimestamp(eventData.startTimeISO),
-      end_time: this.getMicrosecondTimestamp(eventData.endTimeISO),
+      // Doris DateTime(3) — see comment on `now` above.
+      start_time: this.getMillisecondTimestamp(eventData.startTimeISO),
+      end_time: this.getMillisecondTimestamp(eventData.endTimeISO),
       completion_start_time: eventData.completionStartTime
-        ? this.getMicrosecondTimestamp(eventData.completionStartTime)
+        ? this.getMillisecondTimestamp(eventData.completionStartTime)
         : null,
 
       // Prompt
