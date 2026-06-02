@@ -11,7 +11,20 @@ import {
   logger,
   processEventBatch,
 } from "@langfuse/shared/src/server";
+import { InvalidRequestError } from "@langfuse/shared";
 import { v4 } from "uuid";
+
+// Master fork is OTel-only for trace/observation ingestion. The legacy
+// v3-style /api/public/generations endpoint is gated off — clients must
+// emit GENERATION spans through /api/public/otel/v1/traces. Handler
+// bodies are preserved for reference.
+const OTEL_ONLY_MESSAGE =
+  "Master fork is OTel-only for generations. Send GENERATION spans via " +
+  "/api/public/otel/v1/traces (Python SDK >= 4.0.0 or JS SDK >= 5.0.0).";
+
+const rejectLegacy = (): never => {
+  throw new InvalidRequestError(OTEL_ONLY_MESSAGE);
+};
 
 export default withMiddlewares({
   POST: createAuthedProjectAPIRoute({
@@ -20,6 +33,7 @@ export default withMiddlewares({
     responseSchema: PostGenerationsV1Response,
     rateLimitResource: "legacy-ingestion",
     fn: async ({ body, auth, res }) => {
+      rejectLegacy();
       const { prompt, completion, ...rest } = body;
       const event = {
         id: v4(),
@@ -56,6 +70,7 @@ export default withMiddlewares({
     responseSchema: PatchGenerationsV1Response,
     rateLimitResource: "legacy-ingestion",
     fn: async ({ body, auth, res }) => {
+      rejectLegacy();
       const { generationId, prompt, completion, ...rest } = body;
       const event = {
         id: v4(),

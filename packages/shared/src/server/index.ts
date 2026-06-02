@@ -35,6 +35,7 @@ export * from "./utils/transforms";
 export * from "./utils/billingCycleHelpers";
 export * from "./utils/compareVersions";
 export * from "./otel/utils";
+export * from "./otel/directWriteHelpers";
 export * from "./doris/client";
 export * from "./doris/schemaUtils";
 export * from "./doris/measureAndReturn";

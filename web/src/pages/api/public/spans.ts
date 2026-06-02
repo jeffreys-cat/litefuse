@@ -11,7 +11,24 @@ import {
   logger,
   processEventBatch,
 } from "@langfuse/shared/src/server";
+import { InvalidRequestError } from "@langfuse/shared";
 import { v4 } from "uuid";
+
+// Master fork is OTel-only for trace/observation ingestion. The legacy
+// v3-style /api/public/spans endpoint is gated off — clients must send
+// spans through /api/public/otel/v1/traces with Python SDK >= 4.0.0 or
+// JS SDK >= 5.0.0. The original handler bodies are kept as reference;
+// the throw at the top short-circuits before processEventBatch ever
+// runs. The early-throw goes through a function so TypeScript does not
+// constant-fold and mark the rest of the body unreachable — that's how
+// the original code stays type-checked while never executing.
+const OTEL_ONLY_MESSAGE =
+  "Master fork is OTel-only for spans. Send spans via " +
+  "/api/public/otel/v1/traces (Python SDK >= 4.0.0 or JS SDK >= 5.0.0).";
+
+const rejectLegacy = (): never => {
+  throw new InvalidRequestError(OTEL_ONLY_MESSAGE);
+};
 
 export default withMiddlewares({
   POST: createAuthedProjectAPIRoute({
@@ -19,6 +36,8 @@ export default withMiddlewares({
     bodySchema: PostSpansV1Body,
     responseSchema: PostSpansV1Response,
     fn: async ({ body, auth, res }) => {
+      rejectLegacy();
+
       const event = {
         id: v4(),
         type: eventTypes.OBSERVATION_CREATE,
@@ -51,6 +70,8 @@ export default withMiddlewares({
     bodySchema: PatchSpansV1Body,
     responseSchema: PatchSpansV1Response,
     fn: async ({ body, auth, res }) => {
+      rejectLegacy();
+
       const event = {
         id: v4(),
         type: eventTypes.OBSERVATION_UPDATE,

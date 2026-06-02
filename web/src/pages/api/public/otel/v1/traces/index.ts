@@ -1,6 +1,7 @@
 import { withMiddlewares } from "@/src/features/public-api/server/withMiddlewares";
 import { createAuthedProjectAPIRoute } from "@/src/features/public-api/server/createAuthedProjectAPIRoute";
 import {
+  checkHeaderBasedDirectWrite,
   logger,
   OtelIngestionProcessor,
   markProjectAsOtelUser,
@@ -128,7 +129,6 @@ export default withMiddlewares({
       );
 
       // Reject unsupported future ingestion versions (> 4)
-      // Lower versions are valid but use dual write (path A)
       const parsedIngestionVersion = ingestionVersion
         ? parseInt(ingestionVersion, 10)
         : undefined;
@@ -139,6 +139,24 @@ export default withMiddlewares({
         res.status(400);
         return {
           error: `Unsupported x-langfuse-ingestion-version: "${ingestionVersion}". Maximum supported: "4".`,
+        };
+      }
+
+      // Master fork is OTel-only for trace/observation ingestion. Require a
+      // SDK new enough to emit complete spans inline (no v3-protocol
+      // create/update split): Python >= 4.0.0, JS >= 5.0.0, or an explicit
+      // x-langfuse-ingestion-version=4 opt-in. Anything else is hard-rejected
+      // at the entrypoint so the worker never sees v3 trace/observation events.
+      if (
+        !checkHeaderBasedDirectWrite({ sdkName, sdkVersion, ingestionVersion })
+      ) {
+        res.status(400);
+        return {
+          error:
+            "Master events_full ingestion requires Python SDK >= 4.0.0 or JS SDK >= 5.0.0. " +
+            "Please upgrade your client.",
+          sdkName,
+          sdkVersion,
         };
       }
 
