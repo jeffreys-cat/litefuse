@@ -159,28 +159,51 @@ export async function getDatasetRunItemsSinceLastRun(
     )
 
     SELECT
-      dri.id,
-      dri.project_id,
-      dri.trace_id,
-      dri.observation_id,
-      dri.dataset_run_id,
-      dri.dataset_run_name,
-      dri.dataset_run_description,
-      dri.dataset_run_metadata,
-      dri.dataset_id,
-      dri.dataset_item_version,
-      dri.dataset_item_id,
-      dri.dataset_item_expected_output,
-      dri.dataset_item_metadata,
-      dri.created_at
-    FROM dataset_run_items_rmt AS dri
-    LEFT ANTI JOIN prefiltered_events AS pe
-    ON dri.project_id = pe.project_id
-      AND dri.trace_id = pe.trace_id
-    WHERE dri.created_at > {lastRun: DateTime64(3)}
-      AND dri.created_at <= {upperBound: DateTime64(3)}
-    ORDER BY dri.created_at DESC
-    LIMIT 1 BY dri.project_id, dri.trace_id, coalesce(dri.observation_id, '')
+      id,
+      project_id,
+      trace_id,
+      observation_id,
+      dataset_run_id,
+      dataset_run_name,
+      dataset_run_description,
+      dataset_run_metadata,
+      dataset_id,
+      dataset_item_version,
+      dataset_item_id,
+      dataset_item_expected_output,
+      dataset_item_metadata,
+      created_at
+    FROM (
+      -- Doris has no LIMIT N BY clause; use ROW_NUMBER() OVER (...) WHERE rn=1
+      -- to pick the latest DRI per (project_id, trace_id, observation_id).
+      SELECT
+        dri.id,
+        dri.project_id,
+        dri.trace_id,
+        dri.observation_id,
+        dri.dataset_run_id,
+        dri.dataset_run_name,
+        dri.dataset_run_description,
+        dri.dataset_run_metadata,
+        dri.dataset_id,
+        dri.dataset_item_version,
+        dri.dataset_item_id,
+        dri.dataset_item_expected_output,
+        dri.dataset_item_metadata,
+        dri.created_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY dri.project_id, dri.trace_id, coalesce(dri.observation_id, '')
+          ORDER BY dri.created_at DESC
+        ) AS rn
+      FROM dataset_run_items_rmt AS dri
+      LEFT ANTI JOIN prefiltered_events AS pe
+        ON dri.project_id = pe.project_id
+        AND dri.trace_id = pe.trace_id
+      WHERE dri.created_at > {lastRun: DateTime64(3)}
+        AND dri.created_at <= {upperBound: DateTime64(3)}
+    ) ranked
+    WHERE rn = 1
+    ORDER BY created_at DESC
   `;
 
   const rows = await queryDoris<DatasetRunItem>({
@@ -218,57 +241,63 @@ export async function getRelevantObservations(
   // != '' (root spans are the trace itself, handled by getRelevantTraces).
   // metadata is split across metadata_names / metadata_values arrays; we
   // zip them in TS after the read and synthesize the Map shape that
-  // SpanRecord exposes.
+  // SpanRecord exposes. Dedup-per-span via ROW_NUMBER (Doris has no
+  // LIMIT N BY).
   const query = `
-    SELECT
-      o.project_id,
-      o.trace_id,
-      o.span_id AS span_id,
-      o.parent_span_id AS parent_span_id,
-      o.start_time,
-      o.end_time,
-      o.name,
-      o.type,
-      coalesce(o.environment, '') AS environment,
-      coalesce(o.version, '') AS version,
-      coalesce(o.release, '') AS release,
-      coalesce(o.input, '') AS input,
-      coalesce(o.output, '') AS output,
-      o.level AS level,
-      coalesce(o.status_message, '') AS status_message,
-      o.completion_start_time AS completion_start_time,
-      coalesce(o.prompt_id, '') AS prompt_id,
-      coalesce(o.prompt_name, '') AS prompt_name,
-      o.prompt_version AS prompt_version,
-      coalesce(o.model_id, '') AS model_id,
-      coalesce(o.provided_model_name, '') AS provided_model_name,
-      coalesce(o.model_parameters, '{}') AS model_parameters,
-      o.provided_usage_details AS provided_usage_details,
-      o.usage_details AS usage_details,
-      o.provided_cost_details AS provided_cost_details,
-      o.cost_details AS cost_details,
-      coalesce(o.total_cost, 0) AS total_cost,
-      o.tool_definitions,
-      o.tool_calls,
-      o.tool_call_names,
-      o.usage_pricing_tier_id,
-      o.usage_pricing_tier_name,
-      o.metadata_names AS metadata_names,
-      o.metadata_values AS metadata_values,
-      coalesce(o.source, 'experiment-backfill') AS source,
-      o.tags AS tags,
-      o.bookmarked AS bookmarked,
-      o.public AS public,
-      coalesce(o.trace_name, '') AS trace_name,
-      coalesce(o.user_id, '') AS user_id,
-      coalesce(o.session_id, '') AS session_id
-    FROM events_full o
-    WHERE o.project_id IN {projectIds: Array(String)}
-      AND o.trace_id IN {traceIds: Array(String)}
-      AND o.parent_span_id != ''
-      AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
-    ORDER BY o.event_ts DESC
-    LIMIT 1 BY o.project_id, o.span_id
+    SELECT * FROM (
+      SELECT
+        o.project_id,
+        o.trace_id,
+        o.span_id AS span_id,
+        o.parent_span_id AS parent_span_id,
+        o.start_time,
+        o.end_time,
+        o.name,
+        o.type,
+        coalesce(o.environment, '') AS environment,
+        coalesce(o.version, '') AS version,
+        coalesce(o.\`release\`, '') AS \`release\`,
+        coalesce(o.input, '') AS input,
+        coalesce(o.output, '') AS output,
+        o.level AS level,
+        coalesce(o.status_message, '') AS status_message,
+        o.completion_start_time AS completion_start_time,
+        coalesce(o.prompt_id, '') AS prompt_id,
+        coalesce(o.prompt_name, '') AS prompt_name,
+        o.prompt_version AS prompt_version,
+        coalesce(o.model_id, '') AS model_id,
+        coalesce(o.provided_model_name, '') AS provided_model_name,
+        coalesce(o.model_parameters, '{}') AS model_parameters,
+        o.provided_usage_details AS provided_usage_details,
+        o.usage_details AS usage_details,
+        o.provided_cost_details AS provided_cost_details,
+        o.cost_details AS cost_details,
+        coalesce(o.total_cost, 0) AS total_cost,
+        o.tool_definitions,
+        o.tool_calls,
+        o.tool_call_names,
+        o.usage_pricing_tier_id,
+        o.usage_pricing_tier_name,
+        o.metadata_names AS metadata_names,
+        o.metadata_values AS metadata_values,
+        coalesce(o.source, 'experiment-backfill') AS source,
+        o.tags AS tags,
+        o.bookmarked AS bookmarked,
+        o.\`public\` AS \`public\`,
+        coalesce(o.trace_name, '') AS trace_name,
+        coalesce(o.user_id, '') AS user_id,
+        coalesce(o.session_id, '') AS session_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY o.project_id, o.span_id
+          ORDER BY o.event_ts DESC
+        ) AS rn
+      FROM events_full o
+      WHERE o.project_id IN ({projectIds: Array(String)})
+        AND o.trace_id IN ({traceIds: Array(String)})
+        AND o.parent_span_id != ''
+        AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
+    ) ranked
+    WHERE rn = 1
   `;
 
   type RawObsRow = Omit<SpanRecord, "metadata"> & {
@@ -314,53 +343,58 @@ export async function getRelevantTraces(
   // events_full carries trace-level fields denormalised on the root span,
   // so we don't need a separate CTE for them — read them straight off o.
   const query = `
-    SELECT
-      o.project_id,
-      o.trace_id,
-      o.span_id AS span_id,
-      o.parent_span_id AS parent_span_id,
-      o.start_time AS start_time,
-      o.end_time AS end_time,
-      coalesce(o.trace_name, o.name) AS name,
-      'SPAN' AS type,
-      coalesce(o.environment, '') AS environment,
-      coalesce(o.version, '') AS version,
-      coalesce(o.release, '') AS release,
-      coalesce(o.input, '') AS input,
-      coalesce(o.output, '') AS output,
-      coalesce(o.level, '') AS level,
-      coalesce(o.status_message, '') AS status_message,
-      o.completion_start_time AS completion_start_time,
-      '' AS prompt_id,
-      '' AS prompt_name,
-      '' AS prompt_version,
-      '' AS model_id,
-      '' AS provided_model_name,
-      '' AS model_parameters,
-      map() AS provided_usage_details,
-      map() AS usage_details,
-      map() AS provided_cost_details,
-      map() AS cost_details,
-      0 AS total_cost,
-      map() AS tool_definitions,
-      [] AS tool_calls,
-      [] AS tool_call_names,
-      o.metadata_names AS metadata_names,
-      o.metadata_values AS metadata_values,
-      coalesce(o.source, 'experiment-backfill') AS source,
-      o.tags AS tags,
-      o.bookmarked AS bookmarked,
-      o.public AS public,
-      coalesce(o.trace_name, o.name) AS trace_name,
-      coalesce(o.user_id, '') AS user_id,
-      coalesce(o.session_id, '') AS session_id
-    FROM events_full o
-    WHERE o.project_id IN {projectIds: Array(String)}
-      AND o.trace_id IN {traceIds: Array(String)}
-      AND o.parent_span_id = ''
-      AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
-    ORDER BY o.event_ts DESC
-    LIMIT 1 BY o.project_id, o.trace_id
+    SELECT * FROM (
+      SELECT
+        o.project_id,
+        o.trace_id,
+        o.span_id AS span_id,
+        o.parent_span_id AS parent_span_id,
+        o.start_time AS start_time,
+        o.end_time AS end_time,
+        coalesce(o.trace_name, o.name) AS name,
+        'SPAN' AS type,
+        coalesce(o.environment, '') AS environment,
+        coalesce(o.version, '') AS version,
+        coalesce(o.\`release\`, '') AS \`release\`,
+        coalesce(o.input, '') AS input,
+        coalesce(o.output, '') AS output,
+        coalesce(o.level, '') AS level,
+        coalesce(o.status_message, '') AS status_message,
+        o.completion_start_time AS completion_start_time,
+        '' AS prompt_id,
+        '' AS prompt_name,
+        '' AS prompt_version,
+        '' AS model_id,
+        '' AS provided_model_name,
+        '' AS model_parameters,
+        map() AS provided_usage_details,
+        map() AS usage_details,
+        map() AS provided_cost_details,
+        map() AS cost_details,
+        0 AS total_cost,
+        map() AS tool_definitions,
+        [] AS tool_calls,
+        [] AS tool_call_names,
+        o.metadata_names AS metadata_names,
+        o.metadata_values AS metadata_values,
+        coalesce(o.source, 'experiment-backfill') AS source,
+        o.tags AS tags,
+        o.bookmarked AS bookmarked,
+        o.\`public\` AS \`public\`,
+        coalesce(o.trace_name, o.name) AS trace_name,
+        coalesce(o.user_id, '') AS user_id,
+        coalesce(o.session_id, '') AS session_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY o.project_id, o.trace_id
+          ORDER BY o.event_ts DESC
+        ) AS rn
+      FROM events_full o
+      WHERE o.project_id IN ({projectIds: Array(String)})
+        AND o.trace_id IN ({traceIds: Array(String)})
+        AND o.parent_span_id = ''
+        AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
+    ) ranked
+    WHERE rn = 1
   `;
 
   type RawTraceRow = Omit<SpanRecord, "metadata"> & {
@@ -886,6 +920,11 @@ async function processExperimentBackfill(
 
     // Build a map of trace_id -> {userId, sessionId} for efficient lookup
     const tracePropertiesMap = new Map<string, TraceProperties>();
+    // OTel-only events_full: the trace's "root span" is the actual OTel root
+    // span (parent_span_id = ''), not a synthetic `t-<trace_id>` row. Build
+    // a trace_id -> rootSpanId lookup so DRIs that point at the trace (no
+    // observation_id) can find the real root span by its actual span_id.
+    const traceRootSpanIdMap = new Map<string, string>();
     for (const trace of traces) {
       tracePropertiesMap.set(trace.trace_id, {
         name: trace.name,
@@ -897,6 +936,7 @@ async function processExperimentBackfill(
         bookmarked: trace.bookmarked,
         public: trace.public,
       });
+      traceRootSpanIdMap.set(trace.trace_id, trace.span_id);
     }
 
     // Process each dataset run item
@@ -904,13 +944,15 @@ async function processExperimentBackfill(
     const processedSpanIds = new Set<string>();
 
     for (const dri of driChunk) {
-      // Find the root span (either observation or trace)
-      const rootSpanId = dri.observation_id || `t-${dri.trace_id}`;
-      const rootSpan = spanMap.get(rootSpanId);
+      // Find the root span (either the observation the DRI explicitly points
+      // at, or — for trace-level DRIs — the OTel root span of dri.trace_id).
+      const rootSpanId =
+        dri.observation_id ?? traceRootSpanIdMap.get(dri.trace_id) ?? "";
+      const rootSpan = rootSpanId ? spanMap.get(rootSpanId) : undefined;
 
       if (!rootSpan) {
         logger.warn(
-          `[EXPERIMENT BACKFILL] Root span ${rootSpanId} not found for DRI ${dri.id}, skipping`,
+          `[EXPERIMENT BACKFILL] Root span ${rootSpanId || "(unknown)"} not found for DRI ${dri.id} (trace ${dri.trace_id}), skipping`,
         );
         continue;
       }
