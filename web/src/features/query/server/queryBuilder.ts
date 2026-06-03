@@ -273,7 +273,8 @@ export class QueryBuilder {
     // e.g., "events_core events_traces" -> "events_traces"
     //       "traces FINAL"              -> "traces"  (FINAL is a modifier, not an alias)
     const parts = view.baseCte.split(/\s+/);
-    // FINAL, SAMPLE, PREWHERE are ClickHouse-specific modifiers that should be ignored when extracting alias
+    // FINAL, SAMPLE, PREWHERE are legacy CH modifiers that may still appear in
+    // imported baseCte strings; ignore them when extracting the alias.
     const dorisModifiers = new Set(["FINAL", "SAMPLE", "PREWHERE"]);
     if (parts.length >= 2 && !dorisModifiers.has(parts[1].toUpperCase())) {
       return parts[1];
@@ -721,15 +722,17 @@ export class QueryBuilder {
       }
 
       const relation = view.tableRelations[relationTableName];
-      let joinStatement = `LEFT JOIN ${relation.name} ${relation.joinConditionSql}`;
+      const aliasClause =
+        relation.name !== relationTableName ? ` AS ${relationTableName}` : "";
+      let joinStatement = `LEFT JOIN ${relation.name}${aliasClause} ${relation.joinConditionSql}`;
 
       // Create time dimension mapping for the relation table
       const relationTimeDimensionMapping = {
         uiTableName: relation.timeDimension,
         uiTableId: relation.timeDimension,
-        tableName: relation.name,
+        tableName: relationTableName,
         select: relation.timeDimension,
-        queryPrefix: relation.name,
+        queryPrefix: relationTableName,
         type: "datetime",
       };
 
@@ -1460,12 +1463,46 @@ export class QueryBuilder {
   }
 
   /**
+   * Rewrite legacy `metadata['key']` map subscripts (and the equivalent for
+   * experiment_item_metadata / experiment_metadata) to the events_full
+   * parallel-arrays idiom. Bare `metadata` references get prefixed with the
+   * view's base-table alias; explicitly qualified references (e.g. `t.metadata`)
+   * keep their prefix.
+   */
+  private rewriteEventsFullMetadataAccess(sql: string, alias: string): string {
+    // Longest-first so "experiment_metadata" and "experiment_item_metadata" are
+    // matched before "metadata" — otherwise the shorter pattern would replace
+    // the "metadata" suffix inside the longer field name.
+    const fields = [
+      "experiment_item_metadata",
+      "experiment_metadata",
+      "metadata",
+    ];
+    let rewritten = sql;
+    for (const field of fields) {
+      // \b before the field name prevents matching a longer identifier
+      // that happens to end with the field name (defense-in-depth against
+      // future field additions).
+      const pattern = new RegExp(
+        String.raw`(\w+\.)?\b` + field + String.raw`\[\s*'((?:[^']|'')*)'\s*\]`,
+        "g",
+      );
+      rewritten = rewritten.replace(pattern, (_, prefix, key) => {
+        const p = prefix ?? `${alias}.`;
+        return `element_at(${p}${field}_values, array_position(${p}${field}_names, '${key}'))`;
+      });
+    }
+    return rewritten;
+  }
+
+  /**
    * Convert SQL functions to Doris equivalents
    */
   private convertSqlFunctionsToDoris(sql: string): string {
-    // Replace position() function with INSTR() function for string operations
-    // position(field, 'value') = 0 -> INSTR(field, 'value') = 0
-    sql = sql.replace(/position\s*\(/g, "INSTR(");
+    // Replace bare position() with INSTR() for string operations.
+    // The lookbehind ensures we don't accidentally rewrite array_position(
+    // (which exists in Doris with the same name) into array_INSTR(.
+    sql = sql.replace(/(?<![A-Za-z0-9_])position\s*\(/g, "INSTR(");
 
     return sql;
   }
@@ -1590,15 +1627,19 @@ export class QueryBuilder {
         }
       } else if (filter.column === view.timeDimension) {
         select = view.timeDimension;
-        queryPrefix = tableName;
+        // queryPrefix must be the SQL alias (e.g. "traces"), not the
+        // physical table name (e.g. "events_full"). Otherwise the WHERE
+        // emits "events_full.start_time" which fails when baseCte aliases
+        // the table to a different name.
+        queryPrefix = this.tableAlias(view);
         type = "datetime";
       } else if (filter.column === "metadata") {
         select = "metadata";
-        queryPrefix = tableName;
+        queryPrefix = this.tableAlias(view);
         type = "stringObject";
       } else if (filter.column.endsWith("Name")) {
         select = "name";
-        queryPrefix = tableName;
+        queryPrefix = this.tableAlias(view);
         type = "string";
       } else {
         throw new InvalidRequestError(
@@ -1693,6 +1734,24 @@ export class QueryBuilder {
     );
 
     filterList.push(...projectIdFilter, ...fromFilter, ...toFilter);
+
+    if (view.segments.length > 0) {
+      const segmentsMappings = view.segments.map((segment) => ({
+        uiTableName: segment.column,
+        uiTableId: segment.column,
+        tableName: alias,
+        select: segment.column,
+        queryPrefix: alias,
+        type: segment.type,
+      }));
+
+      const segmentFilters = createDorisFilterFromFilterState(
+        view.segments,
+        segmentsMappings,
+      );
+      filterList.push(...segmentFilters);
+    }
+
     return filterList;
   }
 
@@ -1714,14 +1773,16 @@ export class QueryBuilder {
       }
 
       const relation = view.tableRelations[relationTableName];
-      let joinStatement = `LEFT JOIN ${relation.name} ${relation.joinConditionSql}`;
+      const aliasClause =
+        relation.name !== relationTableName ? ` AS ${relationTableName}` : "";
+      let joinStatement = `LEFT JOIN ${relation.name}${aliasClause} ${relation.joinConditionSql}`;
 
       const relationTimeDimensionMapping = {
         uiTableName: relation.timeDimension,
         uiTableId: relation.timeDimension,
-        tableName: relation.name,
+        tableName: relationTableName,
         select: relation.timeDimension,
-        queryPrefix: relation.name,
+        queryPrefix: relationTableName,
         type: "datetime",
       };
 
@@ -1870,9 +1931,17 @@ export class QueryBuilder {
       Object.assign(parameters, part.params);
     }
 
-    // Append raw SQL filter if provided
+    // Append raw SQL filter if provided.
+    // The events_full schema stores metadata as parallel arrays, not a Map.
+    // Rewrite metadata['key'] style access (familiar from langfuse v3 CH)
+    // to Doris's element_at(values, array_position(names, key)) idiom so
+    // user-written widget SQL keeps working without per-key Doris knowledge.
     if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
-      fromClause += ` AND (${query.rawSqlFilter.trim()})`;
+      const rewritten = this.rewriteEventsFullMetadataAccess(
+        query.rawSqlFilter.trim(),
+        this.tableAlias(view),
+      );
+      fromClause += ` AND (${rewritten})`;
     }
 
     // Build inner SELECT parts
