@@ -81,8 +81,9 @@ export type TracesMetricsUiReturnType = {
 export const convertToUiTableRows = (
   row: TracesTableReturnType,
 ): TracesTableUiReturnType => {
-  // Handle timestamp format differences between ClickHouse (string) and Doris (Date object)
-  // Use type assertion since TypeScript doesn't know the runtime type can be Date | string
+  // Doris (via mysql2) returns timestamps as Date objects, but some callers
+  // (e.g. legacy paths or JSON-roundtripped rows) supply ISO strings; accept
+  // both. TypeScript can't narrow Date | string at runtime so we type-assert.
   const timestampValue = row.timestamp as unknown;
   const timestamp =
     timestampValue instanceof Date
@@ -169,7 +170,7 @@ export const convertToUITableMetrics = (
 };
 
 export type FetchTracesTableProps = {
-  select: "count" | "rows" | "metrics" | "identifiers";
+  select: "count" | "rows" | "metrics" | "identifiers" | "largeFieldStats";
   projectId: string;
   filter: FilterState;
   searchQuery?: string;
@@ -186,6 +187,11 @@ type SelectReturnTypeMap = {
   metrics: TracesTableMetricsDorisReturnType;
   rows: TracesTableReturnType;
   identifiers: { id: string; projectId: string; timestamp: string };
+  largeFieldStats: {
+    avg_input_bytes: string | number | null;
+    avg_output_bytes: string | number | null;
+    avg_metadata_bytes: string | number | null;
+  };
 };
 
 // Function overloads for type-safe select-specific returns
@@ -204,6 +210,10 @@ async function getTracesTableGeneric(
 async function getTracesTableGeneric(
   props: FetchTracesTableProps & { select: "identifiers" },
 ): Promise<Array<SelectReturnTypeMap["identifiers"]>>;
+
+async function getTracesTableGeneric(
+  props: FetchTracesTableProps & { select: "largeFieldStats" },
+): Promise<Array<SelectReturnTypeMap["largeFieldStats"]>>;
 
 // Implementation with union type for internal use
 async function getTracesTableGeneric(
@@ -230,9 +240,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       break;
     case "metrics":
       sqlSelect = `
-        t.id as id,
+        t.trace_id as id,
         t.project_id as project_id,
-        t.timestamp as timestamp,
+        t.start_time as ${dq("timestamp")},
         os.latency_milliseconds / 1000 as latency,
         os.cost_details as cost_details,
         os.usage_details as usage_details,
@@ -247,13 +257,19 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         t.${dq("public")} as ${dq("public")}`;
       break;
     case "rows":
+      // `t` is `events_full` filtered to the root span (parent_span_id =
+      // ''). `t.name` is the *root span's own* name, e.g.
+      // "advanced-generation-…"; `t.trace_name` is the trace-level name
+      // denormalised onto every row by createEventRecord. The trace
+      // list UI must show the latter — fall back to `t.name` only when
+      // the SDK didn't set a trace name (legacy clients).
       sqlSelect = `
-        t.id as id,
+        t.trace_id as id,
         t.project_id as project_id,
-        t.timestamp as timestamp,
+        t.start_time as ${dq("timestamp")},
         t.tags as tags,
         t.bookmarked as bookmarked,
-        t.name as name,
+        IF(t.trace_name <> '', t.trace_name, t.name) as name,
         t.${dq("release")} as ${dq("release")},
         t.version as version,
         t.user_id as user_id,
@@ -263,9 +279,18 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       break;
     case "identifiers":
       sqlSelect = `
-        t.id as id,
+        t.trace_id as id,
         t.project_id as projectId,
-        t.timestamp as timestamp`;
+        t.start_time as ${dq("timestamp")}`;
+      break;
+    case "largeFieldStats":
+      sqlSelect = `
+        AVG(COALESCE(CHAR_LENGTH(CAST(t.input AS STRING)), 0)) as avg_input_bytes,
+        AVG(COALESCE(CHAR_LENGTH(CAST(t.output AS STRING)), 0)) as avg_output_bytes,
+        AVG(
+          COALESCE(CHAR_LENGTH(CAST(t.metadata_names AS STRING)), 0) +
+          COALESCE(CHAR_LENGTH(CAST(t.metadata_values AS STRING)), 0)
+        ) as avg_metadata_bytes`;
       break;
     default:
       throw new Error(`Unknown select type: ${select}`);
@@ -314,7 +339,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
 
   const timeStampFilter = tracesFilter.find(
     (f) =>
-      f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
+      f.field === "start_time" && (f.operator === ">=" || f.operator === ">"),
   ) as DorisDateTimeFilter | undefined;
 
   const requiresScoresJoin =
@@ -348,7 +373,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const orderByCols = [
     ...tracesTableUiColumnDefinitionsForDoris,
     {
-      select: "DATE(t.timestamp)",
+      select: "DATE(t.start_time)",
       uiTableName: "timestamp_to_date",
       uiTableId: "timestamp_to_date",
       tableName: "traces",
@@ -426,8 +451,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
               start_time,
               end_time,
               total_cost
-            FROM observations o
+            FROM events_full o
             WHERE project_id = {projectId: String}
+            AND parent_span_id != ''
             ${timeStampFilter ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
             ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
           ) obs
@@ -438,9 +464,10 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             map_agg(usage_key, usage_sum) as usage_details
           FROM (
             SELECT o.trace_id, o.project_id, usage_key, sum(usage_value) as usage_sum
-            FROM observations o
+            FROM events_full o
             LATERAL VIEW explode_map(usage_details) usage_exploded AS usage_key, usage_value
             WHERE o.project_id = {projectId: String}
+            AND o.parent_span_id != ''
             ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
             ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
             AND usage_details IS NOT NULL
@@ -453,9 +480,10 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             map_agg(cost_key, cost_sum) as cost_details
           FROM (
             SELECT o.trace_id, o.project_id, cost_key, sum(cost_value) as cost_sum
-            FROM observations o
+            FROM events_full o
             LATERAL VIEW explode_map(cost_details) cost_exploded AS cost_key, cost_value
             WHERE o.project_id = {projectId: String}
+            AND o.parent_span_id != ''
             ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
             ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
             AND cost_details IS NOT NULL
@@ -531,11 +559,12 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const query = `
       ${withClause ? `WITH ${withClause}` : ""}
       SELECT ${dorisHint} ${sqlSelect}
-      FROM traces t
-      ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.id` : ""}
-      ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.id` : ""}
+      FROM events_full t
+      ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.trace_id` : ""}
+      ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
       WHERE t.project_id = {projectId: String}
-      ${timeStampFilter ? `AND t.timestamp_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
+      AND t.parent_span_id = ''
+      ${timeStampFilter ? `AND t.start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
       ${tracesFilterRes ? `AND ${tracesFilterRes.query}` : ""}
       ${search.query}
       ${dorisOrderBy}
@@ -550,8 +579,8 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     // scores_avg: Array of struct objects ({col1, col2} from Doris struct), or JSON string
     scores_avg: string | Array<Record<string, unknown>>;
     score_categories: string | Array<string>; // Array<"name:value"> or JSON string
-    usage_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
-    cost_details: string | Record<string, number> | null; // Doris returns string, ClickHouse returns object
+    usage_details: string | Record<string, number> | null; // Doris MAP comes back as a JSON string; accept the parsed object too for callers that pre-parse
+    cost_details: string | Record<string, number> | null;
   };
 
   const res = await queryDoris<SelectReturnTypeMap[keyof SelectReturnTypeMap]>({
@@ -580,7 +609,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     },
   });
 
-  // Post-process Doris results to match ClickHouse format
+  // Post-process Doris results into the object shape downstream consumers expect.
   if (select === "metrics") {
     const processedRes = (res as unknown as DorisMetricsReturnType[]).map(
       (row) => {
@@ -592,12 +621,12 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             return {};
           }
 
-          // If already an object (ClickHouse format), return as is
+          // If already an object, return as is
           if (typeof details === "object" && !Array.isArray(details)) {
             return details;
           }
 
-          // If it's a string (Doris format), parse it
+          // If it's a string (typical Doris MAP output), parse it
           if (typeof details === "string") {
             const trimmed = details.trim();
 
@@ -634,10 +663,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           return {};
         };
 
-        // Convert Doris struct array format to ClickHouse object array format.
-        // Doris SQL now produces Array<Struct(name, avg_value)>. The mysql driver
-        // serializes struct elements as {"col1": name, "col2": avg_value}.
-        // We convert to {name, avg_value} to match CK's Array<Tuple> output shape.
+        // Normalize the Array<Struct(name, avg_value)> that Doris returns.
+        // The mysql driver serializes struct elements as
+        // {"col1": name, "col2": avg_value}; we rename to {name, avg_value}.
         const parsedScoresAvg: Array<{ name: string; avg_value: number }> = [];
 
         let scoresAvgRaw: unknown[] = [];
@@ -678,7 +706,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           scoreCategoriesArray = row.score_categories;
         }
 
-        // Return row with ClickHouse-compatible format
+        // Return row with parsed array/object values
         return {
           ...row,
           scores_avg: parsedScoresAvg,
@@ -825,11 +853,31 @@ export const getTraceIdentifiers = async (props: {
   return identifiers.map((row) => ({
     id: row.id,
     projectId: row.projectId,
-    // Handle timestamp format differences between ClickHouse (string) and Doris (Date object)
-    // Use type assertion since TypeScript doesn't know the runtime type can be Date | string
+    // Doris (via mysql2) returns timestamps as Date objects, but some callers
+    // (e.g. legacy paths or JSON-roundtripped rows) supply ISO strings; accept
+    // both. TypeScript can't narrow Date | string at runtime so we type-assert.
     timestamp:
       (row.timestamp as unknown) instanceof Date
         ? (row.timestamp as unknown as Date)
         : parseDorisUTCDateTimeFormat(row.timestamp),
   }));
+};
+
+export const getTracesTableLargeFieldStats = async (props: {
+  projectId: string;
+  filter: FilterState;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
+}) => {
+  const [row] = await getTracesTableGeneric({
+    select: "largeFieldStats",
+    tags: { kind: "analytic" },
+    ...props,
+  });
+
+  return {
+    avgInputBytes: Number(row?.avg_input_bytes ?? 0),
+    avgOutputBytes: Number(row?.avg_output_bytes ?? 0),
+    avgMetadataBytes: Number(row?.avg_metadata_bytes ?? 0),
+  };
 };

@@ -16,6 +16,14 @@ const LAST_PROCESSED_PARTITION_KEY =
   "langfuse:event-propagation:last-processed-partition";
 
 /**
+ * Retire sentinel used by handleEventPropagationJob below. Defined as a
+ * function so TypeScript does not constant-fold the value and mark the
+ * rest of the function body unreachable — we want type-checking of the
+ * preserved-for-reference original body to continue working.
+ */
+const isRetired = (): boolean => true;
+
+/**
  * Get the last processed partition timestamp from Redis.
  * Returns null if no partition has been processed yet or if Redis is unavailable.
  */
@@ -54,6 +62,15 @@ export const updateLastProcessedPartition = async (
  * events to the events table. Uses cursor-based sequential processing to track
  * the last processed partition and always processes the next partition in order.
  * Relies on table TTL for partition cleanup instead of explicit DROP PARTITION.
+ *
+ * NOTE (master events_full migration): This job is **retired**. It targeted an
+ * intermediate langfuse-main v4 design (observations_batch_staging → events
+ * staging → events_full propagation) that langfuse-main has since abandoned —
+ * spans are now written directly to events_full via OTel ingestion +
+ * IngestionService.writeEventRecord. Neither observations_batch_staging nor
+ * the legacy `events` table exists in this fork. The function body below is
+ * preserved as reference and never executes; the BullMQ Processor still
+ * invokes it as a no-op so the queue plumbing stays intact.
  */
 export const handleEventPropagationJob = async (
   job: Job<TQueueJobTypes[QueueName.EventPropagationQueue]>,
@@ -62,6 +79,20 @@ export const handleEventPropagationJob = async (
     "messaging.bullmq.job.input.jobId",
     job.data.id,
   );
+
+  // Retired: see header comment. events_full is populated directly by the
+  // OTel ingestion path (IngestionService.writeEventRecord), so the
+  // partition-by-partition staging propagation below is no longer load-
+  // bearing. The retire check goes through a function call (isRetired)
+  // so TypeScript does not constant-fold it and mark the rest of the
+  // body unreachable — that's how the original code stays type-checked
+  // while never executing.
+  if (isRetired()) {
+    logger.info(
+      "[event-propagation] handler is retired (no-op); events_full is now written directly via OTel ingestion",
+    );
+    return;
+  }
 
   if (env.LANGFUSE_EXPERIMENT_EARLY_EXIT_EVENT_BATCH_JOB === "true") {
     logger.info(

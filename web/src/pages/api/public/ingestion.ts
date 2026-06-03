@@ -7,6 +7,7 @@ import {
   logger,
   getCurrentSpan,
   contextWithLangfuseProps,
+  eventTypes,
 } from "@langfuse/shared/src/server";
 import { telemetry } from "@/src/features/telemetry";
 import { jsonSchema } from "@langfuse/shared";
@@ -127,6 +128,44 @@ export default async function handler(
         return res.status(400).json({
           message: "Invalid request data",
           errors: parsedSchema.error.issues.map((issue) => issue.message),
+        });
+      }
+
+      // OTel-only contract: /api/public/ingestion only accepts the two
+      // langfuse-native event types that have no OTel equivalent (scores +
+      // SDK self-telemetry). trace-create / observation-create / span-create /
+      // generation-create / *-update / etc. must go through
+      // /api/public/otel/v1/traces. We reject the whole batch — clearer
+      // upgrade signal than a partial 207 — when any unsupported event
+      // type slips in.
+      const ALLOWED_EVENT_TYPES = new Set<string>([
+        eventTypes.SCORE_CREATE,
+        eventTypes.SDK_LOG,
+      ]);
+      const rejected = new Set<string>();
+      for (const raw of parsedSchema.data.batch) {
+        if (
+          typeof raw === "object" &&
+          raw !== null &&
+          "type" in raw &&
+          typeof (raw as { type: unknown }).type === "string"
+        ) {
+          const type = (raw as { type: string }).type;
+          if (!ALLOWED_EVENT_TYPES.has(type)) {
+            rejected.add(type);
+          }
+        } else {
+          rejected.add("<missing-or-malformed-type>");
+        }
+      }
+      if (rejected.size > 0) {
+        return res.status(400).json({
+          error: "UnsupportedEventTypes",
+          message:
+            "Master fork only accepts score-create / sdk-log events on " +
+            "/api/public/ingestion. Use OTel via /api/public/otel/v1/traces " +
+            "for trace and observation events (Python SDK >= 4.0.0 or JS SDK >= 5.0.0).",
+          rejectedTypes: Array.from(rejected),
         });
       }
 

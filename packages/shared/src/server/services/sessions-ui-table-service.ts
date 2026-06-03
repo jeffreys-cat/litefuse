@@ -186,10 +186,13 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
 
   const filters = [];
   if (traceTimestampFilter) {
+    // events_full uses start_time (not timestamp). The CTE this filter
+    // lands inside is FROM events_full t, so the bare column reference
+    // resolves against the events_full schema.
     filters.push(
       new DorisDateTimeFilter({
         table: "traces",
-        field: "timestamp",
+        field: "start_time",
         operator: traceTimestampFilter.operator,
         value: traceTimestampFilter.value,
       }),
@@ -254,27 +257,39 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
   // which would multiply cost/token metrics by the number of tags per trace.
   // Also, usage/cost key matching uses substring matching (LIKE '%input%') instead
   // of exact key matching, to include keys like cache_read_input_tokens and
-  // cache_creation_input_tokens — matching ClickHouse's positionCaseInsensitive behavior.
+  // cache_creation_input_tokens — mirroring upstream's positionCaseInsensitive behavior.
   const query = `
-        WITH deduplicated_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM traces t
+        WITH filtered_traces AS (
+          -- Doris Unique Key + Merge-on-Write guarantees a single row per
+          -- (project_id, start_time_date, span_id). The legacy CK-style
+          -- ROW_NUMBER() OVER (PARTITION BY trace_id ORDER BY event_ts DESC)
+          -- dedup is unnecessary here; the only residual edge case is a
+          -- single trace whose start_time crosses a monthly partition
+          -- boundary (multiple start_time_date rows for the same
+          -- trace_id) — extremely rare in practice and considered
+          -- acceptable noise.
+          -- Project start_time without aliasing to "timestamp" so the
+          -- singleTraceFilter SQL (which references the bare column name
+          -- start_time) works identically in this CTE body AND in the
+          -- session_data WHERE clause below — both query against
+          -- filtered_traces. Aliasing here previously broke the second
+          -- usage with "Unknown column 'start_time'".
+          SELECT trace_id AS id, session_id, project_id, bookmarked,
+                 start_time,
+                 user_id, tags, environment, event_ts
+          FROM events_full t
           WHERE t.session_id IS NOT NULL
             AND t.project_id = {projectId: String}
+            AND t.parent_span_id = ''
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
-        ),
-        filtered_traces AS (
-          SELECT id, session_id, project_id, bookmarked, timestamp, user_id, tags, environment, event_ts
-          FROM deduplicated_traces
-          WHERE rn = 1
         ),
         ${
           selectMetrics
             ? `filtered_observations AS (
-            SELECT id, trace_id, project_id, start_time, end_time, usage_details, cost_details, event_ts
-            FROM observations o
+            SELECT span_id AS id, trace_id, project_id, start_time, end_time, usage_details, cost_details, total_cost, event_ts
+            FROM events_full o
             WHERE o.project_id = {projectId: String}
+            AND o.parent_span_id != ''
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
             AND o.trace_id IN (
               SELECT id
@@ -288,13 +303,15 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                   max(o.end_time) as max_end_time,
                   -- Use substring matching on map keys to include all input/output related keys
                   -- (e.g. input, cache_read_input_tokens, cache_creation_input_tokens)
-                  -- matching ClickHouse's positionCaseInsensitive behavior
+                  -- mirroring upstream's positionCaseInsensitive behavior
                   sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_input_usage,
                   sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_output_usage,
                   sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'total') THEN usage_details['total'] ELSE 0 END) as sum_total_usage,
                   sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_input_cost,
                   sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_output_cost,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN cost_details['total'] ELSE 0 END) as sum_total_cost,
+                  -- total_cost is a denormalized column on events_full populated by the ingestion writer
+                  -- (cost_details['total']). Use it directly instead of re-extracting from the map.
+                  sum(COALESCE(o.total_cost, 0)) as sum_total_cost,
                   any_value(project_id) as project_id
             FROM filtered_observations o
             WHERE o.project_id = {projectId: String}
@@ -320,7 +337,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         ${
           requiresScoresJoin
             ? `scores_agg AS (
-          -- Aggregate scores by scores.session_id, matching upstream ClickHouse.
+          -- Aggregate scores by scores.session_id, mirroring upstream.
           -- Trace-level scores (session_id NULL) aggregate into a NULL group that
           -- the outer LEFT JOIN (t.session_id = s.score_session_id) silently drops,
           -- so the Sessions list only reflects scores attached directly to a
@@ -353,8 +370,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             SELECT
                 t.session_id,
                 any_value(t.project_id) as project_id,
-                max(t.timestamp) as max_timestamp,
-                min(t.timestamp) as min_timestamp,
+                max(t.start_time) as max_timestamp,
+                min(t.start_time) as min_timestamp,
                 collect_list(DISTINCT t.id) AS trace_ids,
                 collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
                 count(DISTINCT t.id) as trace_count,
@@ -364,7 +381,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                     ? `
                 ,
                 sum(o.obs_count) as total_observations,
-                -- Use seconds_diff for duration calculation in Doris (ClickHouse uses date_diff('second',...))
+                -- Use Doris seconds_diff for duration calculation
                 seconds_diff(
                   max(o.max_end_time),
                   CASE WHEN min(o.min_start_time) > '1970-01-01' THEN min(o.min_start_time) ELSE NULL END
@@ -460,7 +477,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     return {};
   };
 
-  // Post-process Doris results to match ClickHouse format
+  // Post-process Doris results into the object shape downstream consumers expect
   if (select === "metrics") {
     const processedRes = (
       res as Array<
@@ -478,7 +495,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           return {};
         }
 
-        // If already an object (ClickHouse format), return as is
+        // If already an object, return as is
         if (typeof details === "object" && !Array.isArray(details)) {
           return details;
         }
@@ -516,7 +533,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         return {};
       };
 
-      // Return row with ClickHouse-compatible format
+      // Return row with parsed object values
       return {
         ...row,
         session_usage_details: parseDetails(row.session_usage_details),

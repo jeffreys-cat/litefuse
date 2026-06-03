@@ -601,12 +601,18 @@ export class DorisClient {
           errorMessage = result;
         }
 
-        logger.debug("DorisClient: Stream load failed", {
+        logger.error("DorisClient: Stream load failed (verbose)", {
           responseData: result,
           errorMessage,
         });
 
-        throw new Error(`Stream load failed: ${errorMessage}`);
+        // Include ErrorURL in the thrown error so logs are usable for debugging
+        // without needing to crank LOG_LEVEL to debug.
+        const errorUrlSuffix =
+          result && (result.ErrorURL || result.errorURL)
+            ? ` (ErrorURL: ${result.ErrorURL ?? result.errorURL})`
+            : "";
+        throw new Error(`Stream load failed: ${errorMessage}${errorUrlSuffix}`);
       }
 
       if (env.LANGFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
@@ -859,6 +865,11 @@ const DATE_FIELD_MAPPINGS = {
   traces: { sourceField: "timestamp", dateField: "timestamp_date" },
   scores: { sourceField: "timestamp", dateField: "timestamp_date" },
   observations: { sourceField: "start_time", dateField: "start_time_date" },
+  // events_full uses observation-shaped timestamps (start_time + start_time_date
+  // partition key). Explicit mapping prevents formatDataForDoris from falling
+  // back to the dual-column branch (which would also synthesize a stray
+  // `timestamp_date` field that events_full doesn't have).
+  events_full: { sourceField: "start_time", dateField: "start_time_date" },
 } as const;
 
 /**

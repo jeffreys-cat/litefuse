@@ -14,6 +14,7 @@ import {
   dorisSearchCondition,
   parseDorisUTCDateTimeFormat,
   StringFilter,
+  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { Readable } from "stream";
 import { env } from "../../env";
@@ -102,8 +103,22 @@ export const getTraceStream = async (props: {
     hasTracesJoin: false,
   });
 
-  // Doris doesn't have FINAL modifier or LIMIT 1 BY, so we use ROW_NUMBER() for deduplication
-  // Note: release is a Doris reserved word, so we use trace_release as alias
+  // Aggregate trace fields from events_full using the two-CTE pattern that
+  // mirrors langfuse-main's eventsTracesAggregation:
+  //   * trace_scalars: scalar trace-level fields via MAX_BY(IF(cond, val, NULL), event_ts)
+  //     equivalent to upstream's argMaxIf.
+  //   * trace_root: tags / metadata / input / output picked from the latest
+  //     parent_span_id = '' root span via ROW_NUMBER(). Reads events_full_view
+  //     so GENERATION input hashes get rehydrated.
+  // tracesTableUiColumnDefinitions / tracesFilter target column names
+  // (timestamp, release, ...) compatible with the legacy traces table —
+  // they apply at the trace_scalars level before the LEFT JOIN. Filter
+  // params resolve in the events_full WHERE because we don't alias the
+  // trace_scalars CTE inputs.
+  //
+  // metadata is rebuilt at output time from metadata_names / metadata_values
+  // parallel arrays (events_full layout) into a Doris MAP that downstream
+  // export consumers can serialize.
   const query = `
     WITH scores_agg AS (
       SELECT
@@ -133,54 +148,78 @@ export const getTraceStream = async (props: {
       ) tmp
       GROUP BY project_id, trace_id
     ),
-traces_with_rn AS (
+    trace_scalars AS (
       SELECT
-        t.id as id,
-        t.project_id as project_id,
-        t.timestamp as timestamp,
-        t.name as name,
-        t.user_id as user_id,
-        t.session_id as session_id,
-        t.\`release\` as \`release\`,
-        t.version as version,
-        t.environment as environment,
-        t.tags as tags,
-        t.bookmarked as bookmarked,
-        t.public as public,
-        t.input as input,
-        t.output as output,
-        t.metadata as metadata,
-        s.scores_avg as scores_avg,
-        s.score_categories as score_categories,
-        s.score_categories_tuples as score_categories_tuples,
-        ROW_NUMBER() OVER (PARTITION BY t.id, t.project_id ORDER BY t.timestamp DESC) as rn
-      FROM traces t
-        LEFT JOIN scores_agg s ON s.trace_id = t.id AND s.project_id = t.project_id
-      WHERE t.project_id = {projectId: String}
+        trace_id,
+        project_id,
+        MIN(start_time) AS \`timestamp\`,
+        MAX_BY(IF(trace_name <> '', trace_name, NULL), event_ts) AS name,
+        MAX_BY(IF(user_id <> '', user_id, NULL), event_ts) AS user_id,
+        MAX_BY(IF(session_id <> '', session_id, NULL), event_ts) AS session_id,
+        MAX_BY(IF(\`release\` <> '', \`release\`, NULL), event_ts) AS \`release\`,
+        MAX_BY(IF(version <> '', version, NULL), event_ts) AS version,
+        MAX_BY(IF(environment <> '', environment, NULL), event_ts) AS environment,
+        MAX_BY(IF(parent_span_id = '', bookmarked, NULL), event_ts) AS bookmarked,
+        MAX(\`public\`) AS \`public\`
+      FROM events_full
+      WHERE project_id = {projectId: String}
         ${appliedTracesFilter.query ? `AND ${appliedTracesFilter.query}` : ""}
         ${search.query}
+      GROUP BY trace_id, project_id
+    ),
+    trace_root AS (
+      SELECT
+        trace_id,
+        project_id,
+        tags,
+        input,
+        output,
+        metadata_names,
+        metadata_values
+      FROM (
+        SELECT
+          trace_id,
+          project_id,
+          tags,
+          input,
+          output,
+          metadata_names,
+          metadata_values,
+          ROW_NUMBER() OVER (
+            PARTITION BY trace_id, project_id
+            ORDER BY event_ts DESC
+          ) AS rn
+        FROM events_full_view
+        WHERE project_id = {projectId: String}
+          AND parent_span_id = ''
+      ) ranked
+      WHERE rn = 1
     )
     SELECT
-      id,
-      project_id,
-      timestamp,
-      name,
-      user_id,
-      session_id,
-      \`release\`,
-      version,
-      environment,
-      tags,
-      bookmarked,
-      public,
-      input,
-      output,
-      metadata,
-      scores_avg,
-      score_categories,
-      score_categories_tuples
-    FROM traces_with_rn
-    WHERE rn = 1
+      s.trace_id AS id,
+      s.project_id AS project_id,
+      s.\`timestamp\` AS \`timestamp\`,
+      s.name AS name,
+      s.user_id AS user_id,
+      s.session_id AS session_id,
+      s.\`release\` AS \`release\`,
+      s.version AS version,
+      s.environment AS environment,
+      r.tags AS tags,
+      s.bookmarked AS bookmarked,
+      s.\`public\` AS \`public\`,
+      r.input AS input,
+      r.output AS output,
+      r.metadata_names AS metadata_names,
+      r.metadata_values AS metadata_values,
+      sa.scores_avg AS scores_avg,
+      sa.score_categories AS score_categories,
+      sa.score_categories_tuples AS score_categories_tuples
+    FROM trace_scalars s
+    LEFT JOIN trace_root r
+      ON r.trace_id = s.trace_id AND r.project_id = s.project_id
+    LEFT JOIN scores_agg sa
+      ON sa.trace_id = s.trace_id AND sa.project_id = s.project_id
     LIMIT {rowLimit: Int64}
     `;
 
@@ -199,7 +238,10 @@ traces_with_rn AS (
     public: boolean;
     input: unknown;
     output: unknown;
-    metadata: unknown;
+    // events_full layout: metadata is split across two parallel arrays;
+    // we zip them in the processor below for export.
+    metadata_names: unknown;
+    metadata_values: unknown;
     scores_avg: string | undefined;
     score_categories: string | undefined;
     score_categories_tuples: string | undefined;
@@ -272,7 +314,12 @@ traces_with_rn AS (
           public: bufferedRow.public,
           input: bufferedRow.input,
           output: bufferedRow.output,
-          metadata: bufferedRow.metadata,
+          // Rebuild metadata Map from parallel arrays for downstream export
+          // consumers that expect Record<string, string>.
+          metadata: zipDorisMetadataArrays(
+            bufferedRow.metadata_names,
+            bufferedRow.metadata_values,
+          ),
           scores: outputScores,
           comments: traceComments,
         },

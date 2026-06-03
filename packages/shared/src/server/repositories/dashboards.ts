@@ -50,7 +50,7 @@ export const getScoreAggregate = async (
 
   const timeFilter = dorisFilter.find(
     (f) =>
-      f.field === "timestamp" && (f.operator === ">=" || f.operator === ">"),
+      f.field === "start_time" && (f.operator === ">=" || f.operator === ">"),
   ) as DorisDateTimeFilter | undefined;
 
   const dorisFilterApplied = dorisFilter.apply();
@@ -66,11 +66,11 @@ export const getScoreAggregate = async (
         s.source,
         s.data_type
       FROM scores s
-      ${hasTraceFilter ? `JOIN traces t ON t.id = s.trace_id AND t.project_id = s.project_id` : ""}
+      ${hasTraceFilter ? `JOIN events_full t ON t.trace_id = s.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''` : ""}
       WHERE s.project_id = {projectId: String}
       ${dorisFilterApplied.query ? `AND ${dorisFilterApplied.query}` : ""}
       ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
-      ${timeFilter && hasTraceFilter ? `AND t.timestamp >= DATE_SUB({tracesTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+      ${timeFilter && hasTraceFilter ? `AND t.start_time >= DATE_SUB({tracesTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
       GROUP BY s.name, s.source, s.data_type
       ORDER BY count(*) DESC
       `;
@@ -136,7 +136,7 @@ export const getObservationCostByTypeByTime = async (
     orderByTimeSeriesDoris(filter, "start_time");
 
   // Doris UNIQUE KEY 保证数据唯一性，无需去重
-  // 使用 collect_list 模拟 ClickHouse 的 groupArray 结构
+  // 用 collect_list 构造与上游等价的 groupArray 结构
   const query = `
       SELECT 
           start_time,
@@ -146,18 +146,18 @@ export const getObservationCostByTypeByTime = async (
               ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "start_time", "start_time")},
               keys_exploded.cost_key as cost_key, 
               SUM(values_exploded.cost_value) AS cost_sum
-          FROM observations o
+          FROM events_full o
           LATERAL VIEW posexplode(map_keys(cost_details)) keys_exploded AS key_pos, cost_key
           LATERAL VIEW posexplode(map_values(cost_details)) values_exploded AS value_pos, cost_value
-          ${tracesFilter ? `LEFT JOIN traces t ON o.trace_id = t.id AND o.project_id = t.project_id` : ""}
+          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
-          ${timeFilter ? `AND t.timestamp >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+          ${timeFilter ? `AND t.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
           AND cost_details IS NOT NULL
           AND keys_exploded.key_pos = values_exploded.value_pos
-          GROUP BY 
-              start_time, 
+          GROUP BY
+              start_time,
               cost_key
       ) subquery
       GROUP BY 
@@ -187,7 +187,7 @@ export const getObservationCostByTypeByTime = async (
     },
   });
 
-  // 解析字符串格式的 costs，转换为与 ClickHouse 相同的元组格式
+  // 解析字符串格式的 costs，转换为与上游一致的元组格式
   const processedResult = result.map((row) => {
     let costArray: string[] = [];
 
@@ -212,7 +212,7 @@ export const getObservationCostByTypeByTime = async (
     };
   });
 
-  // 使用与 ClickHouse 相同的处理逻辑
+  // 与上游同款处理逻辑
   const types = processedResult.flatMap((row) => {
     return row.costs.map((cost) => cost[0]);
   });
@@ -267,7 +267,7 @@ export const getObservationUsageByTypeByTime = async (
     orderByTimeSeriesDoris(filter, "start_time");
 
   // Doris UNIQUE KEY 保证数据唯一性，无需去重
-  // 使用 collect_list 模拟 ClickHouse 的 groupArray 结构
+  // 用 collect_list 构造与上游等价的 groupArray 结构
   const query = `
       SELECT 
           start_time,
@@ -277,18 +277,18 @@ export const getObservationUsageByTypeByTime = async (
               ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "start_time", "start_time")},
               keys_exploded.usage_key as usage_key, 
               SUM(values_exploded.usage_value) AS usage_sum
-          FROM observations o
+          FROM events_full o
           LATERAL VIEW posexplode(map_keys(usage_details)) keys_exploded AS key_pos, usage_key
           LATERAL VIEW posexplode(map_values(usage_details)) values_exploded AS value_pos, usage_value
-          ${tracesFilter ? `LEFT JOIN traces t ON o.trace_id = t.id AND o.project_id = t.project_id` : ""}
+          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
-          ${timeFilter ? `AND t.timestamp >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+          ${timeFilter ? `AND t.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
           AND usage_details IS NOT NULL
           AND keys_exploded.key_pos = values_exploded.value_pos
-          GROUP BY 
-              start_time, 
+          GROUP BY
+              start_time,
               usage_key
       ) subquery
       GROUP BY 
@@ -318,7 +318,7 @@ export const getObservationUsageByTypeByTime = async (
     },
   });
 
-  // 解析字符串格式的 usages，转换为与 ClickHouse 相同的元组格式
+  // 解析字符串格式的 usages，转换为与上游一致的元组格式
   const processedResult = result.map((row) => {
     let usageArray: string[] = [];
 
@@ -343,7 +343,7 @@ export const getObservationUsageByTypeByTime = async (
     };
   });
 
-  // 使用与 ClickHouse 相同的处理逻辑
+  // 与上游同款处理逻辑
   const types = processedResult.flatMap((row) => {
     return row.usages.map((usage) => usage[0]);
   });

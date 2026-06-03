@@ -199,9 +199,11 @@ export const createEvent = (
   const {
     metadata_values: metadataValuesAlias,
     metadata_names: metadataNamesOverride,
-    metadata_raw_values: metadataRawValuesOverride,
+    metadata: metadataOverride,
     ...eventOverrides
-  } = event;
+  } = event as typeof event & {
+    metadata?: Record<string, string>;
+  };
 
   // Default metadata to populate arrays from
   const defaultMetadata: Record<string, string> = {
@@ -212,7 +214,7 @@ export const createEvent = (
   // Merge default metadata with any provided metadata
   const finalMetadata: Record<string, string> = {
     ...defaultMetadata,
-    ...eventOverrides.metadata,
+    ...(metadataOverride ?? {}),
   };
 
   // Extract metadata keys and values in sorted order for deterministic array population
@@ -268,12 +270,9 @@ export const createEvent = (
     input: "Hello World",
     output: "Hello John",
 
-    // Metadata - populate both JSON and array columns
-    // metadata_values alias maps to metadata_raw_values (events table column name)
-    metadata: finalMetadata,
+    // Metadata - parallel arrays (matches events_full V4 layout)
     metadata_names: metadataNamesOverride ?? metadataNames,
-    metadata_raw_values:
-      metadataValuesAlias ?? metadataRawValuesOverride ?? metadataValues,
+    metadata_values: metadataValuesAlias ?? metadataValues,
 
     // Experiment properties
     experiment_id: null,

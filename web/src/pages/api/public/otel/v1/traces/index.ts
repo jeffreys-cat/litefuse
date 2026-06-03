@@ -1,6 +1,7 @@
 import { withMiddlewares } from "@/src/features/public-api/server/withMiddlewares";
 import { createAuthedProjectAPIRoute } from "@/src/features/public-api/server/createAuthedProjectAPIRoute";
 import {
+  checkHeaderBasedDirectWrite,
   logger,
   OtelIngestionProcessor,
   markProjectAsOtelUser,
@@ -112,10 +113,6 @@ export default withMiddlewares({
         }
       }
 
-      if (!resourceSpans || resourceSpans.length === 0) {
-        return {};
-      }
-
       // Extract SDK headers for write path decision (supports both hyphen and underscore formats)
       const sdkName = getLangfuseHeader(req.headers, "x-langfuse-sdk-name");
       const sdkVersion = getLangfuseHeader(
@@ -128,7 +125,6 @@ export default withMiddlewares({
       );
 
       // Reject unsupported future ingestion versions (> 4)
-      // Lower versions are valid but use dual write (path A)
       const parsedIngestionVersion = ingestionVersion
         ? parseInt(ingestionVersion, 10)
         : undefined;
@@ -140,6 +136,30 @@ export default withMiddlewares({
         return {
           error: `Unsupported x-langfuse-ingestion-version: "${ingestionVersion}". Maximum supported: "4".`,
         };
+      }
+
+      // Master fork is OTel-only for trace/observation ingestion. Require a
+      // SDK new enough to emit complete spans inline (no v3-protocol
+      // create/update split): Python >= 4.0.0, JS >= 5.0.0, or an explicit
+      // x-langfuse-ingestion-version=4 opt-in. Anything else is hard-rejected
+      // at the entrypoint so the worker never sees v3 trace/observation events.
+      // Gate runs BEFORE the empty-payload short-circuit so v3 clients can
+      // never get an ambiguous 200 just by sending an empty resourceSpans.
+      if (
+        !checkHeaderBasedDirectWrite({ sdkName, sdkVersion, ingestionVersion })
+      ) {
+        res.status(400);
+        return {
+          error:
+            "Master events_full ingestion requires Python SDK >= 4.0.0 or JS SDK >= 5.0.0. " +
+            "Please upgrade your client.",
+          sdkName,
+          sdkVersion,
+        };
+      }
+
+      if (!resourceSpans || resourceSpans.length === 0) {
+        return {};
       }
 
       // Extract headers to propagate for ingestion masking

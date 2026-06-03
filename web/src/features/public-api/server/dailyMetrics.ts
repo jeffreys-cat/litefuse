@@ -4,7 +4,6 @@ import {
   queryDoris,
   type DateTimeFilter,
   measureAndReturn,
-  TRACE_TO_OBSERVATIONS_INTERVAL,
 } from "@langfuse/shared/src/server";
 
 type QueryType = {
@@ -18,6 +17,22 @@ type QueryType = {
   toTimestamp?: string;
 };
 
+type DailyUsageRow = {
+  date: string;
+  model: string | null;
+  inputUsage: number;
+  outputUsage: number;
+  totalUsage: number;
+  totalCost: number;
+  countObservations: number;
+  countTraces: number;
+};
+
+type DailyTraceCountRow = {
+  date: string;
+  countTraces: number;
+};
+
 export const generateDailyMetrics = async (props: QueryType) => {
   const filter = convertApiProvidedFilterToDorisFilter(props, filterParams);
   const hasTracesFilter = filter.some((f) => f.table === "traces");
@@ -28,66 +43,42 @@ export const generateDailyMetrics = async (props: QueryType) => {
   const timeFilter = filter.find(
     (f) =>
       f.table === "traces" &&
-      f.field.includes("timestamp") &&
+      f.field.includes("start_time") &&
       (f.operator === ">=" || f.operator === ">"),
   ) as DateTimeFilter | undefined;
 
-  // If there is any other filter than fromTimestamp, we join the traces table to be on the safe side.
   const hasNonTimestampsFilter =
     (timeFilter && filter.length() > 1) || (!timeFilter && filter.length() > 0);
 
-  const query = `
-    WITH model_usage AS (
-      SELECT
-        toDate(o.start_time) as date,
-        o.provided_model_name as model,
-        count(o.id) as countObservations,
-        count(distinct o.trace_id) as countTraces,
-        sum(arraySum(mapValues(mapFilter(x -> positionCaseInsensitive(x.1, 'input') > 0, o.usage_details)))) as inputUsage,
-        sum(arraySum(mapValues(mapFilter(x -> positionCaseInsensitive(x.1, 'output') > 0, o.usage_details)))) as outputUsage,
-        sumMap(o.usage_details)['total'] as totalUsage,
-        sum(coalesce(o.total_cost, 0)) as totalCost
-      FROM observations o FINAL ${hasNonTimestampsFilter ? " LEFT JOIN __TRACE_TABLE__ t FINAL on o.trace_id = t.id AND o.project_id = t.project_id" : ""}
-      WHERE o.project_id = {projectId: String}
-      ${hasNonTimestampsFilter ? `AND t.project_id = {projectId: String} AND ${appliedFilter.query}` : ""}
-      ${timeFilter ? `AND start_time >= {cteTimeFilter: DateTime64(3)} - ${TRACE_TO_OBSERVATIONS_INTERVAL}` : ""}
-      GROUP BY date, model
-    ), daily_model_usage AS (
-      SELECT
-        "date",
-        sum(mu.countObservations) as countObservations,
-        sum(mu.totalCost) as totalCost,
-        groupArray(tuple(
-          mu.model,
-          mu.inputUsage,
-          mu.outputUsage,
-          mu.totalUsage,
-          mu.totalCost,
-          mu.countObservations,
-          mu.countTraces
-        )) as daily_usage_tuple
-      FROM model_usage mu
-      GROUP BY date
-    ), trace_usage AS (
-      SELECT
-        toDate(t.timestamp) as date,
-        count(t.id) as countTraces
-      FROM __TRACE_TABLE__ t FINAL
-      WHERE t.project_id = {projectId: String}
-      ${hasTracesFilter ? `AND ${appliedTracesFilter.query}` : ""}
-      GROUP BY date
-    )
-
+  // Observation-side per-date per-model metrics
+  const obsQuery = `
     SELECT
-      COALESCE(dmu.date, tu.date) as date,
-      COALESCE(tu.countTraces, 0) as countTraces,
-      COALESCE(dmu.countObservations, 0) as countObservations,
-      COALESCE(dmu.totalCost, 0) as totalCost,
-      dmu.daily_usage_tuple as usage
-    FROM daily_model_usage dmu
-    FULL OUTER JOIN trace_usage tu ON dmu.date = tu.date
-    ORDER BY date DESC
-    ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+      DATE(o.start_time) AS date,
+      o.provided_model_name AS model,
+      count(o.span_id) AS countObservations,
+      count(distinct o.trace_id) AS countTraces,
+      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS inputUsage,
+      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS outputUsage,
+      COALESCE(sum(if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], 0)), 0) AS totalUsage,
+      COALESCE(sum(coalesce(o.total_cost, 0)), 0) AS totalCost
+    FROM events_full o
+    ${hasNonTimestampsFilter ? "LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''" : ""}
+    WHERE o.project_id = {projectId: String}
+    ${hasNonTimestampsFilter ? `AND ${appliedFilter.query}` : ""}
+    ${timeFilter ? `AND o.start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
+    GROUP BY date, model
+  `;
+
+  // Trace-side per-date counts
+  const traceQuery = `
+    SELECT
+      DATE(t.start_time) AS date,
+      count(t.trace_id) AS countTraces
+    FROM events_full t
+    WHERE t.project_id = {projectId: String}
+    AND t.parent_span_id = ''
+    ${hasTracesFilter ? `AND ${appliedTracesFilter.query}` : ""}
+    GROUP BY date
   `;
 
   const timestamp = props.fromTimestamp
@@ -102,10 +93,6 @@ export const generateDailyMetrics = async (props: QueryType) => {
         ...appliedTracesFilter.params,
         ...appliedFilter.params,
         projectId: props.projectId,
-        ...(props.limit !== undefined ? { limit: props.limit } : {}),
-        ...(props.page !== undefined
-          ? { offset: (props.page - 1) * props.limit }
-          : {}),
         ...(timeFilter
           ? {
               cteTimeFilter: convertDateToAnalyticsDateTime(timeFilter.value),
@@ -122,34 +109,83 @@ export const generateDailyMetrics = async (props: QueryType) => {
       timestamp,
     },
     fn: async (input) => {
-      // Note: This SQL uses ClickHouse-specific features and needs rewrite for Doris
-      const result = await queryDoris<{
-        date: string;
-        countTraces: number;
-        countObservations: number;
-        totalCost: number;
-        usage: (string | null)[][];
-      }>({
-        query: query.replaceAll("__TRACE_TABLE__", "traces"),
-        params: input.params,
-        tags: input.tags,
-      });
+      const [obsRows, traceRows] = await Promise.all([
+        queryDoris<DailyUsageRow>({
+          query: obsQuery,
+          params: input.params,
+          tags: input.tags,
+        }),
+        queryDoris<DailyTraceCountRow>({
+          query: traceQuery,
+          params: input.params,
+          tags: input.tags,
+        }),
+      ]);
 
-      return result.map((record) => ({
-        date: record.date,
-        countTraces: Number(record.countTraces),
-        countObservations: Number(record.countObservations),
-        totalCost: Number(record.totalCost),
-        usage: record.usage.map((u) => ({
-          model: u[0],
-          inputUsage: Number(u[1]),
-          outputUsage: Number(u[2]),
-          totalUsage: Number(u[3]),
-          totalCost: Number(u[4]),
-          countObservations: Number(u[5]),
-          countTraces: Number(u[6]),
-        })),
-      }));
+      // Group obs rows by date
+      const dailyMap = new Map<
+        string,
+        {
+          countTraces: number;
+          countObservations: number;
+          totalCost: number;
+          usage: DailyUsageRow[];
+        }
+      >();
+
+      for (const r of obsRows) {
+        const dateKey = String(r.date);
+        const entry = dailyMap.get(dateKey) ?? {
+          countTraces: 0,
+          countObservations: 0,
+          totalCost: 0,
+          usage: [],
+        };
+        entry.countObservations += Number(r.countObservations);
+        entry.totalCost += Number(r.totalCost);
+        entry.usage.push(r);
+        dailyMap.set(dateKey, entry);
+      }
+
+      for (const r of traceRows) {
+        const dateKey = String(r.date);
+        const entry = dailyMap.get(dateKey) ?? {
+          countTraces: 0,
+          countObservations: 0,
+          totalCost: 0,
+          usage: [],
+        };
+        entry.countTraces = Number(r.countTraces);
+        dailyMap.set(dateKey, entry);
+      }
+
+      const sorted = Array.from(dailyMap.entries())
+        .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+        .map(([date, v]) => ({
+          date,
+          countTraces: v.countTraces,
+          countObservations: v.countObservations,
+          totalCost: v.totalCost,
+          usage: v.usage.map((u) => ({
+            model: u.model,
+            inputUsage: Number(u.inputUsage),
+            outputUsage: Number(u.outputUsage),
+            totalUsage: Number(u.totalUsage),
+            totalCost: Number(u.totalCost),
+            countObservations: Number(u.countObservations),
+            countTraces: Number(u.countTraces),
+          })),
+        }));
+
+      const start =
+        props.page !== undefined && props.limit !== undefined
+          ? (props.page - 1) * props.limit
+          : 0;
+      const end =
+        props.page !== undefined && props.limit !== undefined
+          ? start + props.limit
+          : sorted.length;
+      return sorted.slice(start, end);
     },
   });
 };
@@ -159,9 +195,10 @@ export const getDailyMetricsCount = async (props: QueryType) => {
   const appliedFilter = filter.filter((f) => f.table === "traces").apply();
 
   const query = `
-    SELECT count(distinct toDate(timestamp)) as count
-    FROM __TRACE_TABLE__ t
-    WHERE project_id = {projectId: String}
+    SELECT count(distinct DATE(t.start_time)) as count
+    FROM events_full t
+    WHERE t.project_id = {projectId: String}
+    AND t.parent_span_id = ''
     ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
   `;
 
@@ -184,9 +221,8 @@ export const getDailyMetricsCount = async (props: QueryType) => {
       timestamp,
     },
     fn: async (input) => {
-      // Note: This SQL uses ClickHouse-specific features and needs rewrite for Doris
       const records = await queryDoris<{ count: string }>({
-        query: query.replace("__TRACE_TABLE__", "traces"),
+        query,
         params: input.params,
         tags: input.tags,
       });
@@ -233,7 +269,7 @@ const filterParams = [
   },
   {
     id: "fromTimestamp",
-    dorisSelect: "timestamp",
+    dorisSelect: "start_time",
     operator: ">=" as const,
     filterType: "DateTimeFilter",
     dorisTable: "traces",
@@ -241,7 +277,7 @@ const filterParams = [
   },
   {
     id: "toTimestamp",
-    dorisSelect: "timestamp",
+    dorisSelect: "start_time",
     operator: "<" as const,
     filterType: "DateTimeFilter",
     dorisTable: "traces",

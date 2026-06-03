@@ -1,12 +1,26 @@
 import { type ViewDeclarationType } from "./types";
 
+// Single-table events_full model (Phase B alignment with upstream).
+// Every row is an OTel span (one OTel span = one row in events_full).
+// Root spans have parent_span_id = '' (empty string; coerced from null
+// at write time to match the upstream ClickHouse non-nullable String
+// convention). Child spans have parent_span_id pointing at the parent
+// span_id.
+// - tracesViewDoris: aggregated trace projection (one row per trace_id;
+//   trace-level fields come from the root span via argMaxIf or denormalized
+//   fields).
+// - observationsViewDoris: every events_full row is an observation.
+// Joins across the two views use only trace_id / project_id keys — there
+// is no longer a "synthetic trace span" predicate to add to the JOIN.
+
 export const tracesViewDoris: ViewDeclarationType = {
   name: "traces",
   description:
     "Traces represent a group of observations and typically represent a single request or operation.",
   dimensions: {
     id: {
-      sql: "id",
+      sql: "trace_id",
+      alias: "id",
       type: "string",
       description: "Unique identifier of the trace.",
     },
@@ -49,7 +63,7 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "Deployment environment (e.g., production, staging).",
     },
     timestampMonth: {
-      sql: "date_format(timestamp, '%Y-%m')",
+      sql: "date_format(start_time, '%Y-%m')",
       alias: "timestampMonth",
       type: "string",
       description: "Month of the trace timestamp in YYYY-MM format.",
@@ -78,7 +92,7 @@ export const tracesViewDoris: ViewDeclarationType = {
       unit: "traces",
     },
     observationsCount: {
-      sql: "count(observations.id)",
+      sql: "count(observations.span_id)",
       alias: "observationsCount",
       type: "integer",
       relationTable: "observations",
@@ -135,21 +149,28 @@ export const tracesViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     observations: {
-      name: "observations",
+      name: "events_full",
       joinConditionSql:
-        "ON traces.id = observations.trace_id AND traces.project_id = observations.project_id",
+        "ON traces.trace_id = observations.trace_id AND traces.project_id = observations.project_id",
       timeDimension: "start_time",
     },
     scores: {
       name: "scores",
       joinConditionSql:
-        "ON traces.id = scores.trace_id AND traces.project_id = scores.project_id",
+        "ON traces.trace_id = scores.trace_id AND traces.project_id = scores.project_id",
       timeDimension: "timestamp",
     },
   },
-  segments: [],
-  timeDimension: "timestamp",
-  baseCte: `traces`,
+  segments: [
+    {
+      column: "parent_span_id",
+      operator: "=",
+      value: "",
+      type: "string",
+    },
+  ],
+  timeDimension: "start_time",
+  baseCte: `events_full traces`,
 };
 
 export const observationsViewDoris: ViewDeclarationType = {
@@ -158,7 +179,8 @@ export const observationsViewDoris: ViewDeclarationType = {
     "Observations represent individual requests or operations within a trace. They are grouped into Spans, Generations, and Events.",
   dimensions: {
     id: {
-      sql: "id",
+      sql: "span_id",
+      alias: "id",
       type: "string",
       description: "Unique identifier for the observation.",
     },
@@ -181,7 +203,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       description: "Deployment environment (e.g., production, staging).",
     },
     parentObservationId: {
-      sql: "parent_observation_id",
+      sql: "parent_span_id",
       alias: "parentObservationId",
       type: "string",
       description:
@@ -211,8 +233,8 @@ export const observationsViewDoris: ViewDeclarationType = {
     tags: {
       sql: "tags",
       type: "string[]",
-      relationTable: "traces",
-      description: "User-defined tags associated with the trace.",
+      description:
+        "User-defined tags associated with the trace (denormalized onto every span row).",
     },
     providedModelName: {
       sql: "provided_model_name",
@@ -236,22 +258,22 @@ export const observationsViewDoris: ViewDeclarationType = {
       sql: "user_id",
       alias: "userId",
       type: "string",
-      relationTable: "traces",
-      description: "Identifier of the user triggering the observation.",
+      description:
+        "Identifier of the user triggering the trace (denormalized onto every span row).",
     },
     sessionId: {
       sql: "session_id",
       alias: "sessionId",
       type: "string",
-      relationTable: "traces",
-      description: "Identifier of the session triggering the observation.",
+      description:
+        "Identifier of the session triggering the trace (denormalized onto every span row).",
     },
     traceRelease: {
       sql: "`release`",
       alias: "traceRelease",
       type: "string",
-      relationTable: "traces",
-      description: "Release version of the parent trace.",
+      description:
+        "Release version of the parent trace (denormalized onto every span row).",
     },
     traceVersion: {
       sql: "version",
@@ -335,21 +357,21 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "millisecond",
     },
     inputTokens: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))))",
+      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(observations.usage_details), map_keys(observations.usage_details))))",
       alias: "inputTokens",
       type: "integer",
       description: "Sum of input tokens consumed by the observation.",
       unit: "tokens",
     },
     outputTokens: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))))",
+      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.usage_details), map_keys(observations.usage_details))))",
       alias: "outputTokens",
       type: "integer",
       description: "Sum of output tokens produced by the observation.",
       unit: "tokens",
     },
     totalTokens: {
-      sql: "sum(usage_details['total'])",
+      sql: "sum(observations.usage_details['total'])",
       alias: "totalTokens",
       type: "integer",
       description: "Sum of tokens consumed by the observation.",
@@ -359,7 +381,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       // Calculate average output tokens per second. Denominator uses seconds to align
       // with the `tokens/s` unit; NULL values avoided by guarding against a 0-second
       // duration.
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details)))) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
+      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.usage_details), map_keys(observations.usage_details)))) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
       alias: "outputTokensPerSecond",
       type: "decimal",
       description:
@@ -367,7 +389,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "tokens/s",
     },
     tokensPerSecond: {
-      sql: "sum(usage_details['total']) / SECONDS_DIFF(any_value(observations.end_time), any_value(observations.start_time))",
+      sql: "sum(observations.usage_details['total']) / SECONDS_DIFF(any_value(observations.end_time), any_value(observations.start_time))",
       alias: "tokensPerSecond",
       type: "decimal",
       description:
@@ -375,14 +397,14 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "tokens/s",
     },
     inputCost: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))))",
+      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(observations.cost_details), map_keys(observations.cost_details))))",
       alias: "inputCost",
       type: "decimal",
       description: "Sum of input cost incurred by the observation.",
       unit: "USD",
     },
     outputCost: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))))",
+      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.cost_details), map_keys(observations.cost_details))))",
       alias: "outputCost",
       type: "decimal",
       description: "Sum of output cost incurred by the observation.",
@@ -446,10 +468,10 @@ export const observationsViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces",
+      name: "events_full",
       joinConditionSql:
-        "ON observations.trace_id = traces.id AND observations.project_id = traces.project_id",
-      timeDimension: "timestamp",
+        "ON observations.trace_id = traces.trace_id AND observations.project_id = traces.project_id AND traces.parent_span_id = ''",
+      timeDimension: "start_time",
     },
     scores: {
       name: "scores",
@@ -458,9 +480,14 @@ export const observationsViewDoris: ViewDeclarationType = {
       timeDimension: "timestamp",
     },
   },
+  // Phase B alignment with upstream: every events_full row is an
+  // observation now (no more synthetic `t-<trace_id>` rows). The previous
+  // segment `parent_span_id != ''` filtered those out; with the synth
+  // rows gone it would instead exclude root observations, which is
+  // wrong. No segment is needed.
   segments: [],
   timeDimension: "start_time",
-  baseCte: `observations`,
+  baseCte: `events_full observations`,
 };
 
 // Base dimensions for score views (shared between numeric and categorical)
@@ -605,15 +632,15 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces",
+      name: "events_full",
       joinConditionSql:
-        "ON scores_numeric.trace_id = traces.id AND scores_numeric.project_id = traces.project_id",
-      timeDimension: "timestamp",
+        "ON scores_numeric.trace_id = traces.trace_id AND scores_numeric.project_id = traces.project_id AND traces.parent_span_id = ''",
+      timeDimension: "start_time",
     },
     observations: {
-      name: "observations",
+      name: "events_full",
       joinConditionSql:
-        "ON scores_numeric.observation_id = observations.id AND scores_numeric.project_id = observations.project_id",
+        "ON scores_numeric.observation_id = observations.span_id AND scores_numeric.project_id = observations.project_id",
       timeDimension: "start_time",
     },
   },
@@ -654,15 +681,15 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces",
+      name: "events_full",
       joinConditionSql:
-        "ON scores_categorical.trace_id = traces.id AND scores_categorical.project_id = traces.project_id",
-      timeDimension: "timestamp",
+        "ON scores_categorical.trace_id = traces.trace_id AND scores_categorical.project_id = traces.project_id AND traces.parent_span_id = ''",
+      timeDimension: "start_time",
     },
     observations: {
-      name: "observations",
+      name: "events_full",
       joinConditionSql:
-        "ON scores_categorical.observation_id = observations.id AND scores_categorical.project_id = observations.project_id",
+        "ON scores_categorical.observation_id = observations.span_id AND scores_categorical.project_id = observations.project_id",
       timeDimension: "start_time",
     },
   },

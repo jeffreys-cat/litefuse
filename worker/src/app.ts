@@ -585,11 +585,11 @@ export const batchProjectCleaners: BatchProjectCleaner[] = [];
 
 if (env.LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true") {
   for (const table of BATCH_DELETION_TABLES) {
-    // Only start the events table cleaners if the events table experiment is enabled
+    // Only start the events_full cleaner when the events table experiment is
+    // enabled (gate carries over from the upstream V4 transition; events_core
+    // / events tables no longer appear in BATCH_DELETION_TABLES for this fork).
     if (
-      (table !== "events_full" &&
-        table !== "events_core" &&
-        table !== "events") ||
+      table !== "events_full" ||
       env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
     ) {
       const cleaner = new BatchProjectCleaner(table);
@@ -604,11 +604,10 @@ export const batchDataRetentionCleaners: BatchDataRetentionCleaner[] = [];
 
 if (env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
   for (const table of BATCH_DATA_RETENTION_TABLES) {
-    // Only start the events table cleaners if the events table experiment is enabled
+    // Only start the events_full cleaner when the events table experiment is
+    // enabled (see note above).
     if (
-      (table !== "events_full" &&
-        table !== "events_core" &&
-        table !== "events") ||
+      table !== "events_full" ||
       env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
     ) {
       const cleaner = new BatchDataRetentionCleaner(table);

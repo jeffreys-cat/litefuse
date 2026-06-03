@@ -230,19 +230,30 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "ID",
     uiTableId: "id",
     tableName: "traces",
-    select: "id",
+    select: "trace_id",
+    queryPrefix: "t",
   },
   {
     uiTableName: "Trace ID",
     uiTableId: "traceId",
     tableName: "traces",
-    select: "id",
+    select: "trace_id",
+    queryPrefix: "t",
   },
   {
+    // The Doris OTel-only model stores every OTel span as one
+    // `events_full` row; the per-row `name` column is the *span*'s
+    // own name (e.g. the generation name), while `trace_name` is the
+    // trace-level name denormalised onto every row by
+    // createEventRecord. Filtering by what the UI calls "Name" / "Trace
+    // Name" must therefore target `trace_name`. (Upstream langfuse-main
+    // has a separate `traces` table where `traces.name` already is the
+    // trace name, so the un-Dorisized mapping above selects "name"
+    // unchanged; do not touch that block.)
     uiTableName: "Name",
     uiTableId: "name",
     tableName: "traces",
-    select: "name",
+    select: "trace_name",
     queryPrefix: "t",
   },
   {
@@ -250,14 +261,14 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Trace Name",
     uiTableId: "traceName",
     tableName: "traces",
-    select: "name",
+    select: "trace_name",
     queryPrefix: "t",
   },
   {
     uiTableName: "Timestamp",
     uiTableId: "timestamp",
     tableName: "traces",
-    select: "timestamp",
+    select: "start_time",
     queryPrefix: "t",
   },
   {

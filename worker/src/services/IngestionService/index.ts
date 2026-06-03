@@ -314,7 +314,11 @@ export class IngestionService {
         : null,
     ]);
 
-    const now = this.getMicrosecondTimestamp();
+    // Doris DateTime(3) is millisecond-precision; the upstream langfuse-main
+    // uses microseconds for ClickHouse DateTime64(6). Use ms here so
+    // start_time_date partition derivation and the column values match
+    // events_full's DateTime(3) shape (otherwise dates land in year 58000+).
+    const now = this.getMillisecondTimestamp();
 
     // Flatten raw metadata first (before stringification destroys nested structure)
     const flattened = eventData.metadata
@@ -325,8 +329,26 @@ export class IngestionService {
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
 
-    // Stringify metadata for the JSON column (Record<string, string>)
-    const metadata = convertRecordValuesToString(eventData.metadata ?? {});
+    // Content dedup for GENERATION input: hash the input into content_dict
+    // and store the hash array in events_full.input. events_full_view's
+    // LATERAL VIEW POSEXPLODE rehydrates the hash array back to the
+    // original content at read time. Without this, GENERATION input is
+    // stored as a raw string and the view's CAST(input AS ARRAY<VARCHAR>)
+    // returns NULL, hiding the row from UI reads.
+    let resolvedInput: string | null | undefined = eventData.input;
+    if (
+      eventData.type === "GENERATION" &&
+      eventData.input != null &&
+      this.dorisWriter
+    ) {
+      const { transformedInput, contentEntries } = deduplicateInputContent(
+        eventData.input,
+      );
+      for (const entry of contentEntries) {
+        this.dorisWriter.addToQueue(TableName.ContentDict, entry);
+      }
+      resolvedInput = this.stringify(transformedInput);
+    }
 
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
@@ -336,7 +358,13 @@ export class IngestionService {
       span_id: eventData.spanId,
 
       // Optional identifiers
-      parent_span_id: eventData.parentSpanId,
+      // OTel root spans arrive with parentSpanId=null/undefined.
+      // events_full read queries (buildTraceAggregationQuery,
+      // getObservationsForTrace, batch streams, etc.) identify the root
+      // span via `parent_span_id = ''`. Coerce NULL -> '' here so the
+      // wire-level invariant holds — same shape upstream langfuse-main
+      // uses against ClickHouse's non-nullable String column.
+      parent_span_id: eventData.parentSpanId ?? "",
 
       // Core properties with defaults
       name: eventData.name ?? "",
@@ -359,16 +387,21 @@ export class IngestionService {
       status_message: eventData.statusMessage,
 
       // Timestamps
-      start_time: this.getMicrosecondTimestamp(eventData.startTimeISO),
-      end_time: this.getMicrosecondTimestamp(eventData.endTimeISO),
+      // Doris DateTime(3) — see comment on `now` above.
+      start_time: this.getMillisecondTimestamp(eventData.startTimeISO),
+      end_time: this.getMillisecondTimestamp(eventData.endTimeISO),
       completion_start_time: eventData.completionStartTime
-        ? this.getMicrosecondTimestamp(eventData.completionStartTime)
+        ? this.getMillisecondTimestamp(eventData.completionStartTime)
         : null,
 
       // Prompt
       prompt_id: prompt?.id || "",
       prompt_name: eventData.promptName,
-      prompt_version: eventData.promptVersion,
+      // events_full.prompt_version is `int`; coerce SDK-supplied string form.
+      prompt_version:
+        typeof eventData.promptVersion === "string"
+          ? parseInt(eventData.promptVersion, 10)
+          : (eventData.promptVersion ?? null),
 
       // Model
       model_id: generationUsage?.internal_model_id || "",
@@ -395,14 +428,17 @@ export class IngestionService {
       tool_calls: eventData.toolCalls ?? [],
       tool_call_names: eventData.toolCallNames ?? [],
 
-      // I/O
-      input: eventData.input,
+      // I/O — `resolvedInput` is the hash array for GENERATION rows (see
+      // dedup block above), the raw input otherwise.
+      input: resolvedInput,
       output: eventData.output,
 
-      // Metadata
-      metadata,
+      // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
+      // shape was a transitional fork artifact; events_full uses just the two
+      // arrays — same as langfuse-main V4. Cross-batch metadata merge does not
+      // happen here (OTel-only ingestion has no create/update split).
       metadata_names: metadataNames,
-      metadata_raw_values: metadataValues,
+      metadata_values: metadataValues,
 
       // Source/instrumentation metadata
       source: eventData.source,
@@ -445,18 +481,32 @@ export class IngestionService {
   }
 
   /**
-   * Writes an event record directly to the events table.
+   * Writes an event record directly to the events_full table.
    * Use createEventRecord() first to get the record, then call this to write.
    *
-   * Note: Events table is not supported in Doris - this is a no-op for Doris backend.
+   * Master fork is OTel-only for trace/observation ingestion: events_full
+   * is the single denormalized analytic store. Each call enqueues exactly
+   * one row into DorisWriter's events_full queue; the writer batches and
+   * flushes via Stream Load.
    *
    * @param eventRecord - The event record to write
    */
   public writeEventRecord(eventRecord: EventRecordInsertType): void {
-    // Events table is not supported in Doris - skip writing
+    if (!this.dorisWriter) {
+      logger.debug(
+        "writeEventRecord called but DorisWriter is not initialized, skipping",
+      );
+      return;
+    }
+    this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
     logger.debug(
-      "writeEventRecord called but events table is not supported in Doris, skipping",
+      `[writeEventRecord] queued events_full row for span ${eventRecord.span_id} (trace ${eventRecord.trace_id})`,
     );
+    recordIncrement("langfuse.ingestion.write", 1, {
+      object: "event",
+      backend: "doris",
+      target: "events_full",
+    });
   }
 
   private async processDatasetRunItemEventList(params: {
