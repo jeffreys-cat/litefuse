@@ -21,17 +21,16 @@ export function isLangfuseDatabase(database: string | undefined): boolean {
  * require per-project data isolation in the Discover feature.
  *
  * Tables intentionally excluded (no project_id column):
- *   - content_dict  (global content-addressed store, keyed by content hash)
+ *   - content_dict  (day-partitioned content-addressed store, keyed by date + content hash)
  */
 const LANGFUSE_TABLES_WITH_PROJECT_ID = new Set([
-  "traces",
-  "observations",
-  "observations_v2",
+  "events_full",
+  "events_full_view",
   "scores",
   "event_log",
   "project_environments",
-  "blob_storage_file_log",
   "dataset_run_items",
+  "dataset_run_items_rmt",
 ]);
 
 /**

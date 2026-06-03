@@ -8,6 +8,7 @@ import {
   dq,
   convertDorisTracesListToDomain,
   orderByToDorisSQL,
+  zipDorisMetadataArrays,
   type DateTimeFilter,
 } from "@langfuse/shared/src/server";
 import {
@@ -64,7 +65,7 @@ export const generateTracesForPublicApi = async ({
   const timeFilter = filter.find(
     (f: any) =>
       f.table === "traces" &&
-      f.field.includes("timestamp") &&
+      f.field.includes("start_time") &&
       (f.operator === ">=" || f.operator === ">"),
   ) as DateTimeFilter | undefined;
 
@@ -90,7 +91,7 @@ export const generateTracesForPublicApi = async ({
 
   const dorisOrderBy =
     (orderByToDorisSQL(orderBy || [], orderByColumns) ||
-      "ORDER BY t.timestamp desc") +
+      "ORDER BY t.start_time desc") +
     (shouldUseSkipIndexes ? ", t.event_ts desc" : "");
 
   const query = `
@@ -103,16 +104,11 @@ export const generateTracesForPublicApi = async ({
             CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
             CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
           ) as latency_milliseconds,
-          collect_list(id) as observation_ids
-        FROM (
-          SELECT *,
-                 ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-          FROM observations
-          WHERE project_id = {projectId: String}
-          ${timeFilter ? `AND start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
-          ${environmentFilter.length() > 0 ? `AND ${appliedEnvironmentFilter.query}` : ""}
-        ) o
-        WHERE rn = 1
+          collect_list(span_id) as observation_ids
+        FROM events_full
+        WHERE project_id = {projectId: String}
+        ${timeFilter ? `AND start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
+        ${environmentFilter.length() > 0 ? `AND ${appliedEnvironmentFilter.query}` : ""}
         GROUP BY project_id, trace_id
       ), score_stats AS (
         SELECT
@@ -129,16 +125,17 @@ export const generateTracesForPublicApi = async ({
       )
 
       SELECT
-        t.id as id,
-        CONCAT('/project/', t.project_id, '/traces/', t.id) as htmlPath,
+        t.trace_id as id,
+        CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath,
         t.project_id as project_id,
-        t.timestamp as timestamp,
+        t.start_time as timestamp,
         t.name as name,
         t.environment as environment,
         t.input as input,
         t.output as output,
         t.session_id as session_id,
-        t.metadata as metadata,
+        t.metadata_names as metadata_names,
+        t.metadata_values as metadata_values,
         t.user_id as user_id,
         t.${dq("release")} as ${dq("release")},
         t.version as version,
@@ -151,27 +148,20 @@ export const generateTracesForPublicApi = async ({
         o.observation_ids as observations,
         COALESCE(o.latency_milliseconds / 1000, 0) as latency,
         COALESCE(o.total_cost, 0) as totalCost
-      FROM (
-            SELECT *
-            FROM (
-              SELECT *,
-                     ROW_NUMBER() OVER (PARTITION BY id, project_id ORDER BY event_ts DESC) as rn
-              FROM traces
-              WHERE project_id = {projectId: String}
-              ${timeFilter ? `AND timestamp >= {cteTimeFilter: DateTime}` : ""}
-            ) ranked
-            WHERE rn = 1
-          ) t
-      LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id
-      LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id
+      FROM events_full t
+      LEFT JOIN observation_stats o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
+      LEFT JOIN score_stats s ON t.trace_id = s.trace_id AND t.project_id = s.project_id
       WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
       ${dorisOrderBy}
       ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
     `;
 
-  const result = await queryDoris<
-    TraceRecordReadType & {
+  const rawResult = await queryDoris<
+    Omit<TraceRecordReadType, "metadata"> & {
+      metadata_names: unknown;
+      metadata_values: unknown;
       observations: string[];
       scores: string[];
       totalCost: number;
@@ -196,10 +186,23 @@ export const generateTracesForPublicApi = async ({
     },
   });
 
-  return convertDorisTracesListToDomain(
-    result.map((trace) => ({
+  const result = rawResult.map(
+    ({ metadata_names, metadata_values, ...trace }) => ({
       ...trace,
-    })),
+      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+    }),
+  );
+
+  return convertDorisTracesListToDomain(
+    result as Array<
+      TraceRecordReadType & {
+        observations: string[];
+        scores: string[];
+        totalCost: number;
+        latency: number;
+        htmlPath: string;
+      }
+    >,
     {
       metrics: true,
       scores: true,
@@ -227,9 +230,10 @@ export const getTracesCountForPublicApi = async ({
   const appliedDorisFilter = dorisFilter.apply();
 
   const dorisQuery = `
-      SELECT count() as count
-      FROM traces t
-      WHERE project_id = {projectId: String}
+      SELECT count(*) as count
+      FROM events_full t
+      WHERE t.project_id = {projectId: String}
+      AND t.parent_span_id = ''
       ${dorisFilter.length() > 0 ? `AND ${appliedDorisFilter.query}` : ""}
     `;
 
@@ -241,7 +245,7 @@ export const getTracesCountForPublicApi = async ({
 };
 
 // Reserved words in Doris (e.g. "release", "public") must be backtick-quoted.
-// Backtick-quoting is also safe in ClickHouse, so we apply it unconditionally.
+// The list below is applied unconditionally to keep call sites simple.
 const orderByColumns = [
   "id",
   "timestamp",

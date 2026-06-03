@@ -45,12 +45,13 @@ export default async function handler(
             now: convertDateToAnalyticsDateTime(now),
           },
           fn: async (input: { now: string }) => {
-            return queryDoris<{ id: string }>({
+            return queryDoris<{ trace_id: string }>({
               query: `
-                SELECT id
-                FROM traces
-                WHERE timestamp <= {now: DateTime64(3)}
-                AND timestamp >= {now: DateTime64(3)} - INTERVAL 3 MINUTE
+                SELECT trace_id
+                FROM events_full
+                WHERE parent_span_id = ''
+                AND start_time <= {now: DateTime}
+                AND start_time >= {now: DateTime} - INTERVAL 3 MINUTE
                 LIMIT 1
               `,
               params: input,
@@ -61,12 +62,12 @@ export default async function handler(
             });
           },
         });
-        const observations = await queryDoris({
+        const observations = await queryDoris<{ span_id: string }>({
           query: `
-            SELECT id
-            FROM observations
-            WHERE start_time <= {now: DateTime64(3)}
-            AND start_time >= {now: DateTime64(3)} - INTERVAL 3 MINUTE
+            SELECT span_id
+            FROM events_full
+            WHERE start_time <= {now: DateTime}
+            AND start_time >= {now: DateTime} - INTERVAL 3 MINUTE
             LIMIT 1
           `,
           params: {

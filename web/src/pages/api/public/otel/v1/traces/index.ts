@@ -113,10 +113,6 @@ export default withMiddlewares({
         }
       }
 
-      if (!resourceSpans || resourceSpans.length === 0) {
-        return {};
-      }
-
       // Extract SDK headers for write path decision (supports both hyphen and underscore formats)
       const sdkName = getLangfuseHeader(req.headers, "x-langfuse-sdk-name");
       const sdkVersion = getLangfuseHeader(
@@ -147,6 +143,8 @@ export default withMiddlewares({
       // create/update split): Python >= 4.0.0, JS >= 5.0.0, or an explicit
       // x-langfuse-ingestion-version=4 opt-in. Anything else is hard-rejected
       // at the entrypoint so the worker never sees v3 trace/observation events.
+      // Gate runs BEFORE the empty-payload short-circuit so v3 clients can
+      // never get an ambiguous 200 just by sending an empty resourceSpans.
       if (
         !checkHeaderBasedDirectWrite({ sdkName, sdkVersion, ingestionVersion })
       ) {
@@ -158,6 +156,10 @@ export default withMiddlewares({
           sdkName,
           sdkVersion,
         };
+      }
+
+      if (!resourceSpans || resourceSpans.length === 0) {
+        return {};
       }
 
       // Extract headers to propagate for ingestion masking
