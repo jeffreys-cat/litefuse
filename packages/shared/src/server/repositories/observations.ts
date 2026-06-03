@@ -324,7 +324,7 @@ export const getObservationForTraceIdByName = async ({
       created_at,
       updated_at,
       event_ts
-    FROM events_full
+    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full"}
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
     AND name = {name: String}
@@ -452,7 +452,7 @@ export const getObservationsById = async (
       created_at,
       updated_at,
       event_ts
-    FROM events_full
+    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full"}
     WHERE span_id IN ({ids: Array(String)})
     AND project_id = {projectId: String}
     ORDER BY event_ts DESC
