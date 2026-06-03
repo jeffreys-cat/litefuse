@@ -493,6 +493,10 @@ export const traceRouter = createTRPCRouter({
           trace = traceById;
           traceById.bookmarked = input.bookmarked;
           const promises: Promise<void>[] = [];
+          // Master events_full migration: traces table is dead-write under
+          // OTel-only ingestion. Keep this for code-retention (harmless
+          // no-op against the empty table) and treat updateEvents as the
+          // authoritative write — that's what the UI reads back.
           promises.push(
             partialUpdateDoris({
               table: "traces",
@@ -501,15 +505,17 @@ export const traceRouter = createTRPCRouter({
             }),
           );
 
-          if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
-            promises.push(
-              updateEvents(
-                input.projectId,
-                { traceIds: [traceById.id], rootOnly: true },
-                { bookmarked: input.bookmarked },
-              ),
-            );
-          }
+          // events_full is the production read target; the previous flag
+          // gate (LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS) is removed — without
+          // this write, refreshing the page would surface the unchanged
+          // events_full state and "lose" the bookmark.
+          promises.push(
+            updateEvents(
+              input.projectId,
+              { traceIds: [traceById.id], rootOnly: true },
+              { bookmarked: input.bookmarked },
+            ),
+          );
           await Promise.all(promises);
         } else {
           logger.error(
@@ -563,6 +569,9 @@ export const traceRouter = createTRPCRouter({
         }
         traceById.public = input.public;
         const promises: Promise<void>[] = [];
+        // Master events_full migration: keep the legacy traces write for
+        // code-retention (no-op against the now-empty table); events_full
+        // is the authoritative write that the UI reads back.
         promises.push(
           partialUpdateDoris({
             table: "traces",
@@ -570,15 +579,13 @@ export const traceRouter = createTRPCRouter({
             set: { public: input.public },
           }),
         );
-        if (env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true") {
-          promises.push(
-            updateEvents(
-              input.projectId,
-              { traceIds: [traceById.id] },
-              { public: input.public },
-            ),
-          );
-        }
+        promises.push(
+          updateEvents(
+            input.projectId,
+            { traceIds: [traceById.id] },
+            { public: input.public },
+          ),
+        );
         await Promise.all(promises);
         return traceById;
       } catch (error) {
@@ -625,11 +632,22 @@ export const traceRouter = createTRPCRouter({
           });
         }
         traceById.tags = input.tags;
-        await partialUpdateDoris({
-          table: "traces",
-          where: { project_id: input.projectId, id: input.traceId },
-          set: { tags: input.tags },
-        });
+        // Master events_full migration: legacy traces write kept for
+        // code-retention (no-op); events_full update is the one the UI
+        // reads back. Tags live on the trace root span (parent_span_id
+        // = '') in events_full.
+        await Promise.all([
+          partialUpdateDoris({
+            table: "traces",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { tags: input.tags },
+          }),
+          updateEvents(
+            input.projectId,
+            { traceIds: [input.traceId], rootOnly: true },
+            { tags: input.tags },
+          ),
+        ]);
       } catch (error) {
         logger.error("Failed to call traces.updateTags", error);
         throw new TRPCError({
