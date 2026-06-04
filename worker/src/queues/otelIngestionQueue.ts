@@ -460,6 +460,36 @@ export const otelIngestionQueueProcessor: Processor = async (
       ? createObservationEvalSchedulerDeps()
       : null;
 
+    // Upsert distinct session_ids into PG trace_sessions. The legacy V3
+    // ingestion path (mergeAndWriteTraceRecord) was the only writer of this
+    // table; OTel-only ingestion bypasses it. Without this, the
+    // protectedGetSessionProcedure middleware in trpc.ts can't find the row
+    // and returns 404 on session detail pages.
+    const sessionEnvByid = new Map<string, string>();
+    for (const ev of eventInputs) {
+      if (ev.sessionId) {
+        sessionEnvByid.set(ev.sessionId, ev.environment ?? "default");
+      }
+    }
+    if (sessionEnvByid.size > 0) {
+      try {
+        await prisma.traceSession.createMany({
+          data: Array.from(sessionEnvByid.entries()).map(([id, environment]) => ({
+            id,
+            projectId,
+            environment,
+          })),
+          skipDuplicates: true,
+        });
+      } catch (e) {
+        traceException(e);
+        logger.error(
+          `Failed to upsert trace_sessions for project ${projectId}`,
+          e,
+        );
+      }
+    }
+
     await Promise.all(
       // Process each event independently
       eventInputs.map(async (eventInput) => {
