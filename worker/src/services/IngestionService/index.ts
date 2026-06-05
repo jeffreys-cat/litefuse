@@ -419,6 +419,11 @@ export class IngestionService {
       provided_cost_details: eventData.providedCostDetails ?? {},
       cost_details:
         generationUsage?.cost_details ?? eventData.costDetails ?? {},
+      // total_cost (denormalised from cost_details) is what dashboards
+      // sum() in Doris — without this, events_full.total_cost stays 0
+      // even though cost_details has the per-key breakdown, and the
+      // Home/Model-Usage cost widgets show $0.
+      total_cost: generationUsage?.total_cost ?? null,
 
       usage_pricing_tier_id: generationUsage?.usage_pricing_tier_id,
       usage_pricing_tier_name: generationUsage?.usage_pricing_tier_name,
