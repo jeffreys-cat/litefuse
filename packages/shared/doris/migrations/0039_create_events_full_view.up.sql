@@ -116,7 +116,6 @@ LEFT JOIN (
     LATERAL VIEW POSEXPLODE(CAST(o_inner.`input` AS ARRAY<VARCHAR>)) t_inner AS `pos`, `hash_item`
     LEFT JOIN content_dict c
         ON t_inner.`hash_item` = c.`content_hash`
-       AND o_inner.`start_time_date` = c.`date`
     WHERE o_inner.`type` = 'GENERATION'
       AND o_inner.`input` IS NOT NULL
     GROUP BY o_inner.`project_id`, o_inner.`start_time_date`, o_inner.`span_id`
