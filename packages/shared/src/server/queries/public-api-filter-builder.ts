@@ -33,7 +33,7 @@ const TRACES_COLUMN_DEFINITIONS = [
   {
     id: "timestamp",
     name: "Timestamp",
-    column: "timestamp",
+    column: "start_time",
     filterType: "DateTimeFilter",
   },
   {
@@ -88,7 +88,7 @@ export function createPublicApiTracesColumnMapping(
   tableName: "traces",
   tablePrefix: "t",
 ): ApiColumnMapping[] {
-  const timestampColumn = "timestamp";
+  const timestampColumn = "start_time";
   const simpleFilters: ApiColumnMapping[] = [];
   for (const def of TRACES_COLUMN_DEFINITIONS) {
     // For timestamp filters, create fromTimestamp and toTimestamp
