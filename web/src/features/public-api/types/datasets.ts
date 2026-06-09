@@ -233,6 +233,12 @@ export const PostDatasetRunItemsV1Body = z
     observationId: z.string().nullish(),
     traceId: z.string().nullish(),
     datasetVersion: versionZod.nullish(),
+    // Optional client-supplied creation timestamp. Older SDKs (and the
+    // server-side default) generate it server-side, but @langfuse/core
+    // >= 5.3.x sends it explicitly to support backfill / replay use
+    // cases where the original event time matters. Without this field
+    // the strict() schema rejects the whole request as unrecognized_keys.
+    createdAt: z.coerce.date().nullish(),
   })
   .strict()
   .refine((data) => data.observationId || data.traceId, {

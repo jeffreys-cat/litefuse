@@ -103,7 +103,10 @@ export default withMiddlewares({
        * RUN ITEM CREATION *
        ********************/
 
-      const createdAt = new Date();
+      // Honour a client-supplied createdAt if present (SDK >= 5.3.x
+      // sends it for backfill / replay scenarios), otherwise stamp
+      // server-side. Zod coerces strings → Date in the bodySchema.
+      const createdAt = body.createdAt ?? new Date();
 
       const event = {
         id: runItemId,
