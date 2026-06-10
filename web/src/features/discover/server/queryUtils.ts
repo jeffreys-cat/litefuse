@@ -19,13 +19,9 @@ export function isLangfuseDatabase(database: string | undefined): boolean {
 /**
  * Langfuse Doris tables that contain a `project_id` column and therefore
  * require per-project data isolation in the Discover feature.
- *
- * Tables intentionally excluded (no project_id column):
- *   - content_dict  (day-partitioned content-addressed store, keyed by date + content hash)
  */
 const LANGFUSE_TABLES_WITH_PROJECT_ID = new Set([
   "events_full",
-  "events_full_view",
   "scores",
   "event_log",
   "project_environments",

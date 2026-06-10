@@ -58,32 +58,8 @@ const buildTraceAggregationQuery = (params: {
   whereSql: string;
   extraOrderBy?: string;
   extraLimit?: string;
-  /**
-   * When true, the `trace_root` CTE reads from `events_full_view`
-   * instead of raw `events_full`. The view resolves GENERATION-row
-   * `input` from a SHA-256 hash array (stored at write time by
-   * `deduplicateInputContent` + `content_dict`) back into the original
-   * content JSON via a LEFT JOIN + POSEXPLODE on content_dict (see
-   * migration 0039). Without this, a trace whose root span happens to
-   * be a GENERATION returns its `input` as a literal hex array, which
-   * the UI / API consumers cannot render.
-   *
-   * Single-trace lookups (getTraceById, byIdWithObservationsAndScores)
-   * should pass true. Trace list / aggregation queries can leave it
-   * false to avoid paying the JOIN cost across every row scanned.
-   *
-   * The `trace_scalars` CTE never reads input/output, so it stays on
-   * the raw `events_full` table either way.
-   */
-  resolveContentDict?: boolean;
 }): string => {
-  const {
-    whereSql,
-    extraOrderBy = "",
-    extraLimit = "",
-    resolveContentDict = false,
-  } = params;
-  const rootSource = resolveContentDict ? "events_full_view" : "events_full";
+  const { whereSql, extraOrderBy = "", extraLimit = "" } = params;
   return `
     WITH trace_scalars AS (
       SELECT
@@ -130,7 +106,7 @@ const buildTraceAggregationQuery = (params: {
             PARTITION BY trace_id, project_id
             ORDER BY event_ts DESC
           ) AS rn
-        FROM ${rootSource}
+        FROM events_full
         WHERE ${whereSql}
           AND parent_span_id = ''
       ) ranked
@@ -511,12 +487,6 @@ export const getTraceById = async ({
   const query = buildTraceAggregationQuery({
     whereSql,
     extraLimit: "LIMIT 1",
-    // Single-trace lookup must resolve content_dict hashes so consumers
-    // (UI trace detail, byIdWithObservationsAndScores) receive the real
-    // input JSON instead of a SHA-256 array when the root span is a
-    // GENERATION. List/aggregation callers above leave this off to
-    // avoid the LEFT JOIN cost on broad scans.
-    resolveContentDict: true,
   });
 
   const rawRecords = await queryDoris<

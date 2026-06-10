@@ -42,7 +42,6 @@ import type { AnalyticsGenerationEvent } from "../analytics-integrations/types";
 import { ObservationType } from "../../domain";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
-// import { resolveContentReferences } from "./contentResolver";
 
 /**
  * Checks if observation exists in Doris.
@@ -146,10 +145,6 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
 
   let records: ObservationRecordReadType[];
 
-  // When includeIO is true we need GENERATION input hashes resolved against
-  // content_dict → heavy events_full_view. Otherwise the lighter
-  // events_full_trace_view (same trace-COALESCE semantics, no UNION ALL on
-  // content_dict) cuts events_full scans in half.
   const query = `
     SELECT
       span_id AS id,
@@ -185,7 +180,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
       created_at,
       updated_at,
       event_ts
-    FROM ${includeIO === true ? "events_full_view" : "events_full_trace_view"}
+    FROM events_full
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
     ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
@@ -221,11 +216,6 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
           : {},
     };
   }) as ObservationRecordReadType[];
-
-  // Resolve content_hash references back to actual content
-  // if (includeIO) {
-  //   await resolveContentReferences(records);
-  // }
 
   // Large number of observations in trace with large input / output / metadata will lead to
   // high CPU and memory consumption in the convertObservation step, where parsing occurs
@@ -324,7 +314,7 @@ export const getObservationForTraceIdByName = async ({
       created_at,
       updated_at,
       event_ts
-    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full"}
+    FROM events_full
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
     AND name = {name: String}
@@ -452,7 +442,7 @@ export const getObservationsById = async (
       created_at,
       updated_at,
       event_ts
-    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full"}
+    FROM events_full
     WHERE span_id IN ({ids: Array(String)})
     AND project_id = {projectId: String}
     ORDER BY event_ts DESC
@@ -491,10 +481,6 @@ const getObservationByIdInternal = async ({
   traceId?: string;
   renderingProps?: RenderingProps;
 }) => {
-  // Read single observation span. When fetchWithInputOutput is true we need
-  // GENERATION input hashes resolved → heavy events_full_view. Otherwise the
-  // lighter events_full_trace_view (same trace-COALESCE semantics, no
-  // UNION ALL on content_dict) cuts events_full scans in half.
   const query = `
     SELECT
       span_id AS id,
@@ -532,7 +518,7 @@ const getObservationByIdInternal = async ({
       created_at,
       updated_at,
       event_ts
-    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full_trace_view"}
+    FROM events_full
     WHERE span_id = {id: String}
     AND project_id = {projectId: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
@@ -1699,27 +1685,7 @@ export const getObservationsForBlobStorageExport = function (
     },
   });
 
-  // Wrap stream to resolve content_hash references in batches
-  return (async function* () {
-    const batch: Array<Record<string, unknown>> = [];
-    const BATCH_SIZE = 100;
-    for await (const record of records) {
-      batch.push(record);
-      if (batch.length >= BATCH_SIZE) {
-        // await resolveContentReferences(
-        //   batch as Array<{ input?: string | null }>,
-        // );
-        for (const r of batch) yield r;
-        batch.length = 0;
-      }
-    }
-    if (batch.length > 0) {
-      // await resolveContentReferences(
-      //   batch as Array<{ input?: string | null }>,
-      // );
-      for (const r of batch) yield r;
-    }
-  })();
+  return records;
 };
 
 export const getGenerationsForAnalyticsIntegrations = async function* (

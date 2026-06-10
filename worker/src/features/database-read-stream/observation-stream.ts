@@ -254,9 +254,7 @@ export const getObservationStream = async (props: {
         t.user_id AS userId,
         s.scores_avg AS scores_avg,
         s.score_categories AS score_categories
-      -- events_full_view rehydrates GENERATION input hashes from content_dict
-      -- so exports see the original prompt JSON, not the hash array.
-      FROM events_full_view o
+      FROM events_full o
         LEFT JOIN trace_root t
           ON t.trace_id = o.trace_id AND t.project_id = o.project_id
         LEFT JOIN scores_agg s

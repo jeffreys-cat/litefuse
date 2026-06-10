@@ -634,7 +634,7 @@ async function getObservationByIdFromEventsTableInternal({
       created_at,
       updated_at,
       event_ts
-    FROM ${fetchWithInputOutput ? "events_full_view" : "events_full_trace_view"}
+    FROM events_full
     WHERE project_id = {projectId: String}
     AND span_id = {id: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
@@ -2355,7 +2355,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       ${outputSelect},
       e.metadata_names,
       e.metadata_values
-    FROM events_full_view e
+    FROM events_full e
     WHERE e.project_id = {projectId: String}
       AND e.span_id IN ({observationIds: Array(String)})
       AND e.trace_id IN ({traceIds: Array(String)})
