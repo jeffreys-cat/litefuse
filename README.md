@@ -43,7 +43,7 @@
    <a href="https://hub.docker.com/u/litefuse" target="_blank">
    <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/litefuse/litefuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff"></a>
    <a href="https://pypi.python.org/pypi/litefuse"><img src="https://img.shields.io/pypi/dm/litefuse?logo=python&logoColor=white&label=pypi%20litefuse&color=blue" alt="litefuse Python package on PyPi"></a>
-   <a href="https://www.npmjs.com/package/litefuse"><img src="https://img.shields.io/npm/dm/litefuse?logo=npm&logoColor=white&label=npm%20litefuse&color=blue" alt="litefuse npm package"></a>
+   <a href="https://www.npmjs.com/package/langfuse"><img src="https://img.shields.io/npm/dm/langfuse?logo=npm&logoColor=white&label=npm%20langfuse&color=blue" alt="langfuse npm package"></a>
    <br/>
    <a href="https://discord.com/invite/7NXusRtqYU" target="_blank">
    <img src="https://img.shields.io/discord/1111061815649124414?logo=discord&labelColor=%20%235462eb&logoColor=%20%23f5f5f5&color=%20%235462eb"
@@ -190,19 +190,19 @@ The [`@observe()` decorator](https://litefuse.ai/docs/sdk/python/decorators) mak
 > Not using OpenAI? Visit [our documentation](https://litefuse.ai/docs/get-started#log-your-first-llm-call-to-litefuse) to learn how to log other models and frameworks.
 
 ```bash
-pip install litefuse openai
+pip install langfuse openai
 ```
 
 ```bash filename=".env"
 LANGFUSE_SECRET_KEY="sk-lf-..."
 LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LITEFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EU region
-# LITEFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 US region
+LANGFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EU region
+# LANGFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 US region
 ```
 
-```python /@observe()/ /from litefuse.openai import openai/ filename="main.py"
-from litefuse import observe
-from litefuse.openai import openai # OpenAI integration
+```python /@observe()/ /from langfuse.openai import openai/ filename="main.py"
+from langfuse import observe
+from langfuse.openai import openai # OpenAI integration
 
 @observe()
 def story():
