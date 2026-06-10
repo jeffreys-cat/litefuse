@@ -39,16 +39,18 @@ export const dorisSearchCondition = (
   // ID 搜索：根据查询上下文决定字段前缀
   if (!searchType || searchType.includes("id")) {
     if (context?.type === "observations") {
-      // observations 查询上下文：搜索 observations 和 traces 表的字段
+      // observations 查询上下文：events_full 的 observation 标识列是 span_id
+      // （没有 `id` 列）。
       conditions.push(
         context.hasTracesJoin
-          ? `o.id LIKE {searchQuery: String} OR o.name LIKE {searchQuery: String} OR t.user_id LIKE {searchQuery: String}`
-          : `o.id LIKE {searchQuery: String} OR o.name LIKE {searchQuery: String}`,
+          ? `o.span_id LIKE {searchQuery: String} OR o.name LIKE {searchQuery: String} OR t.user_id LIKE {searchQuery: String}`
+          : `o.span_id LIKE {searchQuery: String} OR o.name LIKE {searchQuery: String}`,
       );
     } else {
-      // traces 查询上下文（默认）：搜索 traces 表的字段
+      // traces 查询上下文（默认）：events_full 用 trace_id 作为 trace 标识，
+      // trace 名称在 trace_name 列（不是 root span 的 name）。
       conditions.push(
-        `t.id LIKE {searchQuery: String} OR t.user_id LIKE {searchQuery: String} OR t.name LIKE {searchQuery: String}`,
+        `t.trace_id LIKE {searchQuery: String} OR t.user_id LIKE {searchQuery: String} OR t.trace_name LIKE {searchQuery: String}`,
       );
     }
   }
