@@ -207,8 +207,7 @@ pip install Litefuse openai
 ```bash:.env
 Litefuse_SECRET_KEY="sk-lf-..."
 Litefuse_PUBLIC_KEY="pk-lf-..."
-Litefuse_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 欧盟区域
-# Litefuse_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 美洲区域
+LANGFUSE_BASE_URL="https://litefuse.cloud"
 ```
 
 创建示例代码（文件名：**main.py**）：
