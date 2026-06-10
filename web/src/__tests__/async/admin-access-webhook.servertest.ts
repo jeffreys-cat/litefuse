@@ -5,8 +5,8 @@ import {
 } from "@/src/server/adminAccessWebhook";
 
 describe("sendAdminAccessWebhook", () => {
-  const originalWebhook = env.LANGFUSE_ADMIN_ACCESS_WEBHOOK;
-  const originalRegion = env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+  const originalWebhook = env.LITEFUSE_ADMIN_ACCESS_WEBHOOK;
+  const originalRegion = env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
 
   beforeEach(() => {
     resetAdminAccessWebhookCacheForTests();
@@ -15,12 +15,12 @@ describe("sendAdminAccessWebhook", () => {
 
   afterEach(() => {
     jest.useRealTimers();
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = originalWebhook;
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = originalRegion;
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = originalWebhook;
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = originalRegion;
   });
 
   it("should not send when webhook is not configured", async () => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = undefined;
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = undefined;
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
       .mockResolvedValue({ ok: true } as Response);
@@ -35,7 +35,7 @@ describe("sendAdminAccessWebhook", () => {
   });
 
   it("should not send when email is missing", async () => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
       .mockResolvedValue({ ok: true } as Response);
@@ -52,8 +52,8 @@ describe("sendAdminAccessWebhook", () => {
   it("should send expected payload including project, org and region", async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-02-19T19:39:37.000Z"));
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = "HIPAA";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = "HIPAA";
 
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
@@ -84,7 +84,7 @@ describe("sendAdminAccessWebhook", () => {
   it("should dedupe repeated sends within 60 seconds for same email/project/org", async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-02-19T19:39:37.000Z"));
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
 
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
@@ -107,7 +107,7 @@ describe("sendAdminAccessWebhook", () => {
   it("should send again after dedupe window has passed", async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-02-19T19:39:37.000Z"));
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
 
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
@@ -131,7 +131,7 @@ describe("sendAdminAccessWebhook", () => {
   });
 
   it("should not dedupe when email/project/org differ", async () => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
 
     const fetchSpy = jest
       .spyOn(globalThis, "fetch")
@@ -152,7 +152,7 @@ describe("sendAdminAccessWebhook", () => {
   });
 
   it("should not throw when fetch rejects", async () => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
 
     jest
       .spyOn(globalThis, "fetch")
@@ -168,7 +168,7 @@ describe("sendAdminAccessWebhook", () => {
   });
 
   it("should not throw when fetch returns non-ok response", async () => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
 
     jest.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,

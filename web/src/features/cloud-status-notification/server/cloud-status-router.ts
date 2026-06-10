@@ -33,7 +33,7 @@ export const cloudStatusRouter = createTRPCRouter({
     )
     .query(async () => {
       // Skip status check if not running on Langfuse Cloud
-      if (!env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
+      if (!env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION) {
         return { status: null };
       }
 

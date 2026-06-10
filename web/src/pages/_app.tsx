@@ -198,7 +198,7 @@ function UserTracking() {
                 organization: org,
               })),
             ) ?? undefined,
-          LANGFUSE_CLOUD_REGION: region,
+          LITEFUSE_CLOUD_REGION: region,
           [V4_BETA_ENABLED_POSTHOG_PROPERTY]:
             sessionUser.v4BetaEnabled ?? false,
         });

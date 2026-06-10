@@ -52,16 +52,16 @@ export const applyInputOutputRendering = (
 
   if (
     renderingProps.truncated &&
-    result.length > env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
+    result.length > env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
     result =
-      result.slice(0, env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT) +
+      result.slice(0, env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT) +
       "...[truncated]";
   }
 
   if (
     renderingProps.truncated &&
-    result.length === env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT
+    result.length === env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT
   ) {
     result = result + "...[truncated]";
   }

@@ -105,12 +105,12 @@ const createTestCaller = (params: {
 
 describe("admin access webhook in tRPC authorization middleware", () => {
   const mockGetTraceById = jest.mocked(getTraceById);
-  const originalWebhook = env.LANGFUSE_ADMIN_ACCESS_WEBHOOK;
-  const originalRegion = env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+  const originalWebhook = env.LITEFUSE_ADMIN_ACCESS_WEBHOOK;
+  const originalRegion = env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
 
   beforeAll(() => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = "US";
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = "https://example.com/hook";
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = "US";
   });
 
   beforeEach(() => {
@@ -128,8 +128,8 @@ describe("admin access webhook in tRPC authorization middleware", () => {
   });
 
   afterAll(() => {
-    (env as any).LANGFUSE_ADMIN_ACCESS_WEBHOOK = originalWebhook;
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = originalRegion;
+    (env as any).LITEFUSE_ADMIN_ACCESS_WEBHOOK = originalWebhook;
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = originalRegion;
   });
 
   it("sends webhook when admin accesses a project they are not a member of", async () => {

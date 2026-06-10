@@ -1,9 +1,9 @@
 services:
-  langfuse-web:
-    image: selectdb/langfuse-web:latest
-    container_name: langfuse-web
-    hostname: langfuse-web
-    depends_on: &langfuse-depends-on
+  litefuse-web:
+    image: selectdb/litefuse-web:latest
+    container_name: litefuse-web
+    hostname: litefuse-web
+    depends_on: &litefuse-depends-on
       postgres:
         condition: service_healthy
       minio:
@@ -16,36 +16,31 @@ services:
         condition: service_healthy
     ports:
       - "13000:3000"
-    environment: &langfuse-web-env
-      DATABASE_URL: postgresql://postgres:postgres@langfuse-postgres:5432/postgres
+    environment: &litefuse-web-env
+      DATABASE_URL: postgresql://postgres:postgres@litefuse-postgres:5432/postgres
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-your-debug-secret-key-here-must-be-long-enough}
       SALT: ${SALT:-your-super-secret-salt-with-at-least-32-characters-for-encryption}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
       TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-false}
-      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
-      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
-      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
-      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
-      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-}
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
-      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
-      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
-      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
-      CLICKHOUSE_MIGRATION_URL: ${CLICKHOUSE_MIGRATION_URL:-clickhouse://clickhouse:clickhouse@localhost:9000}
-      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://localhost:8123}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-clickhouse}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse}
-      CLICKHOUSE_CLUSTER_ENABLED: ${CLICKHOUSE_CLUSTER_ENABLED:-false}
-      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${LANGFUSE_S3_EVENT_UPLOAD_BUCKET:-langfuse}
-      LANGFUSE_S3_EVENT_UPLOAD_REGION: ${LANGFUSE_S3_EVENT_UPLOAD_REGION:-us-east-1}
-      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
-      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret}
-      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
-      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}
-      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: ${LANGFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}
-      REDIS_HOST: langfuse-redis
+      LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+      LITEFUSE_INIT_ORG_ID: ${LITEFUSE_INIT_ORG_ID:-}
+      LITEFUSE_INIT_ORG_NAME: ${LITEFUSE_INIT_ORG_NAME:-}
+      LITEFUSE_INIT_PROJECT_ID: ${LITEFUSE_INIT_PROJECT_ID:-}
+      LITEFUSE_INIT_PROJECT_NAME: ${LITEFUSE_INIT_PROJECT_NAME:-}
+      LITEFUSE_INIT_PROJECT_PUBLIC_KEY: ${LITEFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LITEFUSE_INIT_PROJECT_SECRET_KEY: ${LITEFUSE_INIT_PROJECT_SECRET_KEY:-}
+      LITEFUSE_INIT_USER_EMAIL: ${LITEFUSE_INIT_USER_EMAIL:-}
+      LITEFUSE_INIT_USER_NAME: ${LITEFUSE_INIT_USER_NAME:-}
+      LITEFUSE_INIT_USER_PASSWORD: ${LITEFUSE_INIT_USER_PASSWORD:-}
+      LITEFUSE_S3_EVENT_UPLOAD_BUCKET: ${LITEFUSE_S3_EVENT_UPLOAD_BUCKET:-litefuse}
+      LITEFUSE_S3_EVENT_UPLOAD_REGION: ${LITEFUSE_S3_EVENT_UPLOAD_REGION:-us-east-1}
+      LITEFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LITEFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID:-minio}
+      LITEFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LITEFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY:-miniosecret}
+      LITEFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://litefuse-minio:9000
+      LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE:-true}
+      LITEFUSE_S3_EVENT_UPLOAD_PREFIX: ${LITEFUSE_S3_EVENT_UPLOAD_PREFIX:-events/}
+      REDIS_HOST: litefuse-redis
       REDIS_PORT: 6379
       REDIS_AUTH: ${REDIS_AUTH:-myredissecret}
       REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
@@ -56,22 +51,19 @@ services:
       # 时区设置
       TZ: Asia/Shanghai
 
-      # 禁用 ClickHouse 迁移，因为我们使用 Doris
-      LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: true
 
-      # 禁用后台迁移（从 PG 到 ClickHouse），因为我们使用 Doris
-      LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: false
+      LITEFUSE_ENABLE_BACKGROUND_MIGRATIONS: false
 
       # 临时禁用 Doris 迁移，直到修复脚本语法错误
-      LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: false
+      LITEFUSE_AUTO_DORIS_MIGRATION_DISABLED: false
 
       # Doris 配置
-      # Note: Doris is enabled automatically when LANGFUSE_ANALYTICS_BACKEND="doris"
-      LANGFUSE_ANALYTICS_BACKEND: ${LANGFUSE_ANALYTICS_BACKEND:-doris}
+      # Note: Doris is enabled automatically when LITEFUSE_ANALYTICS_BACKEND="doris"
+      LITEFUSE_ANALYTICS_BACKEND: ${LITEFUSE_ANALYTICS_BACKEND:-doris}
       DORIS_URL: ${DORIS_FE_HTTP_URL:-}
       DORIS_FE_HTTP_URL: ${DORIS_FE_HTTP_URL:-http://172.30.0.2:8030}
       DORIS_FE_QUERY_PORT: ${DORIS_FE_QUERY_PORT:-9030}
-      DORIS_DB: ${DORIS_DB:-langfuse}
+      DORIS_DB: ${DORIS_DB:-litefuse}
       DORIS_USER: ${DORIS_USER:-root}
       DORIS_PASSWORD: ${DORIS_PASSWORD:-}
       DORIS_MAX_OPEN_CONNECTIONS: ${DORIS_MAX_OPEN_CONNECTIONS:-100}
@@ -89,15 +81,15 @@ services:
       - default
       - doris_internal
 
-  langfuse-worker:
-    image: selectdb/langfuse-worker:latest
-    container_name: langfuse-worker
-    hostname: langfuse-worker
-    depends_on: *langfuse-depends-on
+  litefuse-worker:
+    image: selectdb/litefuse-worker:latest
+    container_name: litefuse-worker
+    hostname: litefuse-worker
+    depends_on: *litefuse-depends-on
     ports:
       - "3030:3030"
     environment:
-      <<: *langfuse-web-env
+      <<: *litefuse-web-env
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep 'node worker/dist/index.js' | grep -v grep || exit 1"]
@@ -111,12 +103,12 @@ services:
 
   minio:
     image: minio/minio
-    container_name: langfuse-minio
-    hostname: langfuse-minio
+    container_name: litefuse-minio
+    hostname: litefuse-minio
     restart: always
     entrypoint: sh
-    # create the 'langfuse' bucket before starting the service
-    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    # create the 'litefuse' bucket before starting the service
+    command: -c 'mkdir -p /data/litefuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: miniosecret # CHANGEME
@@ -124,7 +116,7 @@ services:
       - 19090:9000
       - 127.0.0.1:19091:9001
     volumes:
-      - langfuse_minio_data:/data
+      - litefuse_minio_data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 1s
@@ -134,8 +126,8 @@ services:
 
   redis:
     image: redis:7
-    container_name: langfuse-redis
-    hostname: langfuse-redis
+    container_name: litefuse-redis
+    hostname: litefuse-redis
     restart: always
     # CHANGEME: row below to secure redis password
     command: >
@@ -150,8 +142,8 @@ services:
 
   postgres:
     image: postgres:${POSTGRES_VERSION:-latest}
-    container_name: langfuse-postgres
-    hostname: langfuse-postgres
+    container_name: litefuse-postgres
+    hostname: litefuse-postgres
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -165,7 +157,7 @@ services:
     ports:
       - 127.0.0.1:5432:5432
     volumes:
-      - langfuse_postgres_data:/var/lib/postgresql
+      - litefuse_postgres_data:/var/lib/postgresql
 
   doris_fe:
     image: apache/doris:fe-2.1.11
@@ -225,9 +217,9 @@ services:
       start_period: 150s
 
 volumes:
-  langfuse_postgres_data:
+  litefuse_postgres_data:
     driver: local
-  langfuse_minio_data:
+  litefuse_minio_data:
     driver: local
   doris_fe_meta:
     driver: local

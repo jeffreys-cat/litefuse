@@ -47,13 +47,13 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
   private readonly tableName: BatchDeletionTable;
 
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+    return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
   }
 
   constructor(tableName: BatchDeletionTable) {
     // TTL = DELETE timeout + 5 minutes buffer
     const lockTtlSeconds =
-      Math.ceil(env.LANGFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
+      Math.ceil(env.LITEFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
       300;
 
     super({
@@ -69,10 +69,10 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
    */
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      checkIntervalMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
-      sleepOnEmptyMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
-      projectLimit: env.LANGFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
-      deleteTimeoutMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS,
+      checkIntervalMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
+      sleepOnEmptyMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+      projectLimit: env.LITEFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
+      deleteTimeoutMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS,
     });
     super.start();
   }
@@ -92,14 +92,14 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
     let deletedProjects: Array<{ id: string }>;
     try {
       deletedProjects = await getDeletedProjects(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
       );
     } catch (error) {
       logger.error(`${this.instanceName}: Failed to query deleted projects`, {
         error,
       });
       traceException(error);
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     // Step 2: Query Doris for counts per project (no lock needed)
@@ -111,7 +111,7 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
     } catch (error) {
       logger.error(`${this.instanceName}: Failed to query Doris counts`, error);
       traceException(error);
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     // Filter to only projects that have data
@@ -123,7 +123,7 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
       logger.info(
         `${this.instanceName}: No data found for deleted projects in ${this.tableName}`,
       );
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     // Step 3 & 4: Execute DELETE under distributed lock
@@ -142,7 +142,7 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
             totalRowsTargeted: totalRows,
           });
 
-          return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+          return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
         },
         async (error) => {
           // Step 5: On failure, re-run count query to determine partial success
@@ -187,9 +187,9 @@ export class BatchProjectCleaner extends PeriodicExclusiveRunner {
             );
           }
 
-          return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+          return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
         },
-      )) ?? env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
+      )) ?? env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
     );
   }
 

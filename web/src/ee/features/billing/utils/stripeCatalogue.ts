@@ -2,8 +2,8 @@ import { env } from "@/src/env.mjs";
 import { type Plan } from "@langfuse/shared";
 
 const isTestEnvironment =
-  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ||
-  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING";
+  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "DEV" ||
+  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "STAGING";
 
 type StripeProduct = {
   stripeProductId: string;

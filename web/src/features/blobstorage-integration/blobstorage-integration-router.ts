@@ -91,7 +91,7 @@ export const blobStorageIntegrationRouter = createTRPCRouter({
           exportSource,
         } = input;
 
-        const isSelfHosted = !env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+        const isSelfHosted = !env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
         const canUseHostCredentials =
           isSelfHosted && type === BlobStorageIntegrationType.S3;
         const isUsingHostCredentials =

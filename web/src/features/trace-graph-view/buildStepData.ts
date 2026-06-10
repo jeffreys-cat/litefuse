@@ -1,8 +1,8 @@
 import { ObservationType } from "@langfuse/shared";
 import {
   type AgentGraphDataResponse,
-  LANGFUSE_START_NODE_NAME,
-  LANGFUSE_END_NODE_NAME,
+  LITEFUSE_START_NODE_NAME,
+  LITEFUSE_END_NODE_NAME,
 } from "./types";
 
 function buildStepGroups(
@@ -201,9 +201,9 @@ function addLangfuseSystemNodes(
 
   // Add __start_lf__ node at step 0
   systemNodes.push({
-    id: LANGFUSE_START_NODE_NAME,
-    name: LANGFUSE_START_NODE_NAME,
-    node: LANGFUSE_START_NODE_NAME,
+    id: LITEFUSE_START_NODE_NAME,
+    name: LITEFUSE_START_NODE_NAME,
+    node: LITEFUSE_START_NODE_NAME,
     step: 0,
     parentObservationId: topLevelObs?.parentObservationId || null,
     startTime: systemTimestamp,
@@ -214,9 +214,9 @@ function addLangfuseSystemNodes(
   // Add __end_lf__ node at max step + 1
   const maxStep = Math.max(...data.map((obs) => obs.step || 0));
   systemNodes.push({
-    id: LANGFUSE_END_NODE_NAME,
-    name: LANGFUSE_END_NODE_NAME,
-    node: LANGFUSE_END_NODE_NAME,
+    id: LITEFUSE_END_NODE_NAME,
+    name: LITEFUSE_END_NODE_NAME,
+    node: LITEFUSE_END_NODE_NAME,
     step: maxStep + 1,
     parentObservationId: topLevelObs?.parentObservationId || null,
     startTime: systemTimestamp,

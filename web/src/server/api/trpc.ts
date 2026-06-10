@@ -98,7 +98,7 @@ import { BaseError, parseIO } from "@langfuse/shared";
 
 setUpSuperjson();
 
-const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
+const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION);
 
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,

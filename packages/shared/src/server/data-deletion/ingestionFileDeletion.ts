@@ -64,7 +64,7 @@ async function removeIngestionEventsFromS3AndDeleteDorisRefs(p: {
 
   let blobStorageRefs: BlobStorageFileRefRecordReadType[] = [];
   const eventStorageClient = getS3EventStorageClient(
-    env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET!,
+    env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
   );
   for await (const eventLog of stream) {
     blobStorageRefs.push(eventLog);

@@ -114,14 +114,14 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
   private readonly tableName: BatchDataRetentionTable;
 
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_INTERVAL_MS;
+    return env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_INTERVAL_MS;
   }
 
   constructor(tableName: BatchDataRetentionTable) {
     // TTL = DELETE timeout + 5 minutes buffer
     const lockTtlSeconds =
       Math.ceil(
-        env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS / 1000,
+        env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS / 1000,
       ) + 300;
 
     super({
@@ -137,10 +137,10 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
    */
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      intervalMs: env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_INTERVAL_MS,
-      projectLimit: env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_PROJECT_LIMIT,
+      intervalMs: env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_INTERVAL_MS,
+      projectLimit: env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_PROJECT_LIMIT,
       deleteTimeoutMs:
-        env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS,
+        env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_DELETE_TIMEOUT_MS,
     });
     super.start();
   }
@@ -274,7 +274,7 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
     );
 
     // Step 3: Chunk projects and query ClickHouse for expired row counts
-    const chunkSize = env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_CHUNK_SIZE;
+    const chunkSize = env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_CHUNK_SIZE;
     const chunks: (typeof allProjectRetentions)[] = [];
     for (let i = 0; i < allProjectRetentions.length; i += chunkSize) {
       chunks.push(allProjectRetentions.slice(i, i + chunkSize));
@@ -296,7 +296,7 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
 
     return withExpiredRows.slice(
       0,
-      env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_PROJECT_LIMIT,
+      env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_PROJECT_LIMIT,
     );
   }
 

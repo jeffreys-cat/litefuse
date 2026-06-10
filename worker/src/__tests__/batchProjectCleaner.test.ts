@@ -54,7 +54,7 @@ describe("BatchProjectCleaner", () => {
       const nextDelayMs = await cleaner.processBatch();
 
       expect(nextDelayMs).toBe(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
       );
 
       // Verify lock was not taken
@@ -74,7 +74,7 @@ describe("BatchProjectCleaner", () => {
       const nextDelayMs = await cleaner.processBatch();
 
       expect(nextDelayMs).toBe(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
       );
 
       // Verify lock was not taken
@@ -110,7 +110,7 @@ describe("BatchProjectCleaner", () => {
 
       // Verify returned check interval (work was done)
       expect(nextDelayMs).toBe(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
       );
     });
 
@@ -176,7 +176,7 @@ describe("BatchProjectCleaner", () => {
       expect(await getClickhouseCount(TEST_TABLE, projectId1)).toBe(0);
       expect(await getClickhouseCount(TEST_TABLE, projectId2)).toBe(0);
       expect(nextDelayMs).toBe(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
       );
     });
 
@@ -203,7 +203,7 @@ describe("BatchProjectCleaner", () => {
       // Verify traces were NOT deleted (lock blocked processing)
       expect(await getClickhouseCount(TEST_TABLE, projectId)).toBe(1);
       expect(nextDelayMs).toBe(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
       );
     });
 

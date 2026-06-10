@@ -34,13 +34,13 @@ interface ProjectWorkload {
  */
 export class MediaRetentionCleaner extends PeriodicExclusiveRunner {
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS;
+    return env.LITEFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS;
   }
 
   constructor() {
     // TTL = interval + 5 minutes buffer (media deletion can be slow)
     const lockTtlSeconds =
-      Math.ceil(env.LANGFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS / 1000) + 300;
+      Math.ceil(env.LITEFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS / 1000) + 300;
 
     super({
       name: "MediaRetentionCleaner",
@@ -55,8 +55,8 @@ export class MediaRetentionCleaner extends PeriodicExclusiveRunner {
    */
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      intervalMs: env.LANGFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS,
-      itemLimit: env.LANGFUSE_MEDIA_RETENTION_CLEANER_ITEM_LIMIT,
+      intervalMs: env.LITEFUSE_MEDIA_RETENTION_CLEANER_INTERVAL_MS,
+      itemLimit: env.LITEFUSE_MEDIA_RETENTION_CLEANER_ITEM_LIMIT,
     });
     super.start();
   }
@@ -156,12 +156,12 @@ export class MediaRetentionCleaner extends PeriodicExclusiveRunner {
 
   private async processProject(workload: ProjectWorkload): Promise<void> {
     // Delete media files (S3 + PostgreSQL)
-    if (env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET) {
+    if (env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET) {
       await this.deleteExpiredMedia(workload);
     }
 
     // Delete blob storage entries (S3 + Doris soft delete)
-    if (env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true") {
+    if (env.LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true") {
       await removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
         workload.projectId,
         workload.cutoffDate,
@@ -193,7 +193,7 @@ export class MediaRetentionCleaner extends PeriodicExclusiveRunner {
       projectId: workload.projectId,
       mediaFiles,
       storageClient: getS3MediaStorageClient(
-        env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET!,
+        env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET!,
       ),
     });
 

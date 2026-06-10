@@ -27,9 +27,9 @@ vi.mock("../../env", async (importOriginal) => {
   return {
     ...original,
     env: {
-      LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE: 100,
-      LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: 5000,
-      LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS: 3,
+      LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE: 100,
+      LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: 5000,
+      LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: 3,
     },
   };
 });
@@ -74,12 +74,12 @@ describe("DorisWriter", () => {
 
   it("should initialize with correct values", () => {
     expect(writer.batchSize).toBe(
-      env.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE,
+      env.LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE,
     );
     expect(writer.writeInterval).toBe(
-      env.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS,
+      env.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS,
     );
-    expect(writer.maxAttempts).toBe(env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS);
+    expect(writer.maxAttempts).toBe(env.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS);
   });
 
   it("should add items to the queue", () => {

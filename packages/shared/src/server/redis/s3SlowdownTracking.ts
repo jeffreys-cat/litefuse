@@ -6,7 +6,7 @@ import { env } from "../../env";
 const S3_SLOWDOWN_PREFIX = "langfuse:s3-slowdown";
 
 function isSlowdownEnabled(): boolean {
-  return env.LANGFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED === "true";
+  return env.LITEFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED === "true";
 }
 
 /**
@@ -39,7 +39,7 @@ export function isS3SlowDownError(err: unknown): boolean {
 export async function markProjectS3Slowdown(projectId: string): Promise<void> {
   if (!redis || !isSlowdownEnabled()) return;
 
-  const ttlSeconds = env.LANGFUSE_S3_RATE_ERROR_SLOWDOWN_TTL_SECONDS;
+  const ttlSeconds = env.LITEFUSE_S3_RATE_ERROR_SLOWDOWN_TTL_SECONDS;
 
   try {
     const key = `${S3_SLOWDOWN_PREFIX}:${projectId}`;

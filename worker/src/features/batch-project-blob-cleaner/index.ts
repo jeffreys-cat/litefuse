@@ -25,12 +25,12 @@ const METRIC_PREFIX = "langfuse.batch_project_blob_cleaner";
  */
 export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+    return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
   }
 
   constructor() {
     const lockTtlSeconds =
-      Math.ceil(env.LANGFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
+      Math.ceil(env.LITEFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
       300;
 
     super({
@@ -42,9 +42,9 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
 
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      sleepOnEmptyMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
-      checkIntervalMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
-      projectLimit: env.LANGFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
+      sleepOnEmptyMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+      checkIntervalMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
+      projectLimit: env.LITEFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
     });
     super.start();
   }
@@ -64,18 +64,18 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
     let deletedProjects: Array<{ id: string }>;
     try {
       deletedProjects = await getDeletedProjects(
-        env.LANGFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
+        env.LITEFUSE_BATCH_PROJECT_CLEANER_PROJECT_LIMIT,
       );
     } catch (error) {
       logger.error(`${this.instanceName}: Failed to query deleted projects`, {
         error,
       });
       traceException(error);
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     if (deletedProjects.length === 0) {
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     // Step 2: Check ClickHouse for which projects still have blob refs
@@ -88,7 +88,7 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
         { error },
       );
       traceException(error);
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     // Pick the project with the most remaining blobs
@@ -100,7 +100,7 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
       logger.info(
         `${this.instanceName}: No blob data found for deleted projects`,
       );
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
     }
 
     const [projectId, count] = targetEntry;
@@ -124,13 +124,13 @@ export class BatchProjectBlobCleaner extends PeriodicExclusiveRunner {
           });
           recordIncrement(`${METRIC_PREFIX}.projects_completed`, 1);
 
-          return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+          return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
         },
         (_error) => {
           recordIncrement(`${METRIC_PREFIX}.failures`, 1);
-          return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+          return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
         },
-      )) ?? env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
+      )) ?? env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
     );
   }
 

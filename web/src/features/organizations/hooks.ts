@@ -29,7 +29,7 @@ export const useLangfuseCloudRegion = (): {
   region: string | undefined;
 } => {
   return {
-    isLangfuseCloud: Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION),
-    region: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+    isLangfuseCloud: Boolean(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION),
+    region: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
   };
 };

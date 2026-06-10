@@ -34,7 +34,7 @@ const tableToCommentType: Record<string, CommentObjectType | undefined> = {
 export const handleBatchExportJob = async (
   batchExportJob: BatchExportJobType,
 ) => {
-  if (env.LANGFUSE_S3_BATCH_EXPORT_ENABLED !== "true") {
+  if (env.LITEFUSE_S3_BATCH_EXPORT_ENABLED !== "true") {
     throw new Error(
       "Batch export is not enabled. Configure environment variables to use this feature. See https://litefuse.ai/self-hosting/infrastructure/blobstorage#batch-exports for more details.",
     );
@@ -233,26 +233,26 @@ export const handleBatchExportJob = async (
   const fileDate = new Date().getTime();
   const fileExtension =
     exportOptions[jobDetails.format as BatchExportFileFormat].extension;
-  const fileName = `${env.LANGFUSE_S3_BATCH_EXPORT_PREFIX}${fileDate}-lf-${parsedQuery.data.tableName}-export-${projectId}.${fileExtension}`;
+  const fileName = `${env.LITEFUSE_S3_BATCH_EXPORT_PREFIX}${fileDate}-lf-${parsedQuery.data.tableName}-export-${projectId}.${fileExtension}`;
   const expiresInSeconds =
     env.BATCH_EXPORT_DOWNLOAD_LINK_EXPIRATION_HOURS * 3600;
 
   // Stream upload results to blob storage
-  const bucketName = env.LANGFUSE_S3_BATCH_EXPORT_BUCKET;
+  const bucketName = env.LITEFUSE_S3_BATCH_EXPORT_BUCKET;
   if (!bucketName) {
     throw new Error("No S3 bucket configured for exports.");
   }
 
   const storageParams = {
     bucketName,
-    accessKeyId: env.LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID,
-    secretAccessKey: env.LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY,
-    endpoint: env.LANGFUSE_S3_BATCH_EXPORT_ENDPOINT,
-    externalEndpoint: env.LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT,
-    region: env.LANGFUSE_S3_BATCH_EXPORT_REGION,
-    forcePathStyle: env.LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE === "true",
-    awsSse: env.LANGFUSE_S3_BATCH_EXPORT_SSE,
-    awsSseKmsKeyId: env.LANGFUSE_S3_BATCH_EXPORT_SSE_KMS_KEY_ID,
+    accessKeyId: env.LITEFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID,
+    secretAccessKey: env.LITEFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY,
+    endpoint: env.LITEFUSE_S3_BATCH_EXPORT_ENDPOINT,
+    externalEndpoint: env.LITEFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT,
+    region: env.LITEFUSE_S3_BATCH_EXPORT_REGION,
+    forcePathStyle: env.LITEFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE === "true",
+    awsSse: env.LITEFUSE_S3_BATCH_EXPORT_SSE,
+    awsSseKmsKeyId: env.LITEFUSE_S3_BATCH_EXPORT_SSE_KMS_KEY_ID,
   };
 
   const storageService = StorageServiceFactory.getInstance(storageParams);

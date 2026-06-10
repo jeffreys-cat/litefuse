@@ -330,7 +330,7 @@ export class ApiAuthService {
     hash: string,
     newApiKey: z.infer<typeof OrgEnrichedApiKey> | typeof API_KEY_NON_EXISTENT,
   ) {
-    if (!this.redis || env.LANGFUSE_CACHE_API_KEY_ENABLED !== "true") {
+    if (!this.redis || env.LITEFUSE_CACHE_API_KEY_ENABLED !== "true") {
       return;
     }
 
@@ -339,7 +339,7 @@ export class ApiAuthService {
         this.createRedisKey(hash),
         JSON.stringify(newApiKey),
         "EX",
-        env.LANGFUSE_CACHE_API_KEY_TTL_SECONDS, // redis API is in seconds
+        env.LITEFUSE_CACHE_API_KEY_TTL_SECONDS, // redis API is in seconds
       );
     } catch (error: unknown) {
       logger.error("Error adding key to redis", error);
@@ -347,7 +347,7 @@ export class ApiAuthService {
   }
 
   private async fetchApiKeyFromRedis(hash: string) {
-    if (!this.redis || env.LANGFUSE_CACHE_API_KEY_ENABLED !== "true") {
+    if (!this.redis || env.LITEFUSE_CACHE_API_KEY_ENABLED !== "true") {
       return null;
     }
 
@@ -355,7 +355,7 @@ export class ApiAuthService {
       const redisApiKey = await this.redis.getex(
         this.createRedisKey(hash),
         "EX",
-        env.LANGFUSE_CACHE_API_KEY_TTL_SECONDS, // redis API is in seconds
+        env.LITEFUSE_CACHE_API_KEY_TTL_SECONDS, // redis API is in seconds
       );
 
       if (!redisApiKey) {

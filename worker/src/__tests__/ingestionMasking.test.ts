@@ -162,13 +162,13 @@ const VALID_EE_LICENSE_KEY = "langfuse_ee_test-license-key";
 
 // Default test env with masking disabled
 const defaultTestEnv: SharedEnv = {
-  LANGFUSE_INGESTION_MASKING_CALLBACK_URL: undefined,
-  LANGFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 500,
-  LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
-  LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 1,
-  LANGFUSE_INGESTION_MASKING_PROPAGATED_HEADERS: [],
-  NEXT_PUBLIC_LANGFUSE_CLOUD_REGION: undefined,
-  LANGFUSE_EE_LICENSE_KEY: undefined,
+  LITEFUSE_INGESTION_MASKING_CALLBACK_URL: undefined,
+  LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 500,
+  LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
+  LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 1,
+  LITEFUSE_INGESTION_MASKING_PROPAGATED_HEADERS: [],
+  NEXT_PUBLIC_LITEFUSE_CLOUD_REGION: undefined,
+  LITEFUSE_EE_LICENSE_KEY: undefined,
 } as SharedEnv;
 
 function createTestEnv(overrides: Partial<SharedEnv> = {}): SharedEnv {
@@ -195,7 +195,7 @@ describe("Ingestion Masking", () => {
   describe("isIngestionMaskingEnabled", () => {
     it("should return false when callback URL is not configured", () => {
       const testEnv = createTestEnv({
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       expect(isIngestionMaskingEnabled(testEnv)).toBe(false);
@@ -203,7 +203,7 @@ describe("Ingestion Masking", () => {
 
     it("should return false when EE license is not available", () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
       });
 
@@ -212,9 +212,9 @@ describe("Ingestion Masking", () => {
 
     it("should return true when callback URL and EE license are configured", () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       expect(isIngestionMaskingEnabled(testEnv)).toBe(true);
@@ -222,9 +222,9 @@ describe("Ingestion Masking", () => {
 
     it("should return true when callback URL is configured and running in cloud region", () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
-        NEXT_PUBLIC_LANGFUSE_CLOUD_REGION: "US",
+        NEXT_PUBLIC_LITEFUSE_CLOUD_REGION: "US",
       });
 
       expect(isIngestionMaskingEnabled(testEnv)).toBe(true);
@@ -254,7 +254,7 @@ describe("Ingestion Masking", () => {
 
     it("should return original data when EE license is not available", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
       });
 
@@ -277,9 +277,9 @@ describe("Ingestion Masking", () => {
 
     it("should return masked data on successful callback", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       const result = await applyIngestionMasking(
@@ -303,9 +303,9 @@ describe("Ingestion Masking", () => {
 
     it("should include X-Langfuse-Org-Id and X-Langfuse-Project-Id headers", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       await applyIngestionMasking(
@@ -326,9 +326,9 @@ describe("Ingestion Masking", () => {
 
     it("should propagate custom headers when configured", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/success",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       await applyIngestionMasking(
@@ -351,11 +351,11 @@ describe("Ingestion Masking", () => {
 
     it("should return original data on HTTP 500 with fail-open (default)", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/error",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
-        LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
-        LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
+        LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
       });
 
       const result = await applyIngestionMasking(
@@ -374,11 +374,11 @@ describe("Ingestion Masking", () => {
 
     it("should return failure on HTTP 500 with fail-closed", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/error",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
-        LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "true",
-        LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "true",
+        LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
       });
 
       const result = await applyIngestionMasking(
@@ -397,11 +397,11 @@ describe("Ingestion Masking", () => {
 
     it("should retry on failure", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/error",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
-        LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
-        LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 2,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
+        LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 2,
       });
 
       await applyIngestionMasking(
@@ -420,12 +420,12 @@ describe("Ingestion Masking", () => {
 
     it("should handle timeout with fail-open", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/timeout",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
-        LANGFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 100, // Short timeout
-        LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
-        LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 100, // Short timeout
+        LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "false",
+        LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
       });
 
       const result = await applyIngestionMasking(
@@ -444,12 +444,12 @@ describe("Ingestion Masking", () => {
 
     it("should handle timeout with fail-closed", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/timeout",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
-        LANGFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 100, // Short timeout
-        LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "true",
-        LANGFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: 100, // Short timeout
+        LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: "true",
+        LITEFUSE_INGESTION_MASKING_MAX_RETRIES: 0,
       });
 
       const result = await applyIngestionMasking(
@@ -468,9 +468,9 @@ describe("Ingestion Masking", () => {
 
     it("should work with generic data types", async () => {
       const testEnv = createTestEnv({
-        LANGFUSE_INGESTION_MASKING_CALLBACK_URL:
+        LITEFUSE_INGESTION_MASKING_CALLBACK_URL:
           "https://masking.example.com/echo",
-        LANGFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
+        LITEFUSE_EE_LICENSE_KEY: VALID_EE_LICENSE_KEY,
       });
 
       const customData = { key: "value", nested: { data: [1, 2, 3] } };

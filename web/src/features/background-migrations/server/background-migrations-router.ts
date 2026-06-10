@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import { env } from "@/src/env.mjs";
 
 const denyOnLangfuseCloud = () => {
-  if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
+  if (env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Background migrations are not available in Litefuse Cloud",

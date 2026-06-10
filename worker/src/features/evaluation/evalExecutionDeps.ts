@@ -139,7 +139,7 @@ export function createProductionEvalExecutionDeps(): EvalExecutionDeps {
     },
 
     uploadScore: async (params) => {
-      const bucketPath = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${params.projectId}/score/${params.scoreId}/${params.eventId}.json`;
+      const bucketPath = `${env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}${params.projectId}/score/${params.scoreId}/${params.eventId}.json`;
 
       await getEvalS3StorageClient().uploadJson(bucketPath, [
         params.event as unknown as Record<string, unknown>,

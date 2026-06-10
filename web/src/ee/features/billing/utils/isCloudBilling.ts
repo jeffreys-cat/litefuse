@@ -3,7 +3,7 @@ import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
 
 /**
  * Server-side check to determine if cloud billing is enabled.
- * Cloud billing requires NEXT_PUBLIC_LANGFUSE_CLOUD_REGION to be set.
+ * Cloud billing requires NEXT_PUBLIC_LITEFUSE_CLOUD_REGION to be set.
  *
  * Use this in server-side code (tRPC routers, API routes).
  * For client-side components, use the hook useIsCloudBillingAvailable.
@@ -11,12 +11,12 @@ import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
  * @returns true if cloud billing should be active
  */
 export function isCloudBillingEnabled(): boolean {
-  return Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
+  return Boolean(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION);
 }
 
 /**
  * Client-side hook to check if cloud billing features are available.
- * Uses the NEXT_PUBLIC_LANGFUSE_CLOUD_REGION to determine availability.
+ * Uses the NEXT_PUBLIC_LITEFUSE_CLOUD_REGION to determine availability.
  *
  * Components should use this to conditionally render billing features.
  *

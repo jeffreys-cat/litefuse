@@ -50,7 +50,7 @@ export class DorisReadSkipCache {
   }
 
   private async performInitialization(): Promise<void> {
-    if (!env.LANGFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE) {
+    if (!env.LITEFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE) {
       logger.info(
         "No min project create date set, DorisReadSkipCache will not pre-populate",
       );
@@ -58,7 +58,7 @@ export class DorisReadSkipCache {
     }
 
     const cutoffDate = new Date(
-      env.LANGFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE,
+      env.LITEFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE,
     );
 
     logger.info(
@@ -105,8 +105,8 @@ export class DorisReadSkipCache {
   ): Promise<boolean> {
     // Check explicit project ID list first
     if (
-      env.LANGFUSE_SKIP_INGESTION_DORIS_READ_PROJECT_IDS &&
-      env.LANGFUSE_SKIP_INGESTION_DORIS_READ_PROJECT_IDS.split(",").includes(
+      env.LITEFUSE_SKIP_INGESTION_DORIS_READ_PROJECT_IDS &&
+      env.LITEFUSE_SKIP_INGESTION_DORIS_READ_PROJECT_IDS.split(",").includes(
         projectId,
       )
     ) {
@@ -115,7 +115,7 @@ export class DorisReadSkipCache {
 
     // If no cutoff date configuration, don't skip
     if (
-      !env.LANGFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE &&
+      !env.LITEFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE &&
       !minProjectCreateDate
     ) {
       return false;
@@ -151,7 +151,7 @@ export class DorisReadSkipCache {
       }
 
       const cutoffDate = new Date(
-        env.LANGFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE ??
+        env.LITEFUSE_SKIP_INGESTION_DORIS_READ_MIN_PROJECT_CREATE_DATE ??
           minProjectCreateDate ??
           new Date(), // Fallback to today. Should never apply.
       );

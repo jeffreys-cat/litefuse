@@ -676,7 +676,7 @@ class BillingService {
         const clientReferenceId = createStripeClientReference(orgId);
         const subscriptionMetadata: StripeSubscriptionMetadata = {
           orgId: orgId,
-          cloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+          cloudRegion: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
         };
 
         const sessionConfig: Stripe.Checkout.SessionCreateParams = {

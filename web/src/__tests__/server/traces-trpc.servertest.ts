@@ -471,7 +471,7 @@ describe("traces trpc", () => {
   });
 
   describe("traces flags", () => {
-    const useEventsTable = env.LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true";
+    const useEventsTable = env.LITEFUSE_ENABLE_EVENTS_TABLE_FLAGS === "true";
     it("should bookmark a trace", async () => {
       // Create a trace that is not bookmarked
       const trace = createTrace({

@@ -363,7 +363,7 @@ export const handleBlobStorageIntegrationProjectJob = async (
 
     // Check if this project should only export traces (legacy behavior via env var)
     const isTraceOnlyProject =
-      env.LANGFUSE_BLOB_STORAGE_EXPORT_TRACE_ONLY_PROJECT_IDS.includes(
+      env.LITEFUSE_BLOB_STORAGE_EXPORT_TRACE_ONLY_PROJECT_IDS.includes(
         projectId,
       );
 

@@ -94,7 +94,7 @@ export const handleEventPropagationJob = async (
     return;
   }
 
-  if (env.LANGFUSE_EXPERIMENT_EARLY_EXIT_EVENT_BATCH_JOB === "true") {
+  if (env.LITEFUSE_EXPERIMENT_EARLY_EXIT_EVENT_BATCH_JOB === "true") {
     logger.info(
       "[DUAL WRITE] Early exit for event propagation job due to experiment flag",
     );
@@ -123,7 +123,7 @@ export const handleEventPropagationJob = async (
     // Query for observation batches older than the delay threshold
     // Doris doesn't have system.parts, so we query observations_batch_staging directly with time-based filtering
     const delayMinutes =
-      env.LANGFUSE_EXPERIMENT_EVENT_PROPAGATION_PARTITION_DELAY_MINUTES;
+      env.LITEFUSE_EXPERIMENT_EVENT_PROPAGATION_PARTITION_DELAY_MINUTES;
     const partitions = await queryDoris<{ partition: string }>({
       query: `
         SELECT DATE_FORMAT(start_time, '%Y-%m-%d %H:00:00') as partition

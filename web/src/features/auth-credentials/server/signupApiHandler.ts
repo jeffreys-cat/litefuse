@@ -89,18 +89,18 @@ export async function signupApiHandler(
 
   // Trigger new user signup event
   if (
-    env.LANGFUSE_NEW_USER_SIGNUP_WEBHOOK &&
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION &&
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== "STAGING" &&
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== "DEV"
+    env.LITEFUSE_NEW_USER_SIGNUP_WEBHOOK &&
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION !== "STAGING" &&
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION !== "DEV"
   ) {
-    await fetch(env.LANGFUSE_NEW_USER_SIGNUP_WEBHOOK, {
+    await fetch(env.LITEFUSE_NEW_USER_SIGNUP_WEBHOOK, {
       method: "POST",
       body: JSON.stringify({
         name: body.name,
         email: body.email,
         referralSource: body.referralSource,
-        cloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+        cloudRegion: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
         userId: userId,
       }),
       headers: {

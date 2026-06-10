@@ -194,7 +194,7 @@ jobs:
       matrix:
         node-version: [24]
         postgres-version: [12, 15]
-        deploy-mode: ["", "-azure", "-redis-cluster"]
+        deploy-mode: [""]
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
@@ -224,13 +224,13 @@ jobs:
       - name: Load default env
         run: |
           cp .env.dev${{ matrix.deploy-mode }}.example .env
-          grep -v -e '^LANGFUSE_S3_BATCH_EXPORT_ENABLED=' -e '^NEXT_PUBLIC_LANGFUSE_RUN_NEXT_INIT=' .env.dev${{ matrix.deploy-mode }}.example > .env
-          echo "LANGFUSE_INGESTION_QUEUE_DELAY_MS=1" >> .env
-          echo "LANGFUSE_CACHE_PROMPT_ENABLED=false" >> .env
-          echo "LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS=1" >> .env
-          echo "LANGFUSE_TRACE_DELETE_CONCURRENCY=100" >> .env
+          grep -v -e '^LITEFUSE_S3_BATCH_EXPORT_ENABLED=' -e '^NEXT_PUBLIC_LITEFUSE_RUN_NEXT_INIT=' .env.dev${{ matrix.deploy-mode }}.example > .env
+          echo "LITEFUSE_INGESTION_QUEUE_DELAY_MS=1" >> .env
+          echo "LITEFUSE_CACHE_PROMPT_ENABLED=false" >> .env
+          echo "LITEFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS=1" >> .env
+          echo "LITEFUSE_TRACE_DELETE_CONCURRENCY=100" >> .env
           echo "ADMIN_API_KEY=admin-api-key" >> .env
-          echo "LANGFUSE_EE_LICENSE_KEY=langfuse_ee_test" >> .env
+          echo "LITEFUSE_EE_LICENSE_KEY=langfuse_ee_test" >> .env
       - name: Setup Turbo cache
         uses: actions/cache@v4
         with:
@@ -281,16 +281,16 @@ jobs:
       - name: Start Langfuse
         run: (pnpm run start&)
         env:
-          LANGFUSE_INIT_ORG_ID: "seed-org-id"
-          LANGFUSE_INIT_ORG_NAME: "Seed Org"
-          LANGFUSE_INIT_ORG_CLOUD_PLAN: "Team"
-          LANGFUSE_INIT_PROJECT_ID: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a"
-          LANGFUSE_INIT_PROJECT_NAME: "Seed Project"
-          LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-lf-1234567890"
-          LANGFUSE_INIT_PROJECT_SECRET_KEY: "sk-lf-1234567890"
-          LANGFUSE_INIT_USER_EMAIL: "demo@litefuse.ai"
-          LANGFUSE_INIT_USER_NAME: "Demo User"
-          LANGFUSE_INIT_USER_PASSWORD: "password"
+          LITEFUSE_INIT_ORG_ID: "seed-org-id"
+          LITEFUSE_INIT_ORG_NAME: "Seed Org"
+          LITEFUSE_INIT_ORG_CLOUD_PLAN: "Team"
+          LITEFUSE_INIT_PROJECT_ID: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a"
+          LITEFUSE_INIT_PROJECT_NAME: "Seed Project"
+          LITEFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-lf-1234567890"
+          LITEFUSE_INIT_PROJECT_SECRET_KEY: "sk-lf-1234567890"
+          LITEFUSE_INIT_USER_EMAIL: "demo@litefuse.ai"
+          LITEFUSE_INIT_USER_NAME: "Demo User"
+          LITEFUSE_INIT_USER_PASSWORD: "password"
       - name: run tests
         working-directory: web
         run: npx cross-env NODE_OPTIONS='--no-experimental-require-module' npx dotenv -e ../.env.test -e ../.env -- npx jest --verbose --runInBand --detectOpenHandles --selectProjects server --shard=${{ matrix.shard }}/3
@@ -310,7 +310,7 @@ jobs:
       matrix:
         node-version: [24]
         postgres-version: [12, 15]
-        deploy-mode: ["", "-azure", "-redis-cluster"]
+        deploy-mode: [""]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -440,16 +440,16 @@ jobs:
       - name: run llm connection tests
         run: pnpm --filter=worker run test:llm-connections-only
         env:
-          LANGFUSE_LLM_CONNECTION_OPENAI_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_OPENAI_KEY }}
-          LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY }}
-          LANGFUSE_LLM_CONNECTION_AZURE_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_AZURE_KEY }}
-          LANGFUSE_LLM_CONNECTION_AZURE_BASE_URL: ${{ secrets.LANGFUSE_LLM_CONNECTION_AZURE_BASE_URL }}
-          LANGFUSE_LLM_CONNECTION_AZURE_MODEL: ${{ secrets.LANGFUSE_LLM_CONNECTION_AZURE_MODEL }}
-          LANGFUSE_LLM_CONNECTION_BEDROCK_ACCESS_KEY_ID: ${{ secrets.LANGFUSE_LLM_CONNECTION_BEDROCK_ACCESS_KEY_ID }}
-          LANGFUSE_LLM_CONNECTION_BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_BEDROCK_SECRET_ACCESS_KEY }}
-          LANGFUSE_LLM_CONNECTION_BEDROCK_REGION: ${{ secrets.LANGFUSE_LLM_CONNECTION_BEDROCK_REGION }}
-          LANGFUSE_LLM_CONNECTION_VERTEXAI_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_VERTEXAI_KEY }}
-          LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY: ${{ secrets.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY }}
+          LITEFUSE_LLM_CONNECTION_OPENAI_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_OPENAI_KEY }}
+          LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY }}
+          LITEFUSE_LLM_CONNECTION_AZURE_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_AZURE_KEY }}
+          LITEFUSE_LLM_CONNECTION_AZURE_BASE_URL: ${{ secrets.LITEFUSE_LLM_CONNECTION_AZURE_BASE_URL }}
+          LITEFUSE_LLM_CONNECTION_AZURE_MODEL: ${{ secrets.LITEFUSE_LLM_CONNECTION_AZURE_MODEL }}
+          LITEFUSE_LLM_CONNECTION_BEDROCK_ACCESS_KEY_ID: ${{ secrets.LITEFUSE_LLM_CONNECTION_BEDROCK_ACCESS_KEY_ID }}
+          LITEFUSE_LLM_CONNECTION_BEDROCK_SECRET_ACCESS_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_BEDROCK_SECRET_ACCESS_KEY }}
+          LITEFUSE_LLM_CONNECTION_BEDROCK_REGION: ${{ secrets.LITEFUSE_LLM_CONNECTION_BEDROCK_REGION }}
+          LITEFUSE_LLM_CONNECTION_VERTEXAI_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_VERTEXAI_KEY }}
+          LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY: ${{ secrets.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY }}
 
   e2e-tests:
     runs-on: ubuntu-latest

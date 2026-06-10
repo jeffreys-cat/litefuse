@@ -18,9 +18,9 @@ import { z } from "zod/v4";
  * 4. Tool calling
  *
  * Required environment variables (tests will FAIL if not set):
- * - LANGFUSE_LLM_CONNECTION_OPENAI_KEY
- * - LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY
- * - LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY
+ * - LITEFUSE_LLM_CONNECTION_OPENAI_KEY
+ * - LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY
+ * - LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY
  */
 
 // Eval schema matching production usage
@@ -50,9 +50,9 @@ describe("LLM Connection Tests", () => {
     const MODEL = "gpt-4o-mini";
 
     const checkEnvVar = () => {
-      if (!process.env.LANGFUSE_LLM_CONNECTION_OPENAI_KEY) {
+      if (!process.env.LITEFUSE_LLM_CONNECTION_OPENAI_KEY) {
         throw new Error(
-          "LANGFUSE_LLM_CONNECTION_OPENAI_KEY not set. " +
+          "LITEFUSE_LLM_CONNECTION_OPENAI_KEY not set. " +
             "This test requires a valid OpenAI API key to verify the LLM connection. " +
             "Set the environment variable to run this test.",
         );
@@ -79,7 +79,7 @@ describe("LLM Connection Tests", () => {
           max_tokens: 10,
         },
         llmConnection: {
-          secretKey: encrypt(process.env.LANGFUSE_LLM_CONNECTION_OPENAI_KEY!),
+          secretKey: encrypt(process.env.LITEFUSE_LLM_CONNECTION_OPENAI_KEY!),
         },
       });
 
@@ -107,7 +107,7 @@ describe("LLM Connection Tests", () => {
           max_tokens: 10,
         },
         llmConnection: {
-          secretKey: encrypt(process.env.LANGFUSE_LLM_CONNECTION_OPENAI_KEY!),
+          secretKey: encrypt(process.env.LITEFUSE_LLM_CONNECTION_OPENAI_KEY!),
         },
       });
 
@@ -146,7 +146,7 @@ describe("LLM Connection Tests", () => {
         },
         structuredOutputSchema: evalOutputSchema,
         llmConnection: {
-          secretKey: encrypt(process.env.LANGFUSE_LLM_CONNECTION_OPENAI_KEY!),
+          secretKey: encrypt(process.env.LITEFUSE_LLM_CONNECTION_OPENAI_KEY!),
         },
       });
 
@@ -180,7 +180,7 @@ describe("LLM Connection Tests", () => {
         },
         tools: [weatherTool],
         llmConnection: {
-          secretKey: encrypt(process.env.LANGFUSE_LLM_CONNECTION_OPENAI_KEY!),
+          secretKey: encrypt(process.env.LITEFUSE_LLM_CONNECTION_OPENAI_KEY!),
         },
       });
 
@@ -196,9 +196,9 @@ describe("LLM Connection Tests", () => {
     const MODEL = "claude-sonnet-4-6";
 
     const checkEnvVar = () => {
-      if (!process.env.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY) {
+      if (!process.env.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY) {
         throw new Error(
-          "LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY not set. " +
+          "LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY not set. " +
             "This test requires a valid Anthropic API key to verify the LLM connection. " +
             "Set the environment variable to run this test.",
         );
@@ -226,7 +226,7 @@ describe("LLM Connection Tests", () => {
         },
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
           ),
         },
       });
@@ -256,7 +256,7 @@ describe("LLM Connection Tests", () => {
         },
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
           ),
         },
       });
@@ -297,7 +297,7 @@ describe("LLM Connection Tests", () => {
         structuredOutputSchema: evalOutputSchema,
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
           ),
         },
       });
@@ -333,7 +333,7 @@ describe("LLM Connection Tests", () => {
         tools: [weatherTool],
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_ANTHROPIC_KEY!,
           ),
         },
       });
@@ -350,9 +350,9 @@ describe("LLM Connection Tests", () => {
     const MODEL = "gemini-2.0-flash";
 
     const checkEnvVar = () => {
-      if (!process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY) {
+      if (!process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY) {
         throw new Error(
-          "LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY not set. " +
+          "LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY not set. " +
             "This test requires a valid Google AI Studio API key to verify the LLM connection. " +
             "Set the environment variable to run this test.",
         );
@@ -380,7 +380,7 @@ describe("LLM Connection Tests", () => {
         },
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
           ),
         },
       });
@@ -411,7 +411,7 @@ describe("LLM Connection Tests", () => {
         },
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
           ),
         },
       });
@@ -452,7 +452,7 @@ describe("LLM Connection Tests", () => {
         structuredOutputSchema: evalOutputSchema,
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
           ),
         },
       });
@@ -488,7 +488,7 @@ describe("LLM Connection Tests", () => {
         tools: [weatherTool],
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
           ),
         },
       });
@@ -524,7 +524,7 @@ describe("LLM Connection Tests", () => {
         },
         llmConnection: {
           secretKey: encrypt(
-            process.env.LANGFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
+            process.env.LITEFUSE_LLM_CONNECTION_GOOGLEAISTUDIO_KEY!,
           ),
         },
       });

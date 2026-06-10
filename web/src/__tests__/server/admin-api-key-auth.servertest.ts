@@ -13,7 +13,7 @@ describe("Admin API Key Authentication", () => {
 
   // Store original env value to restore after tests
   const originalAdminApiKey = env.ADMIN_API_KEY;
-  const originalCloudRegion = env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+  const originalCloudRegion = env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
 
   let projectId: string;
   let orgId: string;
@@ -22,13 +22,13 @@ describe("Admin API Key Authentication", () => {
   beforeAll(() => {
     // Set up env for admin API key tests
     (env as any).ADMIN_API_KEY = ADMIN_API_KEY;
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = undefined;
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = undefined;
   });
 
   afterAll(() => {
     // Restore original env values
     (env as any).ADMIN_API_KEY = originalAdminApiKey;
-    (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = originalCloudRegion;
+    (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = originalCloudRegion;
   });
 
   beforeEach(async () => {
@@ -151,7 +151,7 @@ describe("Admin API Key Authentication", () => {
     });
 
     it("should fail on Langfuse Cloud", async () => {
-      (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = "prod-us";
+      (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = "prod-us";
 
       const mockReq = {
         headers: {
@@ -166,7 +166,7 @@ describe("Admin API Key Authentication", () => {
         message: "Admin API key auth is not available on Langfuse Cloud",
       });
 
-      (env as any).NEXT_PUBLIC_LANGFUSE_CLOUD_REGION = undefined;
+      (env as any).NEXT_PUBLIC_LITEFUSE_CLOUD_REGION = undefined;
     });
 
     it("should fail when ADMIN_API_KEY is not configured", async () => {

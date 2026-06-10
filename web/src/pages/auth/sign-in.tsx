@@ -146,7 +146,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
           env.AUTH_DORIS_CLOUD_CLIENT_ID !== undefined &&
           env.AUTH_DORIS_CLOUD_CLIENT_SECRET !== undefined &&
           env.AUTH_DORIS_CLOUD_ISSUER !== undefined &&
-          env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== undefined,
+          env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION !== undefined,
         cognito:
           env.AUTH_COGNITO_CLIENT_ID !== undefined &&
           env.AUTH_COGNITO_CLIENT_SECRET !== undefined &&

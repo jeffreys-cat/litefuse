@@ -123,7 +123,7 @@ export const evalJobExecutorQueueProcessorBuilder = (
   queueName: EvalExecutionQueueName,
 ): Processor => {
   const projectIdsToRedirectToSecondaryQueue =
-    env.LANGFUSE_SECONDARY_EVAL_EXECUTION_QUEUE_ENABLED_PROJECT_IDS?.split(
+    env.LITEFUSE_SECONDARY_EVAL_EXECUTION_QUEUE_ENABLED_PROJECT_IDS?.split(
       ",",
     ) ?? [];
 

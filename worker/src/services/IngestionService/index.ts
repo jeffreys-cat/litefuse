@@ -681,7 +681,7 @@ export class IngestionService {
 
     if (existingScoreRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: env.LANGFUSE_ANALYTICS_BACKEND,
+        store: env.LITEFUSE_ANALYTICS_BACKEND,
         object: "score",
       });
     }
@@ -762,7 +762,7 @@ export class IngestionService {
 
     if (existingTraceRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: env.LANGFUSE_ANALYTICS_BACKEND,
+        store: env.LITEFUSE_ANALYTICS_BACKEND,
         object: "trace",
       });
     }
@@ -899,7 +899,7 @@ export class IngestionService {
 
     if (existingObservationRecord) {
       recordIncrement("langfuse.ingestion.lookup.hit", 1, {
-        store: env.LANGFUSE_ANALYTICS_BACKEND,
+        store: env.LITEFUSE_ANALYTICS_BACKEND,
         object: "observation",
       });
     }

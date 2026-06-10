@@ -11,10 +11,10 @@ export function useLangfuseEnvCode(keys?: {
   if (keys) {
     return `LANGFUSE_SECRET_KEY="${keys.secretKey}"
 LANGFUSE_PUBLIC_KEY="${keys.publicKey}"
-LANGFUSE_BASE_URL="${baseUrl}"`;
+LITEFUSE_BASE_URL="${baseUrl}"`;
   }
 
   return `LANGFUSE_SECRET_KEY="sk-lf-..."
 LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_BASE_URL="${baseUrl}"`;
+LITEFUSE_BASE_URL="${baseUrl}"`;
 }

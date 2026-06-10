@@ -18,7 +18,7 @@ type SendMembershipInvitationParams = {
     Record<
       | "EMAIL_FROM_ADDRESS"
       | "SMTP_CONNECTION_URL"
-      | "NEXT_PUBLIC_LANGFUSE_CLOUD_REGION"
+      | "NEXT_PUBLIC_LITEFUSE_CLOUD_REGION"
       | "NEXTAUTH_URL",
       string | undefined
     >
@@ -48,18 +48,18 @@ export const sendMembershipInvitationEmail = async ({
   }
 
   const getAuthURL = () =>
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "US" ||
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "EU" ||
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "HIPAA" ||
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "JP" ||
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING"
-      ? litefuseCloudUrls[env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION]
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "US" ||
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "EU" ||
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "HIPAA" ||
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "JP" ||
+    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION === "STAGING"
+      ? litefuseCloudUrls[env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION]
       : env.NEXTAUTH_URL;
 
   const authUrl = getAuthURL();
   if (!authUrl) {
     logger.error(
-      "Missing NEXTAUTH_URL or NEXT_PUBLIC_LANGFUSE_CLOUD_REGION environment variable.",
+      "Missing NEXTAUTH_URL or NEXT_PUBLIC_LITEFUSE_CLOUD_REGION environment variable.",
     );
     return;
   }
@@ -81,7 +81,7 @@ export const sendMembershipInvitationEmail = async ({
         inviteLink: inviteLink,
         userExists: userExists,
         emailFromAddress: env.EMAIL_FROM_ADDRESS,
-        cloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+        cloudRegion: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
       }),
     );
 

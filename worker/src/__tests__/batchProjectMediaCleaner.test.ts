@@ -24,8 +24,8 @@ vi.mock("../env", async () => {
   return {
     env: {
       ...(actual as { env: object }).env,
-      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "test-bucket",
-      LANGFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE: 3,
+      LITEFUSE_S3_MEDIA_UPLOAD_BUCKET: "test-bucket",
+      LITEFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE: 3,
     },
   };
 });

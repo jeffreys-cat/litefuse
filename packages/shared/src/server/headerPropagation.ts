@@ -22,7 +22,7 @@ export const contextWithLangfuseProps = (
     opentelemetry.propagation.createBaggage();
 
   if (props.headers) {
-    (env.LANGFUSE_LOG_PROPAGATED_HEADERS as string[]).forEach((name) => {
+    (env.LITEFUSE_LOG_PROPAGATED_HEADERS as string[]).forEach((name) => {
       const value = props.headers![name];
       if (!value) return;
       const strValue = Array.isArray(value) ? JSON.stringify(value) : value;

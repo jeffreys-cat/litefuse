@@ -35,7 +35,7 @@ export const observationsRouter = createTRPCRouter({
         },
       };
       const obs =
-        env.LANGFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS === "true"
+        env.LITEFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS === "true"
           ? await getObservationByIdFromEventsTable(queryOpts)
           : await getObservationById(queryOpts);
       if (!obs) {
