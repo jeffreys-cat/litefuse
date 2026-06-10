@@ -1,6 +1,6 @@
 services:
   litefuse-web:
-    image: selectdb/litefuse-web:latest
+    image: litefuse/litefuse-web:opensource-main26061001
     container_name: litefuse-web
     hostname: litefuse-web
     depends_on:
@@ -75,7 +75,7 @@ services:
       - doris_internal
 
   litefuse-worker:
-    image: selectdb/litefuse-worker:latest
+    image: litefuse/litefuse-worker:opensource-main26061001
     container_name: litefuse-worker
     hostname: litefuse-worker
     depends_on:
