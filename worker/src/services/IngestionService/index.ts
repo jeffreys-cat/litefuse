@@ -63,7 +63,6 @@ import {
 } from "./utils";
 import { randomUUID } from "crypto";
 import { SpanKind } from "@opentelemetry/api";
-import { deduplicateInputContent } from "./contentDedup";
 
 type InsertRecord =
   | TraceRecordInsertType
@@ -329,26 +328,7 @@ export class IngestionService {
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
 
-    // Content dedup for GENERATION input: hash the input into content_dict
-    // and store the hash array in events_full.input. events_full_view's
-    // LATERAL VIEW POSEXPLODE rehydrates the hash array back to the
-    // original content at read time. Without this, GENERATION input is
-    // stored as a raw string and the view's CAST(input AS ARRAY<VARCHAR>)
-    // returns NULL, hiding the row from UI reads.
-    let resolvedInput: string | null | undefined = eventData.input;
-    if (
-      eventData.type === "GENERATION" &&
-      eventData.input != null &&
-      this.dorisWriter
-    ) {
-      const { transformedInput, contentEntries } = deduplicateInputContent(
-        eventData.input,
-      );
-      for (const entry of contentEntries) {
-        this.dorisWriter.addToQueue(TableName.ContentDict, entry);
-      }
-      resolvedInput = this.stringify(transformedInput);
-    }
+    const resolvedInput: string | null | undefined = eventData.input;
 
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
@@ -433,8 +413,6 @@ export class IngestionService {
       tool_calls: eventData.toolCalls ?? [],
       tool_call_names: eventData.toolCallNames ?? [],
 
-      // I/O — `resolvedInput` is the hash array for GENERATION rows (see
-      // dedup block above), the raw input otherwise.
       input: resolvedInput,
       output: eventData.output,
 
@@ -949,19 +927,7 @@ export class IngestionService {
       reversedRawRecords.find((record) => record?.body?.input)?.body?.input ??
       existingObservationRecord?.input;
 
-    // Content dedup for GENERATION input: replace text content with SHA-256 hash references
-    if (type === "GENERATION" && rawInput && this.dorisWriter) {
-      const { transformedInput, contentEntries } =
-        deduplicateInputContent(rawInput);
-
-      for (const entry of contentEntries) {
-        this.dorisWriter.addToQueue(TableName.ContentDict, entry);
-      }
-
-      mergedObservationRecord.input = this.stringify(transformedInput);
-    } else {
-      mergedObservationRecord.input = this.stringify(rawInput);
-    }
+    mergedObservationRecord.input = this.stringify(rawInput);
 
     mergedObservationRecord.output = this.stringify(
       reversedRawRecords.find((record) => record?.body?.output)?.body?.output ??

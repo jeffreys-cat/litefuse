@@ -513,10 +513,6 @@ export const otelIngestionQueueProcessor: Processor = async (
         // Step 2: Schedule observation evals (independent of event writes)
         if (hasEvalConfigs && evalSchedulerDeps) {
           try {
-            // GENERATION input on eventRecord is the SHA-256 hash array
-            // (deduplicateInputContent in createEventRecord). Evaluators
-            // see this as gibberish — override with the pre-dedup raw input
-            // from eventInput so the LLM-as-Judge prompt gets real content.
             const observation = convertEventRecordToObservationForEval({
               ...eventRecord,
               input: eventInput.input ?? eventRecord.input,
