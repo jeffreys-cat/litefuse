@@ -194,8 +194,7 @@ pip install langfuse openai
 ```bash filename=".env"
 LANGFUSE_SECRET_KEY="sk-lf-..."
 LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EU region
-# LANGFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 US region
+LANGFUSE_BASE_URL="https://litefuse.cloud"
 ```
 
 ```python /@observe()/ /from langfuse.openai import openai/ filename="main.py"
