@@ -3,7 +3,6 @@ import {
   DorisClientType,
   formatDataForDoris,
   BlobStorageFileLogInsertType,
-  ContentDictInsertType,
   EventRecordInsertType,
   getCurrentSpan,
   ObservationRecordInsertType,
@@ -58,7 +57,6 @@ export class DorisWriter {
       [TableName.Observations]: [],
       [TableName.BlobStorageFileLog]: [],
       [TableName.DatasetRunItems]: [],
-      [TableName.ContentDict]: [],
       [TableName.EventsFull]: [],
     };
 
@@ -156,7 +154,6 @@ export class DorisWriter {
           this.flush(TableName.Observations, fullQueue),
           this.flush(TableName.BlobStorageFileLog, fullQueue),
           this.flush(TableName.DatasetRunItems, fullQueue),
-          this.flush(TableName.ContentDict, fullQueue),
           this.flush(TableName.EventsFull, fullQueue),
         ]).catch((err) => {
           logger.error("DorisWriter.flushAll", err);
@@ -343,7 +340,6 @@ export enum TableName {
   Observations = "observation_source",
   BlobStorageFileLog = "blob_storage_file_log",
   DatasetRunItems = "dataset_run_items_rmt",
-  ContentDict = "content_dict",
   EventsFull = "events_full",
 }
 
@@ -357,11 +353,9 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
         ? BlobStorageFileLogInsertType
         : T extends TableName.DatasetRunItems
           ? DatasetRunItemRecordInsertType
-          : T extends TableName.ContentDict
-            ? ContentDictInsertType
-            : T extends TableName.EventsFull
-              ? EventRecordInsertType
-              : never;
+          : T extends TableName.EventsFull
+            ? EventRecordInsertType
+            : never;
 
 type DorisQueue = {
   [T in TableName]: DorisWriterQueueItem<T>[];

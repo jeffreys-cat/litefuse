@@ -108,8 +108,7 @@ export const getTraceStream = async (props: {
   //   * trace_scalars: scalar trace-level fields via MAX_BY(IF(cond, val, NULL), event_ts)
   //     equivalent to upstream's argMaxIf.
   //   * trace_root: tags / metadata / input / output picked from the latest
-  //     parent_span_id = '' root span via ROW_NUMBER(). Reads events_full_view
-  //     so GENERATION input hashes get rehydrated.
+  //     parent_span_id = '' root span via ROW_NUMBER().
   // tracesTableUiColumnDefinitions / tracesFilter target column names
   // (timestamp, release, ...) compatible with the legacy traces table —
   // they apply at the trace_scalars level before the LEFT JOIN. Filter
@@ -189,7 +188,7 @@ export const getTraceStream = async (props: {
             PARTITION BY trace_id, project_id
             ORDER BY event_ts DESC
           ) AS rn
-        FROM events_full_view
+        FROM events_full
         WHERE project_id = {projectId: String}
           AND parent_span_id = ''
       ) ranked

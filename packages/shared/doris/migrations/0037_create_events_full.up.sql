@@ -73,10 +73,6 @@ CREATE TABLE if not exists events_full (
     `tool_call_names` ARRAY<String>,
 
     -- I/O (Variant: stores arbitrary JSON; queries can use variant_col['path']).
-    -- For type='GENERATION' rows, `input` stores ARRAY<VARCHAR> of content_dict
-    -- hashes; a downstream view (see 0038_create_events_full_view) resolves
-    -- hashes back to content. For other span types, input/output store the
-    -- raw value.
     `input` Variant,
     `output` Variant,
 

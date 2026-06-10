@@ -332,12 +332,6 @@ export type BlobStorageFileLogInsertType = z.infer<
   typeof blobStorageFileLogRecordInsertSchema
 >;
 
-export const contentDictInsertSchema = z.object({
-  content_hash: z.string(),
-  content: z.string(),
-});
-export type ContentDictInsertType = z.infer<typeof contentDictInsertSchema>;
-
 // Variant columns come back as object/array after mysql2 typeCast; insert
 // schema expects a JSON string, so stringify non-string values on the way out.
 const stringifyForInsert = (value: unknown): string | null | undefined => {

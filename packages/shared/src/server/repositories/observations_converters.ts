@@ -21,50 +21,6 @@ import { logger } from "../logger";
 import type { Model, Price } from "@prisma/client";
 import { parseDorisUTCDateTimeFormat } from "./doris";
 
-/**
- * The observations VIEW wraps resolved content_dict entries in [...].
- * When there is a single entry like { messages: [...], tools: [...] },
- * the VIEW produces [{ messages: [...], tools: [...] }]. The outer array
- * breaks ChatML parsing, which expects a plain object for this shape.
- *
- * Unwrap on read: if the input is an array of length 1 containing a
- * plain object, return the inner object.
- */
-function unwrapSingleObjectArray(input: unknown): unknown {
-  if (input == null) return input;
-
-  // Already a parsed array (mysql2 may auto-parse VARIANT columns)
-  if (
-    Array.isArray(input) &&
-    input.length === 1 &&
-    typeof input[0] === "object" &&
-    input[0] !== null
-  ) {
-    return input[0];
-  }
-
-  // String from Doris — parse and check
-  if (typeof input === "string") {
-    const trimmed = input.trim();
-    if (!trimmed.startsWith("[{") || !trimmed.endsWith("}]")) return input;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (
-        Array.isArray(parsed) &&
-        parsed.length === 1 &&
-        typeof parsed[0] === "object" &&
-        parsed[0] !== null
-      ) {
-        return JSON.stringify(parsed[0]);
-      }
-    } catch {
-      // Not valid JSON — return as-is
-    }
-  }
-
-  return input;
-}
-
 // Helper function to parse timestamps from different backends
 const parseTimestamp = (timestamp: string | Date): Date => {
   // Only apply special handling for Doris backend
@@ -244,10 +200,7 @@ export function convertObservationPartial(
 
     // IO fields
     ...(record.input !== undefined && {
-      input: applyInputOutputRendering(
-        unwrapSingleObjectArray(record.input),
-        renderingProps,
-      ),
+      input: applyInputOutputRendering(record.input, renderingProps),
     }),
     ...(record.output !== undefined && {
       output: applyInputOutputRendering(record.output, renderingProps),
