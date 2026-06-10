@@ -31,7 +31,7 @@ interface ProjectWorkload {
  */
 export class BatchTraceDeletionCleaner extends PeriodicExclusiveRunner {
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_BATCH_TRACE_DELETION_CLEANER_INTERVAL_MS;
+    return env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_INTERVAL_MS;
   }
 
   constructor() {
@@ -39,17 +39,17 @@ export class BatchTraceDeletionCleaner extends PeriodicExclusiveRunner {
       name: "BatchTraceDeletionCleaner",
       lockKey: BATCH_TRACE_DELETION_CLEANER_LOCK_KEY,
       lockTtlSeconds:
-        env.LANGFUSE_BATCH_TRACE_DELETION_CLEANER_LOCK_TTL_SECONDS,
+        env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_LOCK_TTL_SECONDS,
       onUnavailable: "fail",
     });
   }
 
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      intervalMs: env.LANGFUSE_BATCH_TRACE_DELETION_CLEANER_INTERVAL_MS,
-      batchSize: env.LANGFUSE_DELETE_BATCH_SIZE,
+      intervalMs: env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_INTERVAL_MS,
+      batchSize: env.LITEFUSE_DELETE_BATCH_SIZE,
       lockTtlSeconds:
-        env.LANGFUSE_BATCH_TRACE_DELETION_CLEANER_LOCK_TTL_SECONDS,
+        env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_LOCK_TTL_SECONDS,
     });
     super.start();
   }
@@ -134,7 +134,7 @@ export class BatchTraceDeletionCleaner extends PeriodicExclusiveRunner {
         isDeleted: false,
       },
       select: { objectId: true },
-      take: env.LANGFUSE_DELETE_BATCH_SIZE,
+      take: env.LITEFUSE_DELETE_BATCH_SIZE,
     });
 
     if (pendingDeletions.length === 0) {

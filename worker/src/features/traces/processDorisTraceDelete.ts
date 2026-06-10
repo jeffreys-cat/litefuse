@@ -16,7 +16,7 @@ const deleteMediaItemsForTraces = async (
   projectId: string,
   traceIds: string[],
 ): Promise<void> => {
-  if (!env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET) {
+  if (!env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET) {
     return;
   }
 
@@ -102,7 +102,7 @@ const deleteMediaItemsForTraces = async (
     if (orphanedMedia.length > 0) {
       // Delete from S3
       await getS3MediaStorageClient(
-        env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET ?? "", // Fallback is never used.
+        env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET ?? "", // Fallback is never used.
       ).deleteFiles(orphanedMedia.map((f) => f.bucketPath));
 
       // Delete from postgres
@@ -131,7 +131,7 @@ export const processDorisTraceDelete = async (
 
   try {
     await Promise.all([
-      env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
+      env.LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
         ? removeIngestionEventsFromS3AndDeleteDorisRefsForTraces({
             projectId,
             traceIds,
@@ -140,7 +140,7 @@ export const processDorisTraceDelete = async (
       deleteTraces(projectId, traceIds),
       deleteObservationsByTraceIds(projectId, traceIds),
       deleteScoresByTraceIds(projectId, traceIds),
-      env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
         ? deleteEventsByTraceIds(projectId, traceIds)
         : Promise.resolve(),
     ]);

@@ -1,12 +1,12 @@
-# Langfuse MCP Server
+# Litefuse MCP Server
 
-Model Context Protocol (MCP) server for Langfuse, enabling AI assistants to interact with your Langfuse prompts programmatically.
+Model Context Protocol (MCP) server for Litefuse, enabling AI assistants to interact with your Litefuse prompts programmatically.
 
 ## Quick Start (Local Development)
 
 ### Prerequisites
 
-- Langfuse instance running locally
+- Litefuse instance running locally
 - Project-scoped API key (Public Key + Secret Key)
 - Claude Code or another MCP-compatible client
 
@@ -33,7 +33,7 @@ Model Context Protocol (MCP) server for Langfuse, enabling AI assistants to inte
 3. **Add to Claude Code**
 
    ```bash
-   claude mcp add --transport http langfuse http://localhost:3000/api/public/mcp \
+   claude mcp add --transport http litefuse http://localhost:3000/api/public/mcp \
        --header "Authorization: Basic {your-base64-token}"
    ```
 
@@ -57,7 +57,7 @@ The MCP server provides 6 tools for prompt management:
 
 ### Prompt Resolution: `getPrompt` vs `getPromptUnresolved`
 
-Langfuse supports **prompt composition** where prompts can reference other prompts via dependency tags like `@@@langfusePrompt:name=xxx|label=yyy@@@`. The MCP server provides two tools for fetching prompts with different resolution behaviors:
+Litefuse supports **prompt composition** where prompts can reference other prompts via dependency tags like `@@@litefusePrompt:name=xxx|label=yyy@@@`. The MCP server provides two tools for fetching prompts with different resolution behaviors:
 
 #### `getPrompt` (Fully Resolved)
 
@@ -66,7 +66,7 @@ Langfuse supports **prompt composition** where prompts can reference other promp
 - **Returns**: Final prompt content with all dependencies replaced
 - **Example**:
   ```
-  Input:  "You are helpful. @@@langfusePrompt:name=base-rules|label=production@@@"
+  Input:  "You are helpful. @@@litefusePrompt:name=base-rules|label=production@@@"
   Output: "You are helpful. Always be kind and respectful."
   ```
 
@@ -74,11 +74,11 @@ Langfuse supports **prompt composition** where prompts can reference other promp
 
 - **Use when**: You want to analyze prompt composition, debug dependencies, or understand the prompt structure
 - **Behavior**: Returns raw prompt content with dependency tags intact
-- **Returns**: Original prompt content with `@@@langfusePrompt:...@@@` tags preserved
+- **Returns**: Original prompt content with `@@@litefusePrompt:...@@@` tags preserved
 - **Example**:
   ```
-  Input:  "You are helpful. @@@langfusePrompt:name=base-rules|label=production@@@"
-  Output: "You are helpful. @@@langfusePrompt:name=base-rules|label=production@@@"
+  Input:  "You are helpful. @@@litefusePrompt:name=base-rules|label=production@@@"
+  Output: "You are helpful. @@@litefusePrompt:name=base-rules|label=production@@@"
   ```
 
 **Use Cases for `getPromptUnresolved`**:
@@ -94,7 +94,7 @@ Langfuse supports **prompt composition** where prompts can reference other promp
 
 ### Stateless Design
 
-The Langfuse MCP server uses a **stateless per-request architecture**:
+The Litefuse MCP server uses a **stateless per-request architecture**:
 
 1. **Fresh server instance per request:** Each MCP request creates a new server instance
 2. **Context captured in closures:** Authentication context is captured in handler closures
@@ -159,11 +159,11 @@ All write operations (createTextPrompt, createChatPrompt, updatePromptLabels) au
 
 ## Authentication
 
-All clients require BasicAuth authentication using your Langfuse API keys.
+All clients require BasicAuth authentication using your Litefuse API keys.
 
 ### 1. Generate Basic Auth Token
 
-Encode your Langfuse API keys (Public Key:Secret Key) to base64:
+Encode your Litefuse API keys (Public Key:Secret Key) to base64:
 
 ```bash
 echo -n "pk-lf-your-public-key:sk-lf-your-secret-key" | base64
@@ -171,9 +171,9 @@ echo -n "pk-lf-your-public-key:sk-lf-your-secret-key" | base64
 
 This outputs your BasicAuth token (e.g., `cGstbGYt...`).
 
-### 2. Choose Your Langfuse URL
+### 2. Choose Your Litefuse URL
 
-**Langfuse Cloud:**
+**Litefuse Cloud:**
 
 - **EU Region:** `https://cloud.litefuse.ai`
 - **US Region:** `https://us.litefuse.ai`
@@ -191,23 +191,23 @@ This outputs your BasicAuth token (e.g., `cGstbGYt...`).
 
 ## Claude Code
 
-Register the Langfuse MCP server:
+Register the Litefuse MCP server:
 
 ```bash
-# Langfuse Cloud (EU)
-claude mcp add --transport http langfuse https://cloud.litefuse.ai/api/public/mcp \
+# Litefuse Cloud (EU)
+claude mcp add --transport http litefuse https://cloud.litefuse.ai/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 
-# Langfuse Cloud (US)
-claude mcp add --transport http langfuse https://us.litefuse.ai/api/public/mcp \
+# Litefuse Cloud (US)
+claude mcp add --transport http litefuse https://us.litefuse.ai/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 
 # Self-Hosted (HTTPS required)
-claude mcp add --transport http langfuse https://your-domain.com/api/public/mcp \
+claude mcp add --transport http litefuse https://your-domain.com/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 
 # Local Development
-claude mcp add --transport http langfuse http://localhost:3000/api/public/mcp \
+claude mcp add --transport http litefuse http://localhost:3000/api/public/mcp \
     --header "Authorization: Basic {your-base64-token}"
 ```
 
@@ -221,7 +221,7 @@ Add to your Cursor MCP settings:
 {
   "mcp": {
     "servers": {
-      "langfuse": {
+      "litefuse": {
         "url": "https://cloud.litefuse.ai/api/public/mcp",
         "headers": {
           "Authorization": "Basic {your-base64-token}"
@@ -232,4 +232,4 @@ Add to your Cursor MCP settings:
 }
 ```
 
-Replace `https://cloud.litefuse.ai` with your Langfuse URL (see [Choose Your Langfuse URL](#2-choose-your-langfuse-url)).
+Replace `https://cloud.litefuse.ai` with your Litefuse URL (see [Choose Your Litefuse URL](#2-choose-your-litefuse-url)).

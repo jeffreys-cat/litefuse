@@ -20,7 +20,7 @@ export function isLangfuseDatabase(database: string | undefined): boolean {
  * Langfuse Doris tables that contain a `project_id` column and therefore
  * require per-project data isolation in the Discover feature.
  */
-const LANGFUSE_TABLES_WITH_PROJECT_ID = new Set([
+const LITEFUSE_TABLES_WITH_PROJECT_ID = new Set([
   "events_full",
   "scores",
   "event_log",
@@ -188,7 +188,7 @@ function sqlReferencesProjectTable(sql: string): boolean {
     // Default to false to avoid injecting on tables without project_id.
     return false;
   }
-  return tables.some((t) => LANGFUSE_TABLES_WITH_PROJECT_ID.has(t));
+  return tables.some((t) => LITEFUSE_TABLES_WITH_PROJECT_ID.has(t));
 }
 
 /**

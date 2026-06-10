@@ -21,7 +21,7 @@ vi.mock("../../../env", () => ({
     DORIS_PASSWORD: "",
     DORIS_REQUEST_TIMEOUT_MS: 30000,
     DORIS_MAX_OPEN_CONNECTIONS: 10,
-    LANGFUSE_ANALYTICS_BACKEND: "doris",
+    LITEFUSE_ANALYTICS_BACKEND: "doris",
   },
 }));
 vi.mock("../../instrumentation", () => ({

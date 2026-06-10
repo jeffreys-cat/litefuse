@@ -27,9 +27,9 @@ import { encrypt } from "@langfuse/shared/encryption";
 // with multipart uploads. These tests use MinIO explicitly or are skipped.
 // Unfortunately, this is necessary as we don't have a good way to skip empty file uploads
 // and at least azurite doesn't handle them gracefully.
-const maybeIt = env.LANGFUSE_USE_AZURE_BLOB === "true" ? it.skip : it;
+const maybeIt = env.LITEFUSE_USE_AZURE_BLOB === "true" ? it.skip : it;
 const maybeDescribe =
-  process.env.LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS === "true"
+  process.env.LITEFUSE_ENABLE_EVENTS_TABLE_V2_APIS === "true"
     ? describe
     : describe.skip;
 
@@ -37,11 +37,11 @@ describe("BlobStorageIntegrationProcessingJob", () => {
   let storageService: StorageService;
   let s3StorageService: StorageService;
   let s3Prefix: string | null = null;
-  const bucketName = env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET || "";
-  const accessKeyId = env.LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID || "";
-  const secretAccessKey = env.LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY || "";
-  const endpoint = env.LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT || undefined;
-  const region = env.LANGFUSE_S3_EVENT_UPLOAD_REGION || undefined;
+  const bucketName = env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET || "";
+  const accessKeyId = env.LITEFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID || "";
+  const secretAccessKey = env.LITEFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY || "";
+  const endpoint = env.LITEFUSE_S3_EVENT_UPLOAD_ENDPOINT || undefined;
+  const region = env.LITEFUSE_S3_EVENT_UPLOAD_REGION || undefined;
   const minioAccessKeyId = "minio";
   const minioAccessKeySecret = "miniosecret";
   const minioEndpoint = "http://localhost:9090";
@@ -53,7 +53,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
       bucketName,
       endpoint,
       region,
-      forcePathStyle: env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+      forcePathStyle: env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
     });
     s3StorageService = StorageServiceFactory.getInstance({
       accessKeyId: minioAccessKeyId,
@@ -94,7 +94,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
         region: region ? region : "auto",
         endpoint: endpoint ? endpoint : null,
         forcePathStyle:
-          env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+          env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
         enabled: false,
         exportFrequency: "hourly",
       },
@@ -131,7 +131,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "hourly",
           exportSource: "TRACES_OBSERVATIONS_EVENTS",
@@ -278,7 +278,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region,
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "weekly",
           lastSyncAt: oneHourAgo,
@@ -344,7 +344,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "daily",
           lastSyncAt: oneHourAgo,
@@ -453,7 +453,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
             region: region ? region : "auto",
             endpoint: minioEndpoint,
             forcePathStyle:
-              env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+              env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
             enabled: true,
             exportFrequency: "hourly",
             exportSource: "TRACES_OBSERVATIONS_EVENTS",
@@ -557,7 +557,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
             region: region ? region : "auto",
             endpoint: endpoint ? endpoint : null,
             forcePathStyle:
-              env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+              env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
             enabled: true,
             exportFrequency: "hourly",
             exportMode: "FULL_HISTORY",
@@ -633,7 +633,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: endpoint ? endpoint : null,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "hourly",
           exportMode: "FROM_TODAY" as any,
@@ -696,7 +696,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "hourly",
           exportMode: "FROM_CUSTOM_DATE" as any,
@@ -755,7 +755,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
             region: region ? region : "auto",
             endpoint: endpoint ? endpoint : null,
             forcePathStyle:
-              env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+              env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
             enabled: true,
             exportFrequency: "hourly",
             exportMode: "FULL_HISTORY",
@@ -833,7 +833,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "hourly",
           lastSyncAt: twoDaysAgo, // Start from 2 days ago
@@ -890,7 +890,7 @@ describe("BlobStorageIntegrationProcessingJob", () => {
           region: region ? region : "auto",
           endpoint: minioEndpoint,
           forcePathStyle:
-            env.LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
+            env.LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE === "true",
           enabled: true,
           exportFrequency: "hourly",
           lastSyncAt: oneHourAgo,

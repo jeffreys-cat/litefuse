@@ -42,12 +42,12 @@ export class DorisWriter {
   private flushCounters = new Map<TableName, number>();
 
   private constructor() {
-    this.batchSize = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
+    this.batchSize = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
     this.maxQueueSizeBytes =
-      workerEnv.LANGFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES;
-    this.writeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
-    this.gaugeInterval = workerEnv.LANGFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
-    this.maxAttempts = sharedEnv.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
+      workerEnv.LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES;
+    this.writeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
+    this.gaugeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
+    this.maxAttempts = sharedEnv.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
 
     this.isIntervalFlushInProgress = false;
 

@@ -24,7 +24,7 @@ export default withMiddlewares({
       const useEventsTable =
         query.useEventsTable !== undefined && query.useEventsTable !== null
           ? query.useEventsTable === true
-          : env.LANGFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS;
+          : env.LITEFUSE_ENABLE_EVENTS_TABLE_OBSERVATIONS;
 
       const dorisObservation = useEventsTable
         ? await getObservationByIdFromEventsTable({

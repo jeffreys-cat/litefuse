@@ -506,7 +506,7 @@ export const traceRouter = createTRPCRouter({
           );
 
           // events_full is the production read target; the previous flag
-          // gate (LANGFUSE_ENABLE_EVENTS_TABLE_FLAGS) is removed — without
+          // gate (LITEFUSE_ENABLE_EVENTS_TABLE_FLAGS) is removed — without
           // this write, refreshing the page would surface the unchanged
           // events_full state and "lose" the bookmark.
           promises.push(

@@ -48,7 +48,7 @@ export async function stripeWebhookHandler(req: NextRequest) {
       { status: 405 },
     );
 
-  if (!env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION || !stripeClient) {
+  if (!env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION || !stripeClient) {
     logger.error("[Stripe Webhook] Endpoint only available in Litefuse Cloud");
     return NextResponse.json(
       { message: "Stripe webhook endpoint only available in Litefuse Cloud" },
@@ -290,14 +290,14 @@ async function ensureMetadataIsSetOnStripeSubscription(
   if (subscription.metadata?.orgId && subscription.metadata?.cloudRegion) {
     return;
   }
-  const currentEnvironment = env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+  const currentEnvironment = env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
 
   if (!currentEnvironment) {
     traceException(
-      "[Stripe Webhook] NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is not set but webhook is running",
+      "[Stripe Webhook] NEXT_PUBLIC_LITEFUSE_CLOUD_REGION is not set but webhook is running",
     );
     throw new InternalServerError(
-      "[Stripe Webhook] NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is not set but webhook is running",
+      "[Stripe Webhook] NEXT_PUBLIC_LITEFUSE_CLOUD_REGION is not set but webhook is running",
     ); // we throw here because this should really never happen
   }
 
@@ -377,14 +377,14 @@ async function handleSubscriptionChanged(
   subscription: Stripe.Subscription,
   action: "created" | "deleted" | "updated",
 ) {
-  const currentEnvironment = env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION;
+  const currentEnvironment = env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION;
 
   if (!currentEnvironment) {
     traceException(
-      `[Stripe Webhook] NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is not set but webhook received event subscription.${action}`,
+      `[Stripe Webhook] NEXT_PUBLIC_LITEFUSE_CLOUD_REGION is not set but webhook received event subscription.${action}`,
     );
     throw new InternalServerError(
-      `[Stripe Webhook] NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is not set but webhook received event subscription.${action}`, // we throw here because this should really never happen
+      `[Stripe Webhook] NEXT_PUBLIC_LITEFUSE_CLOUD_REGION is not set but webhook received event subscription.${action}`, // we throw here because this should really never happen
     );
   }
 

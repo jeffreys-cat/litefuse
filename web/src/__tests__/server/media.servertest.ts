@@ -23,9 +23,9 @@ describe("Media Upload API", () => {
   const projectId = "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a";
   const staticFixtureDir = path.join(__dirname, "..", "static");
   const isAzureBlobMode =
-    process.env.LANGFUSE_USE_AZURE_BLOB === "true" ||
-    env.LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID === "devstoreaccount1" ||
-    env.LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT?.includes(":10000/") === true;
+    process.env.LITEFUSE_USE_AZURE_BLOB === "true" ||
+    env.LITEFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID === "devstoreaccount1" ||
+    env.LITEFUSE_S3_MEDIA_UPLOAD_ENDPOINT?.includes(":10000/") === true;
   const describeIfNotAzureBlobStorage = isAzureBlobMode
     ? describe.skip
     : describe;
@@ -259,7 +259,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -313,7 +313,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPDF.sha256Hash,
         contentType: validPDF.contentType,
         contentLength: BigInt(validPDF.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
       });
       expect(result.traceMediaRecord).toBeNull();
@@ -364,7 +364,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(100),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 403,
         uploadHttpError: expect.any(String),
@@ -394,7 +394,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -447,7 +447,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 403,
         uploadHttpError: expect.any(String),
@@ -477,7 +477,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -530,7 +530,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: "image/jpeg",
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 403,
         uploadHttpError: expect.any(String),
@@ -560,7 +560,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -613,7 +613,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: "image/jpeg",
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -660,7 +660,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -712,7 +712,7 @@ describe("Media Upload API", () => {
         sha256Hash: validPNG.sha256Hash,
         contentType: validPNG.contentType,
         contentLength: BigInt(validPNG.contentLength),
-        bucketName: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        bucketName: env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
         bucketPath: expect.any(String),
         uploadHttpStatus: 200,
         uploadHttpError: null,
@@ -785,7 +785,7 @@ describe("Media Upload API", () => {
         ...validPNG,
         traceId,
         field,
-        contentLength: env.LANGFUSE_S3_MEDIA_MAX_CONTENT_LENGTH + 1,
+        contentLength: env.LITEFUSE_S3_MEDIA_MAX_CONTENT_LENGTH + 1,
       });
 
       expect(result.getUploadUrlResponse?.status).toBe(400);

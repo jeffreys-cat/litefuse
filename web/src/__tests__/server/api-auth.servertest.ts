@@ -626,7 +626,7 @@ describe("Authenticate API calls", () => {
         `api-key:${apiKey?.fastHashedSecretKey}`,
       );
 
-      expect(ttl).toBeGreaterThan(env.LANGFUSE_CACHE_API_KEY_TTL_SECONDS - 2);
+      expect(ttl).toBeGreaterThan(env.LITEFUSE_CACHE_API_KEY_TTL_SECONDS - 2);
 
       // wait for 5 seconds
       await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -641,7 +641,7 @@ describe("Authenticate API calls", () => {
         `api-key:${apiKey?.fastHashedSecretKey}`,
       );
 
-      expect(ttl2).toBeGreaterThan(env.LANGFUSE_CACHE_API_KEY_TTL_SECONDS - 2);
+      expect(ttl2).toBeGreaterThan(env.LITEFUSE_CACHE_API_KEY_TTL_SECONDS - 2);
     }, 10000);
 
     it("should delete API keys from cache and db", async () => {

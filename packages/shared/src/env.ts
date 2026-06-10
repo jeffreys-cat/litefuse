@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { removeEmptyEnvVariables } from "./utils/environment";
 
 const EnvSchema = z.object({
-  NEXT_PUBLIC_LANGFUSE_CLOUD_REGION: z.string().optional(),
+  NEXT_PUBLIC_LITEFUSE_CLOUD_REGION: z.string().optional(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
@@ -55,10 +55,10 @@ const EnvSchema = z.object({
       "ENCRYPTION_KEY must be 256 bits, 64 string characters in hex format, generate via: openssl rand -hex 32",
     )
     .optional(),
-  LANGFUSE_CACHE_MODEL_MATCH_ENABLED: z.enum(["true", "false"]).default("true"),
-  LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS: z.coerce.number().default(86400), // 24 hours
-  LANGFUSE_CACHE_PROMPT_ENABLED: z.enum(["true", "false"]).default("true"),
-  LANGFUSE_CACHE_PROMPT_TTL_SECONDS: z.coerce.number().default(3600), // 1h
+  LITEFUSE_CACHE_MODEL_MATCH_ENABLED: z.enum(["true", "false"]).default("true"),
+  LITEFUSE_CACHE_MODEL_MATCH_TTL_SECONDS: z.coerce.number().default(86400), // 24 hours
+  LITEFUSE_CACHE_PROMPT_ENABLED: z.enum(["true", "false"]).default("true"),
+  LITEFUSE_CACHE_PROMPT_TTL_SECONDS: z.coerce.number().default(3600), // 1h
 
   // Doris configuration
   DORIS_URL: z.string().url().optional(),
@@ -69,57 +69,57 @@ const EnvSchema = z.object({
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
-  LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
+  LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
     .number()
     .positive()
     .default(1000),
-  LANGFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS: z.coerce
+  LITEFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS: z.coerce
     .number()
     .positive()
     .default(200),
-  LANGFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE: z
+  LITEFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_DORIS_LOG_QUERIES: z.enum(["true", "false"]).default("false"),
-  LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS: z.coerce
+  LITEFUSE_DORIS_LOG_QUERIES: z.enum(["true", "false"]).default("false"),
+  LITEFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS: z.coerce
     .number()
     .positive()
     .default(2000),
-  LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
+  LITEFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
     .enum(["true", "false"])
     .default("false"),
 
   // Analytics backend selection (Doris only)
-  LANGFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
+  LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 
-  LANGFUSE_INGESTION_QUEUE_DELAY_MS: z.coerce
+  LITEFUSE_INGESTION_QUEUE_DELAY_MS: z.coerce
     .number()
     .nonnegative()
     .default(15_000),
-  LANGFUSE_INGESTION_QUEUE_SHARD_COUNT: z.coerce.number().positive().default(1),
-  LANGFUSE_OTEL_INGESTION_QUEUE_SHARD_COUNT: z.coerce
+  LITEFUSE_INGESTION_QUEUE_SHARD_COUNT: z.coerce.number().positive().default(1),
+  LITEFUSE_OTEL_INGESTION_QUEUE_SHARD_COUNT: z.coerce
     .number()
     .positive()
     .default(1),
-  LANGFUSE_TRACE_UPSERT_QUEUE_SHARD_COUNT: z.coerce
+  LITEFUSE_TRACE_UPSERT_QUEUE_SHARD_COUNT: z.coerce
     .number()
     .positive()
     .default(1),
-  LANGFUSE_TRACE_UPSERT_QUEUE_ATTEMPTS: z.coerce.number().positive().default(2),
-  LANGFUSE_TRACE_DELETE_DELAY_MS: z.coerce
+  LITEFUSE_TRACE_UPSERT_QUEUE_ATTEMPTS: z.coerce.number().positive().default(2),
+  LITEFUSE_TRACE_DELETE_DELAY_MS: z.coerce
     .number()
     .nonnegative()
     .default(5_000),
-  LANGFUSE_TRACE_DELETE_SKIP_PROJECT_IDS: z
+  LITEFUSE_TRACE_DELETE_SKIP_PROJECT_IDS: z
     .string()
     .optional()
     .transform((s) => (s ? s.split(",").map((id) => id.trim()) : [])),
   SALT: z.string().optional(), // used by components imported by web package
-  LANGFUSE_LOG_LEVEL: z
+  LITEFUSE_LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .optional(),
-  LANGFUSE_LOG_FORMAT: z.enum(["text", "json"]).default("text"),
-  LANGFUSE_LOG_PROPAGATED_HEADERS: z
+  LITEFUSE_LOG_FORMAT: z.enum(["text", "json"]).default("text"),
+  LITEFUSE_LOG_PROPAGATED_HEADERS: z
     .string()
     .optional()
     .transform((s) =>
@@ -128,81 +128,81 @@ const EnvSchema = z.object({
   ENABLE_AWS_CLOUDWATCH_METRIC_PUBLISHING: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_CONCURRENT_WRITES: z.coerce.number().positive().default(1000),
-  LANGFUSE_S3_UPLOAD_ENABLE_BUFFERED: z
+  LITEFUSE_S3_CONCURRENT_WRITES: z.coerce.number().positive().default(1000),
+  LITEFUSE_S3_UPLOAD_ENABLE_BUFFERED: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_UPLOAD_MAX_PART_ATTEMPTS: z.coerce
+  LITEFUSE_S3_UPLOAD_MAX_PART_ATTEMPTS: z.coerce
     .number()
     .min(1)
     .max(10)
     .default(3),
-  LANGFUSE_S3_UPLOAD_MAX_CONCURRENT_PARTS: z.coerce
+  LITEFUSE_S3_UPLOAD_MAX_CONCURRENT_PARTS: z.coerce
     .number()
     .min(1)
     .max(10)
     .default(3),
-  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: z.string().optional(), // Optional for Doris-only deployments
-  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: z.string().default(""),
-  LANGFUSE_S3_EVENT_UPLOAD_REGION: z.string().optional(),
-  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: z.string().optional(),
-  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: z.string().optional(),
-  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: z.string().optional(),
-  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: z
+  LITEFUSE_S3_EVENT_UPLOAD_BUCKET: z.string().optional(), // Optional for Doris-only deployments
+  LITEFUSE_S3_EVENT_UPLOAD_PREFIX: z.string().default(""),
+  LITEFUSE_S3_EVENT_UPLOAD_REGION: z.string().optional(),
+  LITEFUSE_S3_EVENT_UPLOAD_ENDPOINT: z.string().optional(),
+  LITEFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: z.string().optional(),
+  LITEFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: z.string().optional(),
+  LITEFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_EVENT_UPLOAD_SSE: z.enum(["AES256", "aws:kms"]).optional(),
-  LANGFUSE_S3_EVENT_UPLOAD_SSE_KMS_KEY_ID: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: z.string().default(""),
-  LANGFUSE_S3_MEDIA_UPLOAD_REGION: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: z.string().optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: z
+  LITEFUSE_S3_EVENT_UPLOAD_SSE: z.enum(["AES256", "aws:kms"]).optional(),
+  LITEFUSE_S3_EVENT_UPLOAD_SSE_KMS_KEY_ID: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_BUCKET: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_PREFIX: z.string().default(""),
+  LITEFUSE_S3_MEDIA_UPLOAD_REGION: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_ENDPOINT: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: z.string().optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_MEDIA_UPLOAD_SSE: z.enum(["AES256", "aws:kms"]).optional(),
-  LANGFUSE_S3_MEDIA_UPLOAD_SSE_KMS_KEY_ID: z.string().optional(),
-  LANGFUSE_USE_AZURE_BLOB: z.enum(["true", "false"]).default("false"),
-  LANGFUSE_AZURE_SKIP_CONTAINER_CHECK: z
+  LITEFUSE_S3_MEDIA_UPLOAD_SSE: z.enum(["AES256", "aws:kms"]).optional(),
+  LITEFUSE_S3_MEDIA_UPLOAD_SSE_KMS_KEY_ID: z.string().optional(),
+  LITEFUSE_USE_AZURE_BLOB: z.enum(["true", "false"]).default("false"),
+  LITEFUSE_AZURE_SKIP_CONTAINER_CHECK: z
     .enum(["true", "false"])
     .default("true"),
-  LANGFUSE_USE_GOOGLE_CLOUD_STORAGE: z.enum(["true", "false"]).default("false"),
-  LANGFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS: z.string().optional(),
+  LITEFUSE_USE_GOOGLE_CLOUD_STORAGE: z.enum(["true", "false"]).default("false"),
+  LITEFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
 
-  LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG: z
+  LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG: z
     .enum(["true", "false"])
     .default("true"),
 
-  LANGFUSE_S3_LIST_MAX_KEYS: z.coerce.number().positive().default(200),
-  LANGFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED: z
+  LITEFUSE_S3_LIST_MAX_KEYS: z.coerce.number().positive().default(200),
+  LITEFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_RATE_ERROR_SLOWDOWN_TTL_SECONDS: z.coerce
+  LITEFUSE_S3_RATE_ERROR_SLOWDOWN_TTL_SECONDS: z.coerce
     .number()
     .positive()
     .default(3600), // 1 hour
-  LANGFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED: z
+  LITEFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_S3_CORE_DATA_EXPORT_SSE: z.enum(["AES256", "aws:kms"]).optional(),
-  LANGFUSE_S3_CORE_DATA_EXPORT_SSE_KMS_KEY_ID: z.string().optional(),
-  LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED: z
+  LITEFUSE_S3_CORE_DATA_EXPORT_SSE: z.enum(["AES256", "aws:kms"]).optional(),
+  LITEFUSE_S3_CORE_DATA_EXPORT_SSE_KMS_KEY_ID: z.string().optional(),
+  LITEFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED: z
     .enum(["true", "false"])
     .default("false"),
 
-  LANGFUSE_CUSTOM_SSO_EMAIL_CLAIM: z.string().default("email"),
-  LANGFUSE_CUSTOM_SSO_NAME_CLAIM: z.string().default("name"),
-  LANGFUSE_CUSTOM_SSO_SUB_CLAIM: z.string().default("sub"),
-  LANGFUSE_API_TRACE_OBSERVATIONS_SIZE_LIMIT_BYTES: z.coerce
+  LITEFUSE_CUSTOM_SSO_EMAIL_CLAIM: z.string().default("email"),
+  LITEFUSE_CUSTOM_SSO_NAME_CLAIM: z.string().default("name"),
+  LITEFUSE_CUSTOM_SSO_SUB_CLAIM: z.string().default("sub"),
+  LITEFUSE_API_TRACE_OBSERVATIONS_SIZE_LIMIT_BYTES: z.coerce
     .number()
     .default(80e6), // 80MB
-  LANGFUSE_DORIS_DELETION_TIMEOUT_MS: z.coerce.number().default(600_000), // 10 minutes
-  LANGFUSE_DORIS_QUERY_MAX_ATTEMPTS: z.coerce.number().default(3), // Maximum attempts for socket hang up errors
-  LANGFUSE_SKIP_S3_LIST_FOR_OBSERVATIONS_PROJECT_IDS: z.string().optional(),
-  LANGFUSE_INGESTION_PROCESSING_SAMPLED_PROJECTS: z
+  LITEFUSE_DORIS_DELETION_TIMEOUT_MS: z.coerce.number().default(600_000), // 10 minutes
+  LITEFUSE_DORIS_QUERY_MAX_ATTEMPTS: z.coerce.number().default(3), // Maximum attempts for socket hang up errors
+  LITEFUSE_SKIP_S3_LIST_FOR_OBSERVATIONS_PROJECT_IDS: z.string().optional(),
+  LITEFUSE_INGESTION_PROCESSING_SAMPLED_PROJECTS: z
     .string()
     .optional()
     .transform((val) => {
@@ -234,19 +234,19 @@ const EnvSchema = z.object({
         return new Map<string, number>();
       }
     }),
-  LANGFUSE_WEBHOOK_WHITELISTED_IPS: z
+  LITEFUSE_WEBHOOK_WHITELISTED_IPS: z
     .string()
     .optional()
     .transform((s) =>
       s ? s.split(",").map((s) => s.toLowerCase().trim()) : [],
     ),
-  LANGFUSE_WEBHOOK_WHITELISTED_IP_SEGMENTS: z
+  LITEFUSE_WEBHOOK_WHITELISTED_IP_SEGMENTS: z
     .string()
     .optional()
     .transform((s) =>
       s ? s.split(",").map((s) => s.toLowerCase().trim()) : [],
     ),
-  LANGFUSE_WEBHOOK_WHITELISTED_HOST: z
+  LITEFUSE_WEBHOOK_WHITELISTED_HOST: z
     .string()
     .optional()
     .transform((s) =>
@@ -265,74 +265,74 @@ const EnvSchema = z.object({
     ),
   HTTPS_PROXY: z.string().optional(),
 
-  LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT: z.coerce
+  LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT: z.coerce
     .number()
     .int()
     .positive()
     .default(1_000),
 
-  LANGFUSE_DORIS_DATA_EXPORT_REQUEST_TIMEOUT_MS: z.coerce
+  LITEFUSE_DORIS_DATA_EXPORT_REQUEST_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
     .default(600_000), // 10 minutes
 
-  LANGFUSE_EVENT_PROPAGATION_WORKER_GLOBAL_CONCURRENCY: z.coerce
+  LITEFUSE_EVENT_PROPAGATION_WORKER_GLOBAL_CONCURRENCY: z.coerce
     .number()
     .positive()
     .default(10),
 
-  LANGFUSE_FETCH_LLM_COMPLETION_TIMEOUT_MS: z.coerce
+  LITEFUSE_FETCH_LLM_COMPLETION_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
     .default(120_000), // 2 minutes
 
-  LANGFUSE_AWS_BEDROCK_REGION: z.string().optional(),
+  LITEFUSE_AWS_BEDROCK_REGION: z.string().optional(),
 
   // API Performance Flags
   // Enable Redis-based tracking of projects using OTEL API to optimize queries.
   // When enabled, projects ingesting via OTEL API skip certain modifiers for better performance.
-  LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS: z
+  LITEFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS: z
     .enum(["true", "false"])
     .default("false"),
 
   // Langfuse AI Features
-  LANGFUSE_AI_FEATURES_PUBLIC_KEY: z.string().optional(),
-  LANGFUSE_AI_FEATURES_SECRET_KEY: z.string().optional(),
-  LANGFUSE_AI_FEATURES_HOST: z.string().optional(),
-  LANGFUSE_AI_FEATURES_PROJECT_ID: z.string().optional(),
+  LITEFUSE_AI_FEATURES_PUBLIC_KEY: z.string().optional(),
+  LITEFUSE_AI_FEATURES_SECRET_KEY: z.string().optional(),
+  LITEFUSE_AI_FEATURES_HOST: z.string().optional(),
+  LITEFUSE_AI_FEATURES_PROJECT_ID: z.string().optional(),
 
   // Dataset Service
-  LANGFUSE_DATASET_SERVICE_WRITE_TO_VERSIONED_IMPLEMENTATION: z
+  LITEFUSE_DATASET_SERVICE_WRITE_TO_VERSIONED_IMPLEMENTATION: z
     .enum(["true", "false"])
     .default("true"),
-  LANGFUSE_DATASET_SERVICE_READ_FROM_VERSIONED_IMPLEMENTATION: z
+  LITEFUSE_DATASET_SERVICE_READ_FROM_VERSIONED_IMPLEMENTATION: z
     .enum(["true", "false"])
     .default("true"),
 
   // Legacy events table (transitional deployment)
-  LANGFUSE_LEGACY_EVENTS_TABLE_EXISTS: z
+  LITEFUSE_LEGACY_EVENTS_TABLE_EXISTS: z
     .enum(["true", "false"])
     .default("true"),
 
   // EE License
-  LANGFUSE_EE_LICENSE_KEY: z.string().optional(),
+  LITEFUSE_EE_LICENSE_KEY: z.string().optional(),
 
   // Ingestion Masking (EE feature)
-  LANGFUSE_INGESTION_MASKING_CALLBACK_URL: z.string().url().optional(),
-  LANGFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: z.coerce
+  LITEFUSE_INGESTION_MASKING_CALLBACK_URL: z.string().url().optional(),
+  LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: z.coerce
     .number()
     .positive()
     .default(500),
-  LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: z
+  LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED: z
     .enum(["true", "false"])
     .default("false"),
-  LANGFUSE_INGESTION_MASKING_MAX_RETRIES: z.coerce
+  LITEFUSE_INGESTION_MASKING_MAX_RETRIES: z.coerce
     .number()
     .nonnegative()
     .default(1),
-  LANGFUSE_INGESTION_MASKING_PROPAGATED_HEADERS: z
+  LITEFUSE_INGESTION_MASKING_PROPAGATED_HEADERS: z
     .string()
     .optional()
     .transform((s) =>

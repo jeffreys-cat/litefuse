@@ -1,6 +1,6 @@
 # Score Interfaces
 
-This directory contains all type definitions, schemas, and validation logic for Langfuse scores.
+This directory contains all type definitions, schemas, and validation logic for Litefuse scores.
 
 ## Structure
 

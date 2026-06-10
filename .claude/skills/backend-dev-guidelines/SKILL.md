@@ -1,13 +1,13 @@
 ---
 name: backend-dev-guidelines
-description: Comprehensive backend development guide for Langfuse's Next.js 14/tRPC/Express/TypeScript monorepo. Use when creating tRPC routers, public API endpoints, BullMQ queue processors, services, or working with tRPC procedures, Next.js API routes, Prisma database access, ClickHouse analytics queries, Redis queues, OpenTelemetry instrumentation, Zod v4 validation, env.mjs configuration, tenant isolation patterns, or async patterns. Covers layered architecture (tRPC procedures → services, queue processors → services), dual database system (PostgreSQL + ClickHouse), projectId filtering for multi-tenant isolation, traceException error handling, observability patterns, and testing strategies (Jest for web, vitest for worker).
+description: Comprehensive backend development guide for Litefuse's Next.js 14/tRPC/Express/TypeScript monorepo. Use when creating tRPC routers, public API endpoints, BullMQ queue processors, services, or working with tRPC procedures, Next.js API routes, Prisma database access, ClickHouse analytics queries, Redis queues, OpenTelemetry instrumentation, Zod v4 validation, env.mjs configuration, tenant isolation patterns, or async patterns. Covers layered architecture (tRPC procedures → services, queue processors → services), dual database system (PostgreSQL + ClickHouse), projectId filtering for multi-tenant isolation, traceException error handling, observability patterns, and testing strategies (Jest for web, vitest for worker).
 ---
 
 # Backend Development Guidelines
 
 ## Purpose
 
-Establish consistency and best practices across Langfuse's backend packages (web, worker, packages/shared) using Next.js 14, tRPC, BullMQ, and TypeScript patterns.
+Establish consistency and best practices across Litefuse's backend packages (web, worker, packages/shared) using Next.js 14, tRPC, BullMQ, and TypeScript patterns.
 
 ## When to Use This Skill
 
@@ -322,7 +322,7 @@ const traces = await getTracesTable({
 
 ### 6. Observability: OpenTelemetry + DataDog (Not Sentry for Backend)
 
-**Langfuse uses OpenTelemetry for backend observability, with traces and logs sent to DataDog.**
+**Litefuse uses OpenTelemetry for backend observability, with traces and logs sent to DataDog.**
 
 ```typescript
 // Import observability utilities
@@ -513,7 +513,7 @@ import { QueueName, TQueueJobTypes } from "@langfuse/shared/src/server";
 
 ### Example Features to Reference
 
-Reference existing Langfuse features for implementation patterns:
+Reference existing Litefuse features for implementation patterns:
 - **Datasets** (`web/src/features/datasets/`) - Complete feature with tRPC router, public API, and service
 - **Prompts** (`web/src/features/prompts/`) - Feature with versioning and templates
 - **Evaluations** (`web/src/features/evals/`) - Complex feature with worker integration
@@ -570,7 +570,7 @@ Dual database architecture (PostgreSQL via Prisma + ClickHouse via direct client
 
 ### [configuration.md](resources/configuration.md)
 
-Environment variable validation with Zod, package-specific configs (web/env.mjs with t3-oss/env-nextjs, worker/env.ts, shared/env.ts), NEXT_PUBLIC_LANGFUSE_CLOUD_REGION usage, LANGFUSE_EE_LICENSE_KEY for enterprise features, best practices for env management
+Environment variable validation with Zod, package-specific configs (web/env.mjs with t3-oss/env-nextjs, worker/env.ts, shared/env.ts), NEXT_PUBLIC_LITEFUSE_CLOUD_REGION usage, LITEFUSE_EE_LICENSE_KEY for enterprise features, best practices for env management
 
 ### [testing-guide.md](resources/testing-guide.md)
 

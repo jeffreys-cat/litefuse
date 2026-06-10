@@ -23,7 +23,7 @@ import { TRPCError } from "@trpc/server";
  * @throws {TRPCError} If not running in a Langfuse Cloud environment
  */
 export const createStripeClientReference = (orgId: string) => {
-  if (!env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
+  if (!env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION) {
     logger.error(
       "Returning null stripeClientReference, you cannot run the checkout page outside of Litefuse Cloud",
     );
@@ -33,7 +33,7 @@ export const createStripeClientReference = (orgId: string) => {
         "Cannot create stripe client reference outside of Litefuse Cloud",
     });
   }
-  return `${env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION}-${orgId}`;
+  return `${env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION}-${orgId}`;
 };
 
 /**
@@ -46,8 +46,8 @@ export const createStripeClientReference = (orgId: string) => {
 export const isStripeClientReferenceFromCurrentCloudRegion = (
   clientReference: string,
 ) =>
-  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION &&
-  clientReference.startsWith(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
+  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
+  clientReference.startsWith(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION);
 
 /**
  * Extracts the organization ID from a client reference.
@@ -57,4 +57,4 @@ export const isStripeClientReferenceFromCurrentCloudRegion = (
  * @returns The extracted organization ID
  */
 export const getOrgIdFromStripeClientReference = (clientReference: string) =>
-  clientReference.replace(`${env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION}-`, "");
+  clientReference.replace(`${env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION}-`, "");

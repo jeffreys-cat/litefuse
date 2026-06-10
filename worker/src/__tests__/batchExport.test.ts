@@ -21,12 +21,12 @@ import { getObservationStream } from "../features/database-read-stream/observati
 import { getTraceStream } from "../features/database-read-stream/trace-stream";
 import { getEventsStream } from "../features/database-read-stream/event-stream";
 // Set environment variable before any imports to ensure it's picked up by env module
-process.env.LANGFUSE_DATASET_SERVICE_READ_FROM_VERSIONED_IMPLEMENTATION =
+process.env.LITEFUSE_DATASET_SERVICE_READ_FROM_VERSIONED_IMPLEMENTATION =
   "true";
-process.env.LANGFUSE_DATASET_SERVICE_WRITE_TO_VERSIONED_IMPLEMENTATION = "true";
+process.env.LITEFUSE_DATASET_SERVICE_WRITE_TO_VERSIONED_IMPLEMENTATION = "true";
 
 const maybeDescribe =
-  process.env.LANGFUSE_ENABLE_EVENTS_TABLE_V2_APIS === "true"
+  process.env.LITEFUSE_ENABLE_EVENTS_TABLE_V2_APIS === "true"
     ? describe
     : describe.skip;
 

@@ -1,6 +1,6 @@
 # Routing Patterns - Next.js & tRPC
 
-Complete guide to routing and separation of concerns in Langfuse's Next.js + tRPC architecture.
+Complete guide to routing and separation of concerns in Litefuse's Next.js + tRPC architecture.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Complete guide to routing and separation of concerns in Langfuse's Next.js + tRP
 
 ## Architecture Overview
 
-Langfuse uses a **layered architecture** with clear separation of concerns:
+Litefuse uses a **layered architecture** with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -610,7 +610,7 @@ export async function createScoreWithValidation({
   });
 
   if (!config) {
-    throw new LangfuseNotFoundError("Score config not found");
+    throw new LitefuseNotFoundError("Score config not found");
   }
 
   validateConfigAgainstBody(config, scoreData);

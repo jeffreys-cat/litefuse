@@ -42,8 +42,8 @@
    <a href="https://www.ycombinator.com/companies/litefuse"><img src="https://img.shields.io/badge/Y%20Combinator-W23-orange" alt="Y Combinator W23"></a>
    <a href="https://hub.docker.com/u/litefuse" target="_blank">
    <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/litefuse/litefuse?labelColor=%20%23FDB062&logo=Docker&labelColor=%20%23528bff"></a>
-   <a href="https://pypi.python.org/pypi/litefuse"><img src="https://img.shields.io/pypi/dm/litefuse?logo=python&logoColor=white&label=pypi%20langfuse&color=blue" alt="litefuse Python package on PyPi"></a>
-   <a href="https://www.npmjs.com/package/litefuse"><img src="https://img.shields.io/npm/dm/litefuse?logo=npm&logoColor=white&label=npm%20langfuse&color=blue" alt="litefuse npm package"></a>
+   <a href="https://pypi.python.org/pypi/litefuse"><img src="https://img.shields.io/pypi/dm/litefuse?logo=python&logoColor=white&label=pypi%20litefuse&color=blue" alt="litefuse Python package on PyPi"></a>
+   <a href="https://www.npmjs.com/package/litefuse"><img src="https://img.shields.io/npm/dm/litefuse?logo=npm&logoColor=white&label=npm%20litefuse&color=blue" alt="litefuse npm package"></a>
    <br/>
    <a href="https://discord.com/invite/7NXusRtqYU" target="_blank">
    <img src="https://img.shields.io/discord/1111061815649124414?logo=discord&labelColor=%20%235462eb&logoColor=%20%23f5f5f5&color=%20%235462eb"
@@ -57,7 +57,7 @@
    <a href="https://github.com/selectdb/litefuse-doris/graphs/commit-activity" target="_blank">
    <img alt="Commits last month" src="https://img.shields.io/github/commit-activity/m/litefuse/litefuse?labelColor=%20%2332b583&color=%20%2312b76a"></a>
    <a href="https://github.com/selectdb/litefuse-doris/" target="_blank">
-   <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3Alangfuse%2Flangfuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
+   <img alt="Issues closed" src="https://img.shields.io/github/issues-search?query=repo%3Alitefuse%2Flitefuse%20is%3Aclosed&label=issues%20closed&labelColor=%20%237d89b0&color=%20%235d6b98"></a>
    <a href="https://github.com/selectdb/litefuse-doris/discussions/" target="_blank">
    <img alt="Discussion posts" src="https://img.shields.io/github/discussions/litefuse/litefuse?labelColor=%20%239b8afb&color=%20%237a5af8"></a>
    <a href="https://deepwiki.com/litefuse/litefuse" target="_blank">
@@ -106,7 +106,7 @@ Managed deployment by the Litefuse team, generous free-tier, no credit card requ
 
 <div align="center">
     <a href="https://cloud.litefuse.ai" target="_blank">
-        <img alt="Static Badge" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Langfuse%20Cloud-8A2BE2?&color=orange">
+        <img alt="Static Badge" src="https://img.shields.io/badge/»%20Sign%20up%20for%20Litefuse%20Cloud-8A2BE2?&color=orange">
     </a>
 </div>
 
@@ -196,8 +196,8 @@ pip install litefuse openai
 ```bash filename=".env"
 LANGFUSE_SECRET_KEY="sk-lf-..."
 LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EU region
-# LANGFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 US region
+LITEFUSE_BASE_URL="https://cloud.litefuse.ai" # 🇪🇺 EU region
+# LITEFUSE_BASE_URL="https://us.cloud.litefuse.ai" # 🇺🇸 US region
 ```
 
 ```python /@observe()/ /from litefuse.openai import openai/ filename="main.py"

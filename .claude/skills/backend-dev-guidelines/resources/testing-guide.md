@@ -1,6 +1,6 @@
 # Testing Guide - Backend Testing Strategies
 
-Complete guide to testing Langfuse backend services across web, worker, and shared packages.
+Complete guide to testing Litefuse backend services across web, worker, and shared packages.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Complete guide to testing Langfuse backend services across web, worker, and shar
 
 ## Test Types Overview
 
-Langfuse uses multiple testing strategies for different layers:
+Litefuse uses multiple testing strategies for different layers:
 
 | Test Type | Framework | Location | Purpose |
 |-----------|-----------|----------|---------|

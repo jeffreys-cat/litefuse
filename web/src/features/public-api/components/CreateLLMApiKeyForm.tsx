@@ -31,7 +31,7 @@ import { DialogFooter } from "@/src/components/ui/dialog";
 import { DialogBody } from "@/src/components/ui/dialog";
 import { env } from "@/src/env.mjs";
 
-const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
+const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION);
 
 const createFormSchema = (mode: "create" | "update") =>
   z

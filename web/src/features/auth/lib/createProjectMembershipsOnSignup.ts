@@ -40,8 +40,8 @@ export async function createProjectMembershipsOnSignup(user: {
       });
     }
 
-    // self-hosted: LANGFUSE_DEFAULT_ORG_ID (supports comma-separated list of org IDs)
-    const defaultOrgIds = env.LANGFUSE_DEFAULT_ORG_ID ?? [];
+    // self-hosted: LITEFUSE_DEFAULT_ORG_ID (supports comma-separated list of org IDs)
+    const defaultOrgIds = env.LITEFUSE_DEFAULT_ORG_ID ?? [];
     const defaultOrgs =
       defaultOrgIds.length > 0
         ? await prisma.organization.findMany({
@@ -65,14 +65,14 @@ export async function createProjectMembershipsOnSignup(user: {
         create: {
           orgId: org.id,
           userId: user.id,
-          role: env.LANGFUSE_DEFAULT_ORG_ROLE ?? "VIEWER",
+          role: env.LITEFUSE_DEFAULT_ORG_ROLE ?? "VIEWER",
         },
       });
       orgMembershipMap.set(org.id, membership);
     }
 
-    // self-hosted: LANGFUSE_DEFAULT_PROJECT_ID (supports comma-separated list of project IDs)
-    const defaultProjectIds = env.LANGFUSE_DEFAULT_PROJECT_ID ?? [];
+    // self-hosted: LITEFUSE_DEFAULT_PROJECT_ID (supports comma-separated list of project IDs)
+    const defaultProjectIds = env.LITEFUSE_DEFAULT_PROJECT_ID ?? [];
     const defaultProjects =
       defaultProjectIds.length > 0
         ? await prisma.project.findMany({
@@ -107,7 +107,7 @@ export async function createProjectMembershipsOnSignup(user: {
               userId: user.id,
               orgMembershipId: existingOrgMembership.id,
               projectId: project.id,
-              role: env.LANGFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
+              role: env.LITEFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
             },
           });
         }
@@ -121,7 +121,7 @@ export async function createProjectMembershipsOnSignup(user: {
           create: {
             orgId: project.orgId,
             userId: user.id,
-            role: env.LANGFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
+            role: env.LITEFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
           },
         });
         // Add to map in case multiple projects belong to the same org
@@ -140,7 +140,7 @@ export async function createProjectMembershipsOnSignup(user: {
               userId: user.id,
               orgMembershipId: orgMembership.id,
               projectId: project.id,
-              role: env.LANGFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
+              role: env.LITEFUSE_DEFAULT_PROJECT_ROLE ?? "VIEWER",
             },
           });
         }
@@ -153,8 +153,8 @@ export async function createProjectMembershipsOnSignup(user: {
     // for conversion metric tracking in posthog: did a new user sign up?
     if (
       isNewUser &&
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION &&
-      ["EU", "US"].includes(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION)
+      env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
+      ["EU", "US"].includes(env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION)
     ) {
       try {
         const posthog = new ServerPosthog();
@@ -162,7 +162,7 @@ export async function createProjectMembershipsOnSignup(user: {
           distinctId: user.id,
           event: "cloud_signup_complete",
           properties: {
-            cloudRegion: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+            cloudRegion: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
             hasDemoAccess: demoProject !== undefined,
             hasDefaultOrg: defaultOrgs.length > 0,
             hasDefaultProject: defaultProjects.length > 0,

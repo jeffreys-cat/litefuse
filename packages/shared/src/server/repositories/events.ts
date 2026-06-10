@@ -2342,10 +2342,10 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
   // In Doris, we use the observations table for both truncated and full I/O
   // Use SUBSTRING instead of leftUTF8 for truncation
   const inputSelect = truncated
-    ? `SUBSTRING(e.input, 1, ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as input`
+    ? `SUBSTRING(e.input, 1, ${env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as input`
     : `e.input as input`;
   const outputSelect = truncated
-    ? `SUBSTRING(e.output, 1, ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as output`
+    ? `SUBSTRING(e.output, 1, ${env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as output`
     : `e.output as output`;
 
   const query = `

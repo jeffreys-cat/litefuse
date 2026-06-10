@@ -67,7 +67,7 @@ export class DorisClient {
 
   constructor(config: DorisClientConfig = {}) {
     const maxSockets =
-      config.maxSockets ?? env.LANGFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS ?? 100;
+      config.maxSockets ?? env.LITEFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS ?? 100;
 
     this.config = {
       feHttpUrl: config.feHttpUrl ?? env.DORIS_FE_HTTP_URL,
@@ -77,7 +77,7 @@ export class DorisClient {
       password: config.password ?? env.DORIS_PASSWORD,
       timeout: config.timeout ?? env.DORIS_REQUEST_TIMEOUT_MS,
       maxRetries:
-        config.maxRetries ?? env.LANGFUSE_INGESTION_DORIS_MAX_ATTEMPTS ?? 3,
+        config.maxRetries ?? env.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS ?? 3,
       retryDelay: config.retryDelay ?? 1000,
       headers: config.headers || {},
       maxOpenConnections:
@@ -316,9 +316,9 @@ export class DorisClient {
         durationMs: queryDurationMs,
       });
 
-      // Auto-warn slow queries regardless of LANGFUSE_DORIS_LOG_QUERIES so
+      // Auto-warn slow queries regardless of LITEFUSE_DORIS_LOG_QUERIES so
       // operational anomalies surface even when the per-query log is off.
-      if (queryDurationMs > env.LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
+      if (queryDurationMs > env.LITEFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
         logger.warn(`doris:slow-query (${queryDurationMs}ms) ${finalQuery}`);
       }
 
@@ -395,7 +395,7 @@ export class DorisClient {
       query_params,
     );
 
-    if (env.LANGFUSE_DORIS_LOG_QUERIES === "true") {
+    if (env.LITEFUSE_DORIS_LOG_QUERIES === "true") {
       logger.info(`doris:query ${processedQuery}`);
     } else {
       logger.debug(`doris:query ${processedQuery}`);
@@ -450,7 +450,7 @@ export class DorisClient {
         rowCount,
         durationMs,
       });
-      if (durationMs > env.LANGFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
+      if (durationMs > env.LITEFUSE_DORIS_SLOW_QUERY_THRESHOLD_MS) {
         logger.warn(
           `doris:slow-stream-query (${durationMs}ms, ${rowCount} rows) ${sql}`,
         );
@@ -615,7 +615,7 @@ export class DorisClient {
         throw new Error(`Stream load failed: ${errorMessage}${errorUrlSuffix}`);
       }
 
-      if (env.LANGFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
+      if (env.LITEFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
         logger.info(
           `Stream load completed ${JSON.stringify({ table, ...result })}`,
         );
@@ -668,7 +668,7 @@ export class DorisClient {
       // default text log format (which drops the metadata object). Without
       // this, "[E-217]json body size ... exceed BE's conf
       // streaming_load_json_max_mb ..." and similar BE-side rejections are
-      // invisible until operators flip LANGFUSE_LOG_FORMAT=json.
+      // invisible until operators flip LITEFUSE_LOG_FORMAT=json.
       const dataSizeKB = (
         data.reduce(
           (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),

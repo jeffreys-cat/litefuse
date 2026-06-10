@@ -39,14 +39,14 @@ export const projectDeleteProcessor: Processor = async (
   logger.info(`Deleting ${projectId} in org ${orgId}`);
 
   // Delete media data from S3 and PG for project
-  if (env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET) {
+  if (env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET) {
     logger.info(`Deleting media for ${projectId} in org ${orgId}`);
     const mediaFilesToDelete = await findAllMediaByProjectId({ projectId });
     await deleteMediaFiles({
       projectId,
       mediaFiles: mediaFilesToDelete,
       storageClient: getS3MediaStorageClient(
-        env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
       ),
     });
   }
@@ -57,7 +57,7 @@ export const projectDeleteProcessor: Processor = async (
 
   // Delete project data from ClickHouse first
   await Promise.all([
-    env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
+    env.LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
       ? removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
           projectId,
           undefined,
@@ -66,7 +66,7 @@ export const projectDeleteProcessor: Processor = async (
     deleteTracesByProjectId(projectId),
     deleteObservationsByProjectId(projectId),
     deleteScoresByProjectId(projectId),
-    env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+    env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
       ? deleteEventsByProjectId(projectId)
       : Promise.resolve(),
   ]);

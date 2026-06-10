@@ -24,12 +24,12 @@ const METRIC_PREFIX = "langfuse.batch_project_media_cleaner";
  */
 export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
   protected get defaultIntervalMs(): number {
-    return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+    return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
   }
 
   constructor() {
     const lockTtlSeconds =
-      Math.ceil(env.LANGFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
+      Math.ceil(env.LITEFUSE_BATCH_PROJECT_CLEANER_DELETE_TIMEOUT_MS / 1000) +
       300;
 
     super({
@@ -41,9 +41,9 @@ export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
 
   public override start(): void {
     logger.info(`Starting ${this.instanceName}`, {
-      sleepOnEmptyMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
-      checkIntervalMs: env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
-      batchSize: env.LANGFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE,
+      sleepOnEmptyMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS,
+      checkIntervalMs: env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS,
+      batchSize: env.LITEFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE,
     });
     super.start();
   }
@@ -64,12 +64,12 @@ export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
               { error },
             );
             traceException(error);
-            return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+            return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
           }
 
           if (!targetProjectId) {
             logger.info(`${this.instanceName}: No deleted projects with media`);
-            return env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
+            return env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS;
           }
 
           logger.info(`${this.instanceName}: Processing project`, {
@@ -80,14 +80,14 @@ export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
         },
         (_error) => {
           recordIncrement(`${METRIC_PREFIX}.failures`, 1);
-          return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+          return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
         },
-      )) ?? env.LANGFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
+      )) ?? env.LITEFUSE_BATCH_PROJECT_CLEANER_SLEEP_ON_EMPTY_MS
     );
   }
 
   private async deleteMediaChunk(projectId: string): Promise<number> {
-    const batchSize = env.LANGFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE;
+    const batchSize = env.LITEFUSE_BATCH_PROJECT_MEDIA_CLEANER_BATCH_SIZE;
 
     const mediaFiles = await findAllMediaByProjectId({
       projectId,
@@ -100,14 +100,14 @@ export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
 
     if (mediaFiles.length === 0) {
       logger.info(`${this.instanceName}: No media remaining`, { projectId });
-      return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+      return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
     }
 
     await deleteMediaFiles({
       projectId,
       mediaFiles,
       storageClient: getS3MediaStorageClient(
-        env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET!,
+        env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET!,
       ),
     });
 
@@ -121,6 +121,6 @@ export class BatchProjectMediaCleaner extends PeriodicExclusiveRunner {
       hasMore: mediaFiles.length >= batchSize,
     });
 
-    return env.LANGFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
+    return env.LITEFUSE_BATCH_PROJECT_CLEANER_CHECK_INTERVAL_MS;
   }
 }

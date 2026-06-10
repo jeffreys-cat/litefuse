@@ -1,8 +1,8 @@
 # Replay Ingestion Events from S3 (v2)
 
-Replays failed ingestion events by reading S3 keys from a CSV and submitting them to Langfuse via an admin API endpoint. This replaces the [v1 script](../replayIngestionEvents/README.md), which required direct Redis, ClickHouse, and PostgreSQL access plus a full repo clone.
+Replays failed ingestion events by reading S3 keys from a CSV and submitting them to Litefuse via an admin API endpoint. This replaces the [v1 script](../replayIngestionEvents/README.md), which required direct Redis, ClickHouse, and PostgreSQL access plus a full repo clone.
 
-v2 only requires the Langfuse host URL, an admin API key, and a CSV file exported from Athena.
+v2 only requires the Litefuse host URL, an admin API key, and a CSV file exported from Athena.
 
 ```
 Athena (S3 access logs)
@@ -19,13 +19,13 @@ events.csv ──► replay script ──► POST /api/admin/ingestion-replay
 
 ## Prerequisites
 
-- **S3 server access logging** enabled on the Langfuse events bucket (see [Initial setup](#1-initial-setup-one-time))
+- **S3 server access logging** enabled on the Litefuse events bucket (see [Initial setup](#1-initial-setup-one-time))
 - **Athena** configured to query the access logs (see [Initial setup](#1-initial-setup-one-time))
 - **Node.js 18+** with `npx tsx` available (no repo clone or `pnpm` needed)
 - **`events.csv`** exported from Athena (see [Export events](#2-export-events-from-athena))
-- **`LANGFUSE_HOST`** URL of the target Langfuse instance (e.g. `https://cloud.litefuse.ai`)
+- **`LANGFUSE_HOST`** URL of the target Litefuse instance (e.g. `https://cloud.litefuse.ai`)
 - **`ADMIN_API_KEY`** for authenticating against the admin API
-- Network access from your machine to the Langfuse host
+- Network access from your machine to the Litefuse host
 
 ## 1. Initial setup (one-time, on AWS)
 
@@ -35,7 +35,7 @@ If you're not using AWS as a cloud vendor, consult your cloud provider's documen
 
 ### 1a. Enable S3 server access logging
 
-Create a dedicated S3 bucket to store access logs for your Langfuse events bucket.
+Create a dedicated S3 bucket to store access logs for your Litefuse events bucket.
 Then enable server access logging on the events bucket with the new bucket as the destination.
 
 AWS docs: [Enabling Amazon S3 server access logging](https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-server-access-logging.html)
@@ -162,7 +162,7 @@ npx tsx replay.ts --file events.csv
 | `--rate-limit`  | `50`         | Maximum requests per second                                    |
 | `--dry-run`     | `false`      | Parse and validate without sending requests                    |
 | `--resume`      | `false`      | Resume from the last checkpoint (skips already-processed rows) |
-| `LANGFUSE_HOST` | -            | Target Langfuse instance URL (required)                        |
+| `LANGFUSE_HOST` | -            | Target Litefuse instance URL (required)                        |
 | `ADMIN_API_KEY` | -            | Admin API key for authentication (required)                    |
 
 ## Admin API endpoint
@@ -251,7 +251,7 @@ Enqueued to `OtelIngestionQueue`.
 
 |                       | v1                                           | v2                                      |
 | --------------------- | -------------------------------------------- | --------------------------------------- |
-| Infrastructure access | Redis, ClickHouse, PostgreSQL, S3            | Langfuse host URL only                  |
+| Infrastructure access | Redis, ClickHouse, PostgreSQL, S3            | Litefuse host URL only                  |
 | Setup                 | Full repo clone, `pnpm install`, `.env` file | `npx tsx` + env vars                    |
 | Event delivery        | Direct BullMQ `addBulk` to Redis             | HTTP POST to admin API                  |
 | Resume support        | Manual (split files, rerun)                  | Built-in checkpoint/resume              |

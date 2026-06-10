@@ -6,11 +6,11 @@ const TTL_SECONDS = 86400; // 24 hours
 
 /**
  * Marks a project as using OTEL API ingestion in Redis with a 24-hour TTL.
- * Only performs the operation if LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS is enabled.
+ * Only performs the operation if LITEFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS is enabled.
  */
 export async function markProjectAsOtelUser(projectId: string): Promise<void> {
   // Check if feature is enabled
-  if (env.LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS !== "true") {
+  if (env.LITEFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS !== "true") {
     return;
   }
 
@@ -31,7 +31,7 @@ export async function markProjectAsOtelUser(projectId: string): Promise<void> {
  */
 export async function isProjectOtelUser(projectId: string): Promise<boolean> {
   // If feature is disabled, always return false
-  if (env.LANGFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS !== "true") {
+  if (env.LITEFUSE_SKIP_FINAL_FOR_OTEL_PROJECTS !== "true") {
     return false;
   }
 

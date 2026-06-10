@@ -327,7 +327,7 @@ export async function processThresholds(
   }
 
   // 2. Check if enforcement is enabled (only for free tier orgs)
-  if (env.LANGFUSE_FREE_TIER_USAGE_THRESHOLD_ENFORCEMENT_ENABLED !== "true") {
+  if (env.LITEFUSE_FREE_TIER_USAGE_THRESHOLD_ENFORCEMENT_ENABLED !== "true") {
     // Always track usage even when enforcement is disabled
     const updateData: OrgUpdateData = {
       orgId: org.id,

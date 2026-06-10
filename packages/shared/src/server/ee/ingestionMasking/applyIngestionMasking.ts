@@ -20,17 +20,17 @@ export function getIngestionMaskingConfig(
   envOverride?: SharedEnv,
 ): IngestionMaskingConfig | null {
   const e = envOverride ?? env;
-  const callbackUrl = e.LANGFUSE_INGESTION_MASKING_CALLBACK_URL;
+  const callbackUrl = e.LITEFUSE_INGESTION_MASKING_CALLBACK_URL;
   if (!callbackUrl) {
     return null;
   }
 
   return {
     callbackUrl,
-    timeoutMs: e.LANGFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS,
-    failClosed: e.LANGFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED === "true",
-    maxRetries: e.LANGFUSE_INGESTION_MASKING_MAX_RETRIES,
-    propagatedHeaders: e.LANGFUSE_INGESTION_MASKING_PROPAGATED_HEADERS,
+    timeoutMs: e.LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS,
+    failClosed: e.LITEFUSE_INGESTION_MASKING_CALLBACK_FAIL_CLOSED === "true",
+    maxRetries: e.LITEFUSE_INGESTION_MASKING_MAX_RETRIES,
+    propagatedHeaders: e.LITEFUSE_INGESTION_MASKING_PROPAGATED_HEADERS,
   };
 }
 

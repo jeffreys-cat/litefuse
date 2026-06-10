@@ -245,7 +245,7 @@ export const handleBatchActionJob = async (
             orderBy: query.orderBy,
             searchQuery: query.searchQuery ?? undefined,
             searchType: query.searchType,
-            rowLimit: env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
+            rowLimit: env.LITEFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
           }) // when reading from Doris, we only want to read the necessary identifiers.
         : await getDatabaseReadStreamPaginated({
             projectId: projectId,
@@ -253,7 +253,7 @@ export const handleBatchActionJob = async (
             filter: convertDatesInFiltersFromStrings(query.filter ?? []),
             orderBy: query.orderBy,
             tableName: BatchTableNames.DatasetRunItems,
-            rowLimit: env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
+            rowLimit: env.LITEFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
           });
 
     const evalCreatorQueue = CreateEvalQueue.getInstance();
@@ -439,7 +439,7 @@ export const handleBatchActionJob = async (
       filter: convertDatesInFiltersFromStrings(query.filter ?? []),
       searchQuery: query.searchQuery ?? undefined,
       searchType: query.searchType ?? ["id", "content"],
-      rowLimit: env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
+      rowLimit: env.LITEFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
     });
 
     await processBatchedObservationEval({

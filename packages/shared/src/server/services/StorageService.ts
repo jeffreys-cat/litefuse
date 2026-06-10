@@ -149,21 +149,21 @@ export class StorageServiceFactory {
     if (
       params.useAzureBlob !== undefined
         ? params.useAzureBlob
-        : env.LANGFUSE_USE_AZURE_BLOB === "true"
+        : env.LITEFUSE_USE_AZURE_BLOB === "true"
     ) {
       return new AzureBlobStorageService(params);
     }
     if (
       params.useGoogleCloudStorage !== undefined
         ? params.useGoogleCloudStorage
-        : env.LANGFUSE_USE_GOOGLE_CLOUD_STORAGE === "true"
+        : env.LITEFUSE_USE_GOOGLE_CLOUD_STORAGE === "true"
     ) {
       // Use provided credentials or fall back to environment variable
       const googleParams = {
         ...params,
         googleCloudCredentials:
           params.googleCloudCredentials ||
-          env.LANGFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS,
+          env.LITEFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS,
       };
       return new GoogleCloudStorageService(googleParams);
     }
@@ -208,7 +208,7 @@ class AzureBlobStorageService implements StorageService {
 
   private async createContainerIfNotExists(): Promise<void> {
     // Skip container existence check if environment variable is set
-    if (env.LANGFUSE_AZURE_SKIP_CONTAINER_CHECK === "true") {
+    if (env.LITEFUSE_AZURE_SKIP_CONTAINER_CHECK === "true") {
       return;
     }
 
@@ -378,7 +378,7 @@ class AzureBlobStorageService implements StorageService {
             file: blob.name,
             createdAt: blob?.properties?.createdOn ?? new Date(),
           });
-          if (files.length >= env.LANGFUSE_S3_LIST_MAX_KEYS) {
+          if (files.length >= env.LITEFUSE_S3_LIST_MAX_KEYS) {
             break;
           }
         }
@@ -498,7 +498,7 @@ class S3StorageService implements StorageService {
       forcePathStyle: params.forcePathStyle,
       requestHandler: {
         httpsAgent: {
-          maxSockets: env.LANGFUSE_S3_CONCURRENT_WRITES,
+          maxSockets: env.LITEFUSE_S3_CONCURRENT_WRITES,
         },
       },
     });
@@ -514,7 +514,7 @@ class S3StorageService implements StorageService {
           forcePathStyle: params.forcePathStyle,
           requestHandler: {
             httpsAgent: {
-              maxSockets: env.LANGFUSE_S3_CONCURRENT_WRITES,
+              maxSockets: env.LITEFUSE_S3_CONCURRENT_WRITES,
             },
           },
         })
@@ -571,7 +571,7 @@ class S3StorageService implements StorageService {
     data,
     partSizeBytes,
   }: UploadFileBuffered): Promise<void> {
-    if (env.LANGFUSE_S3_UPLOAD_ENABLE_BUFFERED !== "true") {
+    if (env.LITEFUSE_S3_UPLOAD_ENABLE_BUFFERED !== "true") {
       return this.uploadFile({ fileName, fileType, data });
     }
 
@@ -589,8 +589,8 @@ class S3StorageService implements StorageService {
     const uploader = new BufferedStreamUploader({
       strategy,
       partSizeBytes,
-      maxPartAttempts: env.LANGFUSE_S3_UPLOAD_MAX_PART_ATTEMPTS,
-      maxConcurrentParts: env.LANGFUSE_S3_UPLOAD_MAX_CONCURRENT_PARTS,
+      maxPartAttempts: env.LITEFUSE_S3_UPLOAD_MAX_PART_ATTEMPTS,
+      maxConcurrentParts: env.LITEFUSE_S3_UPLOAD_MAX_CONCURRENT_PARTS,
       key: fileName,
     });
 
@@ -661,7 +661,7 @@ class S3StorageService implements StorageService {
     const listCommand = new ListObjectsV2Command({
       Bucket: this.bucketName,
       Prefix: prefix,
-      MaxKeys: env.LANGFUSE_S3_LIST_MAX_KEYS,
+      MaxKeys: env.LITEFUSE_S3_LIST_MAX_KEYS,
     });
 
     try {
@@ -914,7 +914,7 @@ class GoogleCloudStorageService implements StorageService {
     try {
       const [files] = await this.bucket.getFiles({
         prefix,
-        maxResults: env.LANGFUSE_S3_LIST_MAX_KEYS,
+        maxResults: env.LITEFUSE_S3_LIST_MAX_KEYS,
       });
 
       return files.map((file) => ({

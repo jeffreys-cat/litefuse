@@ -1,6 +1,6 @@
-# Langfuse Seeder System
+# Litefuse Seeder System
 
-System for generating test data in ClickHouse and PostgreSQL for Langfuse development and testing.
+System for generating test data in ClickHouse and PostgreSQL for Litefuse development and testing.
 
 ## Architecture Overview
 
@@ -40,14 +40,14 @@ await orchestrator.createSyntheticData(projectIds, config);
 ### 1. Dataset Experiment Data
 
 - **Purpose**: Realistic experiment traces based on actual datasets
-- **Environment**: `langfuse-prompt-experiment`
+- **Environment**: `litefuse-prompt-experiment`
 - **Structure**: Each dataset item links to a trace with a single generation observation
 - **ID Pattern**: `trace-dataset-{datasetName}-{itemIndex}-{projectId}-{runNumber}`
 
 ### 2. Evaluation Data
 
 - **Purpose**: Evaluation metrics and scoring data - to be linked to evaluation logs
-- **Environment**: `langfuse-evaluation`
+- **Environment**: `litefuse-evaluation`
 - **Structure**: Traces with multiple observations and comprehensive scoring
 - **ID Pattern**: `trace-eval-{index}-{projectId}`
 

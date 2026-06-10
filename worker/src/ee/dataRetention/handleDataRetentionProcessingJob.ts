@@ -60,7 +60,7 @@ export const handleDataRetentionProcessingJob = async (job: Job) => {
   );
 
   // Delete media files if bucket is configured
-  if (env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET) {
+  if (env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET) {
     logger.info(
       `[Data Retention] Deleting media files older than ${currentRetention} days for project ${projectId}`,
     );
@@ -72,7 +72,7 @@ export const handleDataRetentionProcessingJob = async (job: Job) => {
       projectId,
       mediaFiles: mediaFilesToDelete,
       storageClient: getS3MediaStorageClient(
-        env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
+        env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET,
       ),
     });
     logger.info(
@@ -85,7 +85,7 @@ export const handleDataRetentionProcessingJob = async (job: Job) => {
     `[Data Retention] Deleting ClickHouse and S3 data older than ${currentRetention} days for project ${projectId}`,
   );
   await Promise.all([
-    env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
+    env.LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
       ? removeIngestionEventsFromS3AndDeleteDorisRefsForProject(
           projectId,
           cutoffDate,
@@ -94,7 +94,7 @@ export const handleDataRetentionProcessingJob = async (job: Job) => {
     deleteTracesOlderThanDays(projectId, cutoffDate),
     deleteObservationsOlderThanDays(projectId, cutoffDate),
     deleteScoresOlderThanDays(projectId, cutoffDate),
-    env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+    env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
       ? deleteEventsOlderThanDays(projectId, cutoffDate)
       : Promise.resolve(),
   ]);

@@ -102,7 +102,7 @@ app.use("/api", api);
 app.use(middlewares.notFound);
 app.use(middlewares.errorHandler);
 
-if (env.LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS === "true") {
+if (env.LITEFUSE_ENABLE_BACKGROUND_MIGRATIONS === "true") {
   // Will start background migrations without blocking the queue workers
   BackgroundMigrationManager.run().catch((err) => {
     logger.error("Error running background migrations", err);
@@ -124,7 +124,7 @@ if (env.QUEUE_CONSUMER_TRACE_UPSERT_QUEUE_IS_ENABLED === "true") {
       shardName as QueueName,
       evalJobTraceCreatorQueueProcessor,
       {
-        concurrency: env.LANGFUSE_TRACE_UPSERT_WORKER_CONCURRENCY,
+        concurrency: env.LITEFUSE_TRACE_UPSERT_WORKER_CONCURRENCY,
       },
     );
   });
@@ -135,17 +135,17 @@ if (env.QUEUE_CONSUMER_CREATE_EVAL_QUEUE_IS_ENABLED === "true") {
     QueueName.CreateEvalQueue,
     evalJobCreatorQueueProcessor,
     {
-      concurrency: env.LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
+      concurrency: env.LITEFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
       limiter: {
         // Process at most `max` jobs per `duration` milliseconds globally
-        max: env.LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
-        duration: env.LANGFUSE_EVAL_CREATOR_LIMITER_DURATION,
+        max: env.LITEFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
+        duration: env.LITEFUSE_EVAL_CREATOR_LIMITER_DURATION,
       },
     },
   );
 }
 
-if (env.LANGFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
+if (env.LITEFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
   // Instantiate the queue to trigger scheduled jobs
   CoreDataS3ExportQueue.getInstance();
   WorkerManager.register(
@@ -154,7 +154,7 @@ if (env.LANGFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
   );
 }
 
-if (env.LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED === "true") {
+if (env.LITEFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED === "true") {
   // Instantiate the queue to trigger scheduled jobs
   MeteringDataPostgresExportQueue.getInstance();
   WorkerManager.register(
@@ -172,7 +172,7 @@ if (env.LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED === "true") {
 
 if (env.QUEUE_CONSUMER_TRACE_DELETE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.TraceDelete, traceDeleteProcessor, {
-    concurrency: env.LANGFUSE_TRACE_DELETE_CONCURRENCY,
+    concurrency: env.LITEFUSE_TRACE_DELETE_CONCURRENCY,
     // Same configuration as EvaluationExecution or
     // BlobStorageIntegrationProcessingQueue queue, see detailed comment there
     maxStalledCount: 3,
@@ -180,40 +180,40 @@ if (env.QUEUE_CONSUMER_TRACE_DELETE_QUEUE_IS_ENABLED === "true") {
     stalledInterval: 120000, // 120 seconds
     limiter: {
       // Process at most `max` delete jobs per 2 min
-      max: env.LANGFUSE_TRACE_DELETE_CONCURRENCY,
-      duration: env.LANGFUSE_DORIS_TRACE_DELETION_CONCURRENCY_DURATION_MS,
+      max: env.LITEFUSE_TRACE_DELETE_CONCURRENCY,
+      duration: env.LITEFUSE_DORIS_TRACE_DELETION_CONCURRENCY_DURATION_MS,
     },
   });
 }
 
 if (env.QUEUE_CONSUMER_SCORE_DELETE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.ScoreDelete, scoreDeleteProcessor, {
-    concurrency: env.LANGFUSE_SCORE_DELETE_CONCURRENCY,
+    concurrency: env.LITEFUSE_SCORE_DELETE_CONCURRENCY,
     limiter: {
       // Process at most `max` delete jobs per 15 seconds
-      max: env.LANGFUSE_SCORE_DELETE_CONCURRENCY,
-      duration: env.LANGFUSE_DORIS_TRACE_DELETION_CONCURRENCY_DURATION_MS,
+      max: env.LITEFUSE_SCORE_DELETE_CONCURRENCY,
+      duration: env.LITEFUSE_DORIS_TRACE_DELETION_CONCURRENCY_DURATION_MS,
     },
   });
 }
 
 if (env.QUEUE_CONSUMER_DATASET_DELETE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.DatasetDelete, datasetDeleteProcessor, {
-    concurrency: env.LANGFUSE_DATASET_DELETE_CONCURRENCY,
+    concurrency: env.LITEFUSE_DATASET_DELETE_CONCURRENCY,
     limiter: {
-      max: env.LANGFUSE_DATASET_DELETE_CONCURRENCY,
-      duration: env.LANGFUSE_DORIS_DATASET_DELETION_CONCURRENCY_DURATION_MS,
+      max: env.LITEFUSE_DATASET_DELETE_CONCURRENCY,
+      duration: env.LITEFUSE_DORIS_DATASET_DELETION_CONCURRENCY_DURATION_MS,
     },
   });
 }
 
 if (env.QUEUE_CONSUMER_PROJECT_DELETE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.ProjectDelete, projectDeleteProcessor, {
-    concurrency: env.LANGFUSE_PROJECT_DELETE_CONCURRENCY,
+    concurrency: env.LITEFUSE_PROJECT_DELETE_CONCURRENCY,
     limiter: {
-      // Process at most `max` delete jobs per LANGFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
-      max: env.LANGFUSE_PROJECT_DELETE_CONCURRENCY,
-      duration: env.LANGFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
+      // Process at most `max` delete jobs per LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
+      max: env.LITEFUSE_PROJECT_DELETE_CONCURRENCY,
+      duration: env.LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
     },
   });
 }
@@ -223,7 +223,7 @@ if (env.QUEUE_CONSUMER_DATASET_RUN_ITEM_UPSERT_QUEUE_IS_ENABLED === "true") {
     QueueName.DatasetRunItemUpsert,
     evalJobDatasetCreatorQueueProcessor,
     {
-      concurrency: env.LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
+      concurrency: env.LITEFUSE_EVAL_CREATOR_WORKER_CONCURRENCY,
     },
   );
 }
@@ -233,7 +233,7 @@ if (env.QUEUE_CONSUMER_EVAL_EXECUTION_QUEUE_IS_ENABLED === "true") {
     QueueName.EvaluationExecution,
     evalJobExecutorQueueProcessorBuilder(true, QueueName.EvaluationExecution),
     {
-      concurrency: env.LANGFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY,
+      concurrency: env.LITEFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY,
       // The default lockDuration is 30s and the lockRenewTime 1/2 of that.
       // We set it to 60s to reduce the number of lock renewals and also be less sensitive to high CPU wait times.
       // We also update the stalledInterval check to 120s from 30s default to perform the check less frequently.
@@ -249,7 +249,7 @@ if (env.QUEUE_CONSUMER_EVAL_EXECUTION_QUEUE_IS_ENABLED === "true") {
     QueueName.LLMAsJudgeExecution,
     llmAsJudgeExecutionQueueProcessor,
     {
-      concurrency: env.LANGFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY,
+      concurrency: env.LITEFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY,
       lockDuration: 60000,
       stalledInterval: 120000,
       maxStalledCount: 3,
@@ -266,7 +266,7 @@ if (env.QUEUE_CONSUMER_EVAL_EXECUTION_SECONDARY_QUEUE_IS_ENABLED === "true") {
     ),
     {
       concurrency:
-        env.LANGFUSE_EVAL_EXECUTION_SECONDARY_QUEUE_PROCESSING_CONCURRENCY,
+        env.LITEFUSE_EVAL_EXECUTION_SECONDARY_QUEUE_PROCESSING_CONCURRENCY,
       lockDuration: 60000, // 60 seconds
       stalledInterval: 120000, // 120 seconds
       maxStalledCount: 3,
@@ -307,7 +307,7 @@ if (env.QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED === "true") {
       shardName as QueueName,
       otelIngestionQueueProcessor,
       {
-        concurrency: env.LANGFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
+        concurrency: env.LITEFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
       },
     );
   });
@@ -321,7 +321,7 @@ if (env.QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED === "true") {
       shardName as QueueName,
       ingestionQueueProcessorBuilder(true), // this might redirect to secondary queue
       {
-        concurrency: env.LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
+        concurrency: env.LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
       },
     );
   });
@@ -333,7 +333,7 @@ if (env.QUEUE_CONSUMER_INGESTION_SECONDARY_QUEUE_IS_ENABLED === "true") {
     ingestionQueueProcessorBuilder(false),
     {
       concurrency:
-        env.LANGFUSE_INGESTION_SECONDARY_QUEUE_PROCESSING_CONCURRENCY,
+        env.LITEFUSE_INGESTION_SECONDARY_QUEUE_PROCESSING_CONCURRENCY,
     },
   );
 }
@@ -380,7 +380,7 @@ if (
 // Free Tier Usage Threshold Queue: Only enable in cloud environment
 if (
   env.QUEUE_CONSUMER_FREE_TIER_USAGE_THRESHOLD_QUEUE_IS_ENABLED === "true" &&
-  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION && // Only in cloud deployments
+  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION && // Only in cloud deployments
   env.STRIPE_SECRET_KEY
 ) {
   // Instantiate the queue to trigger scheduled jobs
@@ -404,7 +404,7 @@ if (env.QUEUE_CONSUMER_EXPERIMENT_CREATE_QUEUE_IS_ENABLED === "true") {
     QueueName.ExperimentCreate,
     experimentCreateQueueProcessor,
     {
-      concurrency: env.LANGFUSE_EXPERIMENT_CREATOR_WORKER_CONCURRENCY,
+      concurrency: env.LITEFUSE_EXPERIMENT_CREATOR_WORKER_CONCURRENCY,
     },
   );
 }
@@ -517,9 +517,9 @@ if (env.QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED === "true") {
     {
       concurrency: 1,
       limiter: {
-        // Process at most `max` delete jobs per LANGFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
-        max: env.LANGFUSE_PROJECT_DELETE_CONCURRENCY,
-        duration: env.LANGFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
+        // Process at most `max` delete jobs per LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
+        max: env.LITEFUSE_PROJECT_DELETE_CONCURRENCY,
+        duration: env.LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
       },
     },
   );
@@ -540,7 +540,7 @@ if (env.QUEUE_CONSUMER_DEAD_LETTER_RETRY_QUEUE_IS_ENABLED === "true") {
 
 if (env.QUEUE_CONSUMER_WEBHOOK_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.WebhookQueue, webhookProcessor, {
-    concurrency: env.LANGFUSE_WEBHOOK_QUEUE_PROCESSING_CONCURRENCY,
+    concurrency: env.LITEFUSE_WEBHOOK_QUEUE_PROCESSING_CONCURRENCY,
   });
 }
 
@@ -549,14 +549,14 @@ if (env.QUEUE_CONSUMER_ENTITY_CHANGE_QUEUE_IS_ENABLED === "true") {
     QueueName.EntityChangeQueue,
     entityChangeQueueProcessor,
     {
-      concurrency: env.LANGFUSE_ENTITY_CHANGE_QUEUE_PROCESSING_CONCURRENCY,
+      concurrency: env.LITEFUSE_ENTITY_CHANGE_QUEUE_PROCESSING_CONCURRENCY,
     },
   );
 }
 
 if (
   env.QUEUE_CONSUMER_EVENT_PROPAGATION_QUEUE_IS_ENABLED === "true" &&
-  env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+  env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
 ) {
   // Instantiate the queue to trigger scheduled jobs
   EventPropagationQueue.getInstance();
@@ -583,14 +583,14 @@ if (env.QUEUE_CONSUMER_NOTIFICATION_QUEUE_IS_ENABLED === "true") {
 // Batch project cleaners for bulk deletion of data
 export const batchProjectCleaners: BatchProjectCleaner[] = [];
 
-if (env.LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true") {
+if (env.LITEFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true") {
   for (const table of BATCH_DELETION_TABLES) {
     // Only start the events_full cleaner when the events table experiment is
     // enabled (gate carries over from the upstream V4 transition; events_core
     // / events tables no longer appear in BATCH_DELETION_TABLES for this fork).
     if (
       table !== "events_full" ||
-      env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
     ) {
       const cleaner = new BatchProjectCleaner(table);
       batchProjectCleaners.push(cleaner);
@@ -602,13 +602,13 @@ if (env.LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true") {
 // Batch data retention cleaners for bulk deletion of expired data
 export const batchDataRetentionCleaners: BatchDataRetentionCleaner[] = [];
 
-if (env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
+if (env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
   for (const table of BATCH_DATA_RETENTION_TABLES) {
     // Only start the events_full cleaner when the events table experiment is
     // enabled (see note above).
     if (
       table !== "events_full" ||
-      env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
+      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
     ) {
       const cleaner = new BatchDataRetentionCleaner(table);
       batchDataRetentionCleaners.push(cleaner);
@@ -620,7 +620,7 @@ if (env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
 // Media retention cleaner for media files and blob storage
 export let mediaRetentionCleaner: MediaRetentionCleaner | null = null;
 
-if (env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
+if (env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
   mediaRetentionCleaner = new MediaRetentionCleaner();
   mediaRetentionCleaner.start();
 }
@@ -629,8 +629,8 @@ if (env.LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
 export let batchProjectMediaCleaner: BatchProjectMediaCleaner | null = null;
 
 if (
-  env.LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true" &&
-  env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
+  env.LITEFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true" &&
+  env.LITEFUSE_S3_MEDIA_UPLOAD_BUCKET
 ) {
   batchProjectMediaCleaner = new BatchProjectMediaCleaner();
   batchProjectMediaCleaner.start();
@@ -640,8 +640,8 @@ if (
 export let batchProjectBlobCleaner: BatchProjectBlobCleaner | null = null;
 
 if (
-  env.LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true" &&
-  env.LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
+  env.LITEFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true" &&
+  env.LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG === "true"
 ) {
   batchProjectBlobCleaner = new BatchProjectBlobCleaner();
   batchProjectBlobCleaner.start();
@@ -650,7 +650,7 @@ if (
 // Batch trace deletion cleaner for supplementary trace deletion
 export let batchTraceDeletionCleaner: BatchTraceDeletionCleaner | null = null;
 
-if (env.LANGFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED === "true") {
+if (env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED === "true") {
   batchTraceDeletionCleaner = new BatchTraceDeletionCleaner();
   batchTraceDeletionCleaner.start();
 }

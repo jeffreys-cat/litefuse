@@ -35,7 +35,7 @@ type RouteConfig<
    * - x-langfuse-admin-api-key: <ADMIN_API_KEY> (must match exactly for redundancy)
    * - x-langfuse-project-id: <project-id> (target project)
    *
-   * This authentication method is ONLY available when NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is not set (self-hosted).
+   * This authentication method is ONLY available when NEXT_PUBLIC_LITEFUSE_CLOUD_REGION is not set (self-hosted).
    *
    * @default false
    */
@@ -102,7 +102,7 @@ async function verifyBasicAuth(authHeader: string | undefined): Promise<
  * 1. Authorization header must be Bearer token format with ADMIN_API_KEY value
  * 2. x-langfuse-admin-api-key header must match ADMIN_API_KEY env var exactly (for redundancy)
  * 3. x-langfuse-project-id header must be present and specify a valid project ID
- * 4. NEXT_PUBLIC_LANGFUSE_CLOUD_REGION must NOT be set (self-hosted instances only)
+ * 4. NEXT_PUBLIC_LITEFUSE_CLOUD_REGION must NOT be set (self-hosted instances only)
  *
  * The ADMIN_API_KEY must be set as an environment variable on the server.
  * This authentication method is intended for administrative operations on self-hosted instances.
@@ -125,7 +125,7 @@ async function verifyAdminApiKeyAuth(req: NextApiRequest): Promise<
   if (!authHeader?.startsWith("Bearer ") || !adminApiKeyHeader) return null;
 
   // Verify this is a self-hosted instance (not Langfuse Cloud)
-  if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
+  if (env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION) {
     throw {
       status: 403,
       message: "Admin API key auth is not available on Litefuse Cloud",

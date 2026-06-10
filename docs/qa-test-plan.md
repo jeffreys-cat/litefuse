@@ -1,6 +1,6 @@
-# Langfuse-Doris QA 测试方案
+# Litefuse-Doris QA 测试方案
 
-> 目标：验证 [langfuse-doris](https://github.com/selectdb/langfuse-doris)（Doris 后端，`master` 分支）与 langfuse 原版（ClickHouse 后端，[langfuse/langfuse](https://github.com/selectdb/langfuse-doris) tag `v3.16.0` 或 `v3.16.1`）在数据写入、接口返回、Web 功能三个层面的一致性。
+> 目标：验证 [litefuse-doris](https://github.com/selectdb/litefuse-doris)（Doris 后端，`master` 分支）与 litefuse 原版（ClickHouse 后端，[litefuse/litefuse](https://github.com/selectdb/litefuse-doris) tag `v3.16.0` 或 `v3.16.1`）在数据写入、接口返回、Web 功能三个层面的一致性。
 > 已适配 Tab：Home、Dashboard、Tracing（Traces / Observations）、Sessions、Users
 
 ---
@@ -9,11 +9,11 @@
 
 ### 1.1 测试目标
 
-通过 SDK 双写同一份数据到 langfuse-doris 和 langfuse-ck 两套环境，对比 Doris 和 ClickHouse 中三张核心表（`traces`、`observations`、`scores`）的行数和字段值一致性。
+通过 SDK 双写同一份数据到 litefuse-doris 和 litefuse-ck 两套环境，对比 Doris 和 ClickHouse 中三张核心表（`traces`、`observations`、`scores`）的行数和字段值一致性。
 
 ### 1.2 环境准备
 
-| 组件       | langfuse-doris   | langfuse-ck      |
+| 组件       | litefuse-doris   | litefuse-ck      |
 | ---------- | ---------------- | ---------------- |
 | Web 应用   | `localhost:3000` | `localhost:3001` |
 | 分析数据库 | Apache Doris     | ClickHouse       |
@@ -24,17 +24,17 @@
 
 ### 1.3 双写方案
 
-使用 [OpenClaw](https://github.com/selectdb/openclaw-langfuse-doris-plugin) + 自研 Langfuse Doris Plugin 实现数据双写：
+使用 [OpenClaw](https://github.com/selectdb/openclaw-litefuse-doris-plugin) + 自研 Litefuse Doris Plugin 实现数据双写：
 
 ```
-SDK Client → OpenClaw Proxy → ┬→ langfuse-doris (Doris 后端)
-                               └→ langfuse-ck   (ClickHouse 后端)
+SDK Client → OpenClaw Proxy → ┬→ litefuse-doris (Doris 后端)
+                               └→ litefuse-ck   (ClickHouse 后端)
 ```
 
 **配置步骤：**
 
-1. 部署 OpenClaw 代理服务，安装 langfuse-doris-plugin
-2. 配置两个下游 Langfuse 实例的 API endpoint 和 API Key
+1. 部署 OpenClaw 代理服务，安装 litefuse-doris-plugin
+2. 配置两个下游 Litefuse 实例的 API endpoint 和 API Key
 3. SDK 端将 `LANGFUSE_HOST` 指向 OpenClaw 代理地址
 
 ### 1.4 测试数据集设计
@@ -185,7 +185,7 @@ def compare_tables():
 
 ### 2.1 测试目标
 
-对 Home、Dashboard、Traces、Observations、Sessions、Users 页面涉及的所有 tRPC 接口，分别请求 langfuse-doris 和 langfuse-ck，对比 response 中同名字段的值一致性。
+对 Home、Dashboard、Traces、Observations、Sessions、Users 页面涉及的所有 tRPC 接口，分别请求 litefuse-doris 和 litefuse-ck，对比 response 中同名字段的值一致性。
 
 **核心原则：ClickHouse 返回的字段 Doris 一定也要有，数值型字段允许微小精度差异（< 0.001）。**
 
@@ -359,11 +359,11 @@ def compare_api_response(doris_resp, ck_resp, config):
 
 ### 3.1 测试目标
 
-人工操作 langfuse-doris 的 Web 界面，验证各功能页面可正常使用，数据展示正确，交互无报错。
+人工操作 litefuse-doris 的 Web 界面，验证各功能页面可正常使用，数据展示正确，交互无报错。
 
 ### 3.2 测试前置条件
 
-- langfuse-doris 环境已启动（`pnpm run dev`）
+- litefuse-doris 环境已启动（`pnpm run dev`）
 - 已通过 SDK 写入足够的测试数据（来自第一部分）
 - 使用 demo 账号登录：`demo@litefuse.ai` / `password`
 - 打开浏览器开发者工具 Network + Console 面板，监控接口报错
@@ -522,8 +522,8 @@ def compare_api_response(doris_resp, ck_resp, config):
 
 ### 环境信息
 
-- langfuse-doris 版本：master（https://github.com/selectdb/langfuse-doris）
-- langfuse-ck 版本：v3.16.0 / v3.16.1（https://github.com/selectdb/langfuse-doris）
+- litefuse-doris 版本：master（https://github.com/selectdb/litefuse-doris）
+- litefuse-ck 版本：v3.16.0 / v3.16.1（https://github.com/selectdb/litefuse-doris）
 - Doris 版本：xxx
 - ClickHouse 版本：xxx
 

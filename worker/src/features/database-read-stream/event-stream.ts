@@ -397,7 +397,7 @@ export const getEventsStreamForEval = async (props: {
     filter = [],
     searchQuery,
     searchType,
-    rowLimit = env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
+    rowLimit = env.LITEFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
   } = props;
 
   // Filter out score and comment filters since they're not relevant for eval

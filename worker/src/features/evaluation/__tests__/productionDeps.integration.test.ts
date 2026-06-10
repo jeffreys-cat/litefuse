@@ -25,7 +25,7 @@ import { JobExecutionStatus } from "@prisma/client";
  */
 describe("Production Dependency Factories Integration Tests", () => {
   let s3StorageService: StorageService;
-  const bucketName = env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET || "langfuse";
+  const bucketName = env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET || "langfuse";
   const minioAccessKeyId = "minio";
   const minioAccessKeySecret = "miniosecret";
   const minioEndpoint = "http://localhost:9090";
@@ -143,7 +143,7 @@ describe("Production Dependency Factories Integration Tests", () => {
         createdS3Paths.push(s3Path);
 
         // Verify path format (uses env prefix, defaults to "")
-        const prefix = env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX || "";
+        const prefix = env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX || "";
         expect(s3Path).toBe(
           `${prefix}evals/${projectId}/observations/${observationId}.json`,
         );
@@ -388,7 +388,7 @@ describe("Production Dependency Factories Integration Tests", () => {
         },
       });
 
-      const prefix = env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX || "";
+      const prefix = env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX || "";
       createdS3Paths.push(
         `${prefix}${projectId}/score/${scoreId}/${eventId}.json`,
       );

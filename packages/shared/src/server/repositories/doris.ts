@@ -220,7 +220,7 @@ export async function* queryDorisStream<T>(opts: {
       opts.params,
     );
 
-    if (env.LANGFUSE_DORIS_LOG_QUERIES === "true") {
+    if (env.LITEFUSE_DORIS_LOG_QUERIES === "true") {
       logger.info(`doris:stream-query ${processedQuery}`);
     }
 

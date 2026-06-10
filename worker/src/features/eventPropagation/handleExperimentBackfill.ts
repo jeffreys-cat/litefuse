@@ -757,7 +757,7 @@ export async function shouldRunBackfill(lastRun: Date): Promise<boolean> {
   const now = new Date();
   const timeSinceLastRun = now.getTime() - lastRun.getTime();
 
-  if (timeSinceLastRun < env.LANGFUSE_EXPERIMENT_BACKFILL_THROTTLE_MS) {
+  if (timeSinceLastRun < env.LITEFUSE_EXPERIMENT_BACKFILL_THROTTLE_MS) {
     logger.debug(
       "[EXPERIMENT BACKFILL] Skipping due to throttle (time threshold not met)",
     );
@@ -887,7 +887,7 @@ async function processExperimentBackfill(
   }
 
   // Step 2: Process in chunks
-  const chunkSize = env.LANGFUSE_DATASET_RUN_BACKFILL_CHUNK_SIZE;
+  const chunkSize = env.LITEFUSE_DATASET_RUN_BACKFILL_CHUNK_SIZE;
   const chunks = chunk(allDatasetRunItems, chunkSize);
 
   logger.info(

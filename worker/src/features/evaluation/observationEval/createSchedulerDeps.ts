@@ -48,7 +48,7 @@ export function createObservationEvalSchedulerDeps(): ObservationEvalSchedulerDe
     },
 
     uploadObservationToS3: async (params) => {
-      const path = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}evals/${params.projectId}/observations/${params.observationId}.json`;
+      const path = `${env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}evals/${params.projectId}/observations/${params.observationId}.json`;
       const s3Client = getEvalS3StorageClient();
 
       await s3Client.uploadJson(path, params.data);

@@ -231,7 +231,7 @@ export const otelIngestionQueueProcessor: Processor = async (
 
     // Download file from blob storage
     const resourceSpans = await getS3EventStorageClient(
-      env.LANGFUSE_S3_EVENT_UPLOAD_BUCKET,
+      env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET,
     ).download(fileKey);
 
     recordHistogram(
@@ -373,7 +373,7 @@ export const otelIngestionQueueProcessor: Processor = async (
 
     const shouldForwardToEventsTable =
       !useDirectEventWrite &&
-      env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
+      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true";
 
     // OTel-only contract (master events_full migration): events_full is the
     // single write target. The legacy mergeAndWrite-to-traces /
@@ -432,7 +432,7 @@ export const otelIngestionQueueProcessor: Processor = async (
     // Determine what processing is needed.
     // Master events_full migration: events_full IS the production write
     // target for trace/observation, so we no longer gate writes on the
-    // legacy LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE flag. The
+    // legacy LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE flag. The
     // useDirectEventWrite check stays as a safety net — the OTel route
     // already SDK-gates v3 clients, so this is effectively always true.
     const shouldWriteToEventsTable = useDirectEventWrite;

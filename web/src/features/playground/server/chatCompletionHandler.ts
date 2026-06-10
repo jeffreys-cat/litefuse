@@ -26,7 +26,7 @@ export default async function chatCompletionHandler(req: NextRequest) {
     const body = validateChatCompletionBody(await req.json());
     const { userId } = await authorizeRequestOrThrow(body.projectId);
 
-    const blockedUsers = env.LANGFUSE_BLOCKED_USERIDS_CHATCOMPLETION;
+    const blockedUsers = env.LITEFUSE_BLOCKED_USERIDS_CHATCOMPLETION;
     if (blockedUsers.has(userId)) {
       const reason = blockedUsers.get(userId);
       logger.warn("Blocked chat completion access", { userId, reason });
