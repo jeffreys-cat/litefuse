@@ -1,8 +1,8 @@
-# Codex Guidelines for Langfuse
+# Codex Guidelines for Litefuse
 
-Langfuse is an open source LLM engineering platform for developing, monitoring,
+Litefuse is an open source LLM engineering platform for developing, monitoring,
 evaluating, and debugging AI applications.
-Langfuse monorepo guidance for fast, safe code changes.
+Litefuse monorepo guidance for fast, safe code changes.
 
 ## Maintenance Contract
 - `AGENTS.md` is a living document.
@@ -15,7 +15,7 @@ Langfuse monorepo guidance for fast, safe code changes.
 
 ## Project Structure & Module Organization
 ```text
-langfuse/
+litefuse/
 ├─ web/                     # Next.js app (UI + tRPC + public REST)
 ├─ worker/                  # Queue consumers and background processing
 ├─ packages/shared/         # Shared domain, DB, queue contracts, repositories
@@ -85,7 +85,7 @@ Minimum verification matrix:
 ## Docs Linking
 - Public API contract changes must update Fern sources in `fern/apis/**` and regenerated outputs; do not hand-edit `generated/**`.
 - Use repo-relative file paths in docs and runbooks.
-- Our docs live in `../langfuse-docs/` which is a different repo. You may always access this.
+- Our docs live in `../litefuse-docs/` which is a different repo. You may always access this.
 
 ## Agent-specific Notes
 - Root `AGENTS.md` is monorepo-level only.
@@ -95,7 +95,7 @@ Minimum verification matrix:
 
 ## Release Channel
 - Release workflow is managed at root (`pnpm run release`).
-- Langfuse Cloud deployments are triggered by pushes to `production` (`.github/workflows/deploy.yml`).
+- Litefuse Cloud deployments are triggered by pushes to `production` (`.github/workflows/deploy.yml`).
 - Promote `main` to `production` via `.github/workflows/promote-main-to-production.yml` (manual `workflow_dispatch`).
 - Use `pnpm run release:cloud` for CLI-triggered Cloud promotions with preflight branch/migration checks.
 - Do not change release/versioning flow without updating this file and impacted package guides.

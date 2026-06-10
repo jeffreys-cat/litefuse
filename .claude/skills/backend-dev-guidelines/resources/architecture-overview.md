@@ -1,6 +1,6 @@
-# Architecture Overview - Langfuse Backend
+# Architecture Overview - Litefuse Backend
 
-Complete guide to the layered architecture pattern used in Langfuse's Next.js 14/tRPC/Express monorepo.
+Complete guide to the layered architecture pattern used in Litefuse's Next.js 14/tRPC/Express monorepo.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ Complete guide to the layered architecture pattern used in Langfuse's Next.js 14
 
 ## Layered Architecture Pattern
 
-Langfuse uses a **three-layer architecture** with two primary entry points (tRPC and Public API) plus async processing via Worker.
+Litefuse uses a **three-layer architecture** with two primary entry points (tRPC and Public API) plus async processing via Worker.
 
 ### The Three Layers
 
@@ -640,7 +640,7 @@ export async function processDatasetExport(
 
 ### Dual Database System
 
-Langfuse uses two databases with different purposes:
+Litefuse uses two databases with different purposes:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -710,7 +710,7 @@ await redis.set(`cache:${key}`, value, "EX", 3600);
 
 **Repository Pattern:**
 
-Langfuse uses repositories in `packages/shared/src/server/repositories/` for complex data access patterns. Repositories provide:
+Litefuse uses repositories in `packages/shared/src/server/repositories/` for complex data access patterns. Repositories provide:
 
 - Abstraction over complex queries (traces, observations, scores, events)
 - Data converters for transforming database models to application models
@@ -771,7 +771,7 @@ export async function createDataset(ctx: TRPCContext) {
 
 ### 3. Observability with OpenTelemetry + DataDog
 
-**Langfuse uses OpenTelemetry for backend observability, with traces and logs sent to DataDog.**
+**Litefuse uses OpenTelemetry for backend observability, with traces and logs sent to DataDog.**
 
 Use structured logging and instrumentation:
 

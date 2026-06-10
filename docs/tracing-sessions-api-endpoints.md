@@ -1,6 +1,6 @@
 # Tracing & Sessions 页面接口清单
 
-本文档记录 Langfuse 左侧导航栏 **Observability** 区域下 **Tracing**（含 Traces、Observations 两个 Tab）和 **Sessions** 页面会触发的所有 tRPC 接口，以及每个接口在 Doris 后端下执行的 SQL。
+本文档记录 Litefuse 左侧导航栏 **Observability** 区域下 **Tracing**（含 Traces、Observations 两个 Tab）和 **Sessions** 页面会触发的所有 tRPC 接口，以及每个接口在 Doris 后端下执行的 SQL。
 
 > 源码路径均基于 `packages/shared/src/server/` 目录。
 

@@ -28,7 +28,7 @@
 
 ## Litefuse Cloud
 
-- When attempting to confirm if the current environment is Litefuse Cloud in the frontend, use the `useLangfuseCloudRegion` hook and never environment variables directly.
+- When attempting to confirm if the current environment is Litefuse Cloud in the frontend, use the `useLitefuseCloudRegion` hook and never environment variables directly.
 
 ## Banner Height System
 

@@ -1,6 +1,6 @@
 # Replay failed ingestion events from S3
 
-In case the Langfuse or ClickHouse processing fails in any way, we can replay messages from S3 using the access logs or similar.
+In case the Litefuse or ClickHouse processing fails in any way, we can replay messages from S3 using the access logs or similar.
 
 ## 1. Retrieve events to be replayed
 
@@ -27,7 +27,7 @@ Or provide your own file. It is expected that it adheres to the following format
 ...
 ```
 
-Make sure to place the csv file as `./worker/events.csv` in the langfuse repo.
+Make sure to place the csv file as `./worker/events.csv` in the litefuse repo.
 
 ## 2. Connect to your Redis instances from your local machine
 

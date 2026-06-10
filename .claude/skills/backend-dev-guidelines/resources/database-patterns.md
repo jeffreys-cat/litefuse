@@ -1,6 +1,6 @@
 # Database Patterns - PostgreSQL & ClickHouse
 
-Complete guide to database access patterns in Langfuse using PostgreSQL (Prisma ORM) and ClickHouse (direct client).
+Complete guide to database access patterns in Litefuse using PostgreSQL (Prisma ORM) and ClickHouse (direct client).
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ Complete guide to database access patterns in Langfuse using PostgreSQL (Prisma 
 
 ## Database Architecture Overview
 
-Langfuse uses a **dual database architecture**:
+Litefuse uses a **dual database architecture**:
 
 | Database       | Technology        | Purpose                                                       | Access Pattern                         |
 | -------------- | ----------------- | ------------------------------------------------------------- | -------------------------------------- |
@@ -341,7 +341,7 @@ const query = `
 ```
 
 **Why this is important:**
-- Langfuse is multi-tenant - each project's data must be isolated
+- Litefuse is multi-tenant - each project's data must be isolated
 - The `project_id` filter ensures queries only access data from the intended tenant
 - All queries on project-scoped tables (traces, observations, scores, sessions, etc.) must filter by `project_id`
 
@@ -422,7 +422,7 @@ try {
 
 ## Repository Pattern
 
-Langfuse uses repositories in `packages/shared/src/server/repositories/` for complex data access patterns.
+Litefuse uses repositories in `packages/shared/src/server/repositories/` for complex data access patterns.
 
 ### When to Use Repositories
 
@@ -648,7 +648,7 @@ ClickHouse queries automatically retry network errors (socket hang up) with expo
 
 ```typescript
 // In packages/shared/src/env.ts
-LANGFUSE_CLICKHOUSE_QUERY_MAX_ATTEMPTS: z.coerce.number().positive().default(3)
+LITEFUSE_CLICKHOUSE_QUERY_MAX_ATTEMPTS: z.coerce.number().positive().default(3)
 ```
 
 ---

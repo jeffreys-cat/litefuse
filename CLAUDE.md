@@ -2,8 +2,8 @@
 
 ## Project Overview
 
-Langfuse is an open-source LLM engineering platform that helps teams collaboratively develop, monitor, evaluate, and debug AI applications.
-The main feature areas are tracing, evals and prompt management. Langfuse consists of the web application (this repo), documentation, python SDK and javascript/typescript SDK.
+Litefuse is an open-source LLM engineering platform that helps teams collaboratively develop, monitor, evaluate, and debug AI applications.
+The main feature areas are tracing, evals and prompt management. Litefuse consists of the web application (this repo), documentation, python SDK and javascript/typescript SDK.
 This repo contains the web application, worker, and supporting packages but notably not the JS nor Python client SDKs.
 
 ## Repository Structure
@@ -11,7 +11,7 @@ This repo contains the web application, worker, and supporting packages but nota
 High level structure. There are more folders (eg for hooks etc).
 
 ```
-langfuse/
+litefuse/
 ├── web/                     # Next.js 14 frontend/backend application
 │   ├── src/
 │   │   ├── components/     # Reusable UI components (shadcn/ui)

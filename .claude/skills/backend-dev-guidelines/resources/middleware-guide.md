@@ -1,6 +1,6 @@
 # Middleware Guide - tRPC & Public API Patterns
 
-Complete guide to middleware patterns in Langfuse's Next.js + tRPC architecture.
+Complete guide to middleware patterns in Litefuse's Next.js + tRPC architecture.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ Complete guide to middleware patterns in Langfuse's Next.js + tRPC architecture.
 
 **File:** `web/src/server/api/trpc.ts`
 
-tRPC middleware in Langfuse is composable and type-safe. Each middleware enriches the context and provides guarantees to subsequent middleware.
+tRPC middleware in Litefuse is composable and type-safe. Each middleware enriches the context and provides guarantees to subsequent middleware.
 
 ### Core tRPC Middlewares
 
@@ -57,13 +57,13 @@ const withErrorHandling = t.middleware(async ({ ctx, next }) => {
 
 **2. OpenTelemetry Instrumentation (`withOtelInstrumentation`)**
 
-Propagates OpenTelemetry context with Langfuse-specific baggage:
+Propagates OpenTelemetry context with Litefuse-specific baggage:
 
 ```typescript
 const withOtelInstrumentation = t.middleware(async (opts) => {
   const actualInput = await opts.getRawInput();
 
-  const baggageCtx = contextWithLangfuseProps({
+  const baggageCtx = contextWithLitefuseProps({
     headers: opts.ctx.headers,
     userId: opts.ctx.session?.user?.id,
     projectId: (actualInput as Record<string, string>)?.projectId,
@@ -236,7 +236,7 @@ const enforceTraceAccess = t.middleware(async (opts) => {
 
 ### tRPC Procedure Types
 
-Langfuse exports composed procedures with middleware chains:
+Litefuse exports composed procedures with middleware chains:
 
 ```typescript
 // 1. Public procedure (no auth required)
@@ -286,7 +286,7 @@ Wraps all public API routes with CORS, error handling, and OpenTelemetry:
 ```typescript
 export function withMiddlewares(handlers: Handlers) {
   return async (req: NextApiRequest, res: NextApiResponse) => {
-    const ctx = contextWithLangfuseProps({ headers: req.headers });
+    const ctx = contextWithLitefuseProps({ headers: req.headers });
 
     return opentelemetry.context.with(ctx, async () => {
       try {
@@ -380,7 +380,7 @@ export const createAuthedProjectAPIRoute = <TQuery, TBody, TResponse>(
       : {};
 
     // 4. Execute with OpenTelemetry context
-    const ctx = contextWithLangfuseProps({
+    const ctx = contextWithLitefuseProps({
       headers: req.headers,
       projectId: auth.scope.projectId,
     });
@@ -498,8 +498,8 @@ async function verifyAdminApiKeyAuth(req: NextApiRequest) {
   // 2. x-langfuse-admin-api-key: <ADMIN_API_KEY>
   // 3. x-langfuse-project-id: <project-id>
 
-  if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) {
-    throw { status: 403, message: "Admin API key auth not available on Langfuse Cloud" };
+  if (env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION) {
+    throw { status: 403, message: "Admin API key auth not available on Litefuse Cloud" };
   }
 
   const adminApiKey = env.ADMIN_API_KEY;
@@ -612,16 +612,16 @@ catch (error) {
 
 ## OpenTelemetry Instrumentation
 
-All requests (tRPC and public API) propagate OpenTelemetry context with Langfuse-specific baggage.
+All requests (tRPC and public API) propagate OpenTelemetry context with Litefuse-specific baggage.
 
 ### Context Propagation Pattern
 
 ```typescript
-import { contextWithLangfuseProps } from "@langfuse/shared/src/server";
+import { contextWithLitefuseProps } from "@langfuse/shared/src/server";
 import * as opentelemetry from "@opentelemetry/api";
 
-// Create context with Langfuse baggage
-const ctx = contextWithLangfuseProps({
+// Create context with Litefuse baggage
+const ctx = contextWithLitefuseProps({
   headers: req.headers,
   userId: session?.user?.id,
   projectId: input?.projectId,
@@ -645,7 +645,7 @@ return opentelemetry.context.with(ctx, async () => {
 const withOtelInstrumentation = t.middleware(async (opts) => {
   const actualInput = await opts.getRawInput();
 
-  const baggageCtx = contextWithLangfuseProps({
+  const baggageCtx = contextWithLitefuseProps({
     headers: opts.ctx.headers,
     userId: opts.ctx.session?.user?.id,
     projectId: (actualInput as Record<string, string>)?.projectId,
