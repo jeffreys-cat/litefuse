@@ -254,6 +254,10 @@ Your contributions are welcome!
 - Raise and comment on [Issues](https://github.com/selectdb/litefuse/issues).
 - Open a PR - see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to setup a development environment.
 
+## 🙏 About this fork
+
+> **About this fork** — Litefuse is a fork of [langfuse/langfuse](https://github.com/langfuse/langfuse), and we are deeply grateful to the Langfuse team for the original work. Litefuse swaps the analytics backend to [Apache Doris](https://doris.apache.org/) and maintains wire-protocol compatibility with the upstream Langfuse API, so the official `langfuse` / `@langfuse/*` SDKs and any Langfuse-compatible OpenTelemetry exporter work against Litefuse without code changes — only the host needs to be pointed at your Litefuse endpoint.
+
 ## 🥇 License
 
 This repository is MIT licensed, except for the `ee` folders. See [LICENSE](LICENSE) and [docs](https://litefuse.ai/docs/open-source) for more details.
