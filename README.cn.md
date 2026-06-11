@@ -269,6 +269,10 @@ _[Litefuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj
 - 提出并评论 [问题](https://github.com/selectdb/Litefuse-doris/issues)。
 - 提交 PR —— 详情请参见 [CONTRIBUTING.md](CONTRIBUTING.md)，了解如何搭建开发环境。
 
+## 🙏 关于本 Fork
+
+> **关于本 Fork** —— Litefuse 是 [langfuse/langfuse](https://github.com/langfuse/langfuse) 的 fork，衷心感谢 Langfuse 团队的原始工作。Litefuse 将分析后端替换为 [Apache Doris](https://doris.apache.org/)，并保持与上游 Langfuse API 的协议兼容性，因此官方 `langfuse` / `@langfuse/*` SDK 以及任何兼容 Langfuse 的 OpenTelemetry exporter 均无需改代码即可对接 Litefuse —— 只需把 host 指向 Litefuse 端点即可。
+
 ## 🥇 许可证
 
 除 `ee` 文件夹外，本仓库采用 MIT 许可证。详情请参见 [LICENSE](LICENSE) 以及 [文档](https://litefuse.ai/docs/open-source)。

@@ -274,6 +274,10 @@ _[Litefuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0
 - [Issues](https://github.com/selectdb/Litefuse-doris/issues)を作成・コメントしてください。
 - プルリクエストを送信してください。開発環境のセットアップ方法については[CONTRIBUTING.md](CONTRIBUTING.md)をご参照ください。
 
+## 🙏 このフォークについて
+
+> **このフォークについて** — Litefuse は [langfuse/langfuse](https://github.com/langfuse/langfuse) のフォークであり、Langfuse チームのオリジナルの仕事に深く感謝しています。Litefuse は分析バックエンドを [Apache Doris](https://doris.apache.org/) に置き換え、上流 Langfuse API とのワイヤープロトコル互換性を維持しています。そのため、公式の `langfuse` / `@langfuse/*` SDK や Langfuse 互換の OpenTelemetry エクスポーターはコード変更なしで Litefuse に対して動作します。ホストを Litefuse エンドポイントに向けるだけです。
+
 ## 🥇 ライセンス
 
 このリポジトリは、`ee`フォルダを除き、MITライセンスの下で公開されています。  

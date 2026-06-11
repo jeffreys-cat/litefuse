@@ -257,6 +257,10 @@ _[Litefuse의 공개 예제 trace](https://cloud.litefuse.ai/project/cloramnkj00
 - GitHub Issues에서 이슈를 제기하고 댓글을 남겨주세요.
 - PR을 제출하세요 – 개발 환경 설정 방법 등 자세한 내용은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참조하세요.
 
+## 🙏 이 Fork에 대하여
+
+> **이 Fork에 대하여** — Litefuse는 [langfuse/langfuse](https://github.com/langfuse/langfuse)의 fork이며, 원본 작업을 만들어 주신 Langfuse 팀에 깊이 감사드립니다. Litefuse는 분석 백엔드를 [Apache Doris](https://doris.apache.org/)로 교체하고 상위 Langfuse API와의 wire-protocol 호환성을 유지하므로, 공식 `langfuse` / `@langfuse/*` SDK와 Langfuse 호환 OpenTelemetry exporter는 코드 변경 없이 Litefuse에서 동작합니다 — host만 Litefuse 엔드포인트로 가리키면 됩니다.
+
 ## 🥇 라이선스
 
 이 저장소는 `ee` 폴더를 제외하고 MIT 라이선스가 적용됩니다. 자세한 내용은 [LICENSE](LICENSE)와 [문서](https://litefuse.ai/docs/open-source)를 확인하세요.
