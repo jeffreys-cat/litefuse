@@ -2,9 +2,7 @@ import { ApiAuthService } from "@/src/features/public-api/server/apiAuth";
 import { cors, runMiddleware } from "@/src/features/public-api/server/cors";
 import { prisma } from "@langfuse/shared/src/db";
 import { logger, redis } from "@langfuse/shared/src/server";
-import { handleCreateProject } from "@/src/ee/features/admin-api/server/projects/createProject";
 import { type NextApiRequest, type NextApiResponse } from "next";
-import { hasEntitlementBasedOnPlan } from "@/src/features/entitlements/server/hasEntitlement";
 
 export default async function handler(
   req: NextApiRequest,
@@ -12,7 +10,9 @@ export default async function handler(
 ) {
   await runMiddleware(req, res, cors);
 
-  if (req.method !== "GET" && req.method !== "POST") {
+  // POST (project creation) was part of the admin API, which is an EE feature
+  // and has been removed from the OSS build.
+  if (req.method !== "GET") {
     logger.error(
       `Method not allowed for ${req.method} on /api/public/projects`,
     );
@@ -31,81 +31,50 @@ export default async function handler(
   }
   // END CHECK AUTH
 
-  if (req.method === "GET") {
-    if (
-      authCheck.scope.accessLevel !== "project" ||
-      !authCheck.scope.projectId
-    ) {
-      return res.status(403).json({
-        message: "Invalid API key. Are you using an organization key?",
-      });
-    }
-
-    try {
-      // Do not apply rate limits as it can break applications on lower tier plans when using auth_check in prod
-
-      const projects = await prisma.project.findMany({
-        select: {
-          id: true,
-          name: true,
-          retentionDays: true,
-          metadata: true,
-          organization: {
-            select: {
-              id: true,
-              name: true,
-            },
-          },
-        },
-        where: {
-          id: authCheck.scope.projectId,
-          deletedAt: null,
-        },
-      });
-
-      return res.status(200).json({
-        data: projects.map((project) => ({
-          id: project.id,
-          name: project.name,
-          organization: {
-            id: project.organization.id,
-            name: project.organization.name,
-          },
-          metadata: project.metadata ?? {},
-          ...(project.retentionDays // Do not add if null or 0
-            ? { retentionDays: project.retentionDays }
-            : {}),
-        })),
-      });
-    } catch (error) {
-      logger.error(error);
-      return res.status(500).json({ message: "Internal server error" });
-    }
+  if (authCheck.scope.accessLevel !== "project" || !authCheck.scope.projectId) {
+    return res.status(403).json({
+      message: "Invalid API key. Are you using an organization key?",
+    });
   }
 
-  if (req.method === "POST") {
-    // Check if using an organization API key
-    if (
-      authCheck.scope.accessLevel !== "organization" ||
-      !authCheck.scope.orgId
-    ) {
-      return res.status(403).json({
-        message:
-          "Invalid API key. Organization-scoped API key required for this operation.",
-      });
-    }
+  try {
+    // Do not apply rate limits as it can break applications on lower tier plans when using auth_check in prod
 
-    if (
-      !hasEntitlementBasedOnPlan({
-        plan: authCheck.scope.plan,
-        entitlement: "admin-api",
-      })
-    ) {
-      return res.status(403).json({
-        error: "This feature is not available on your current plan.",
-      });
-    }
+    const projects = await prisma.project.findMany({
+      select: {
+        id: true,
+        name: true,
+        retentionDays: true,
+        metadata: true,
+        organization: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      where: {
+        id: authCheck.scope.projectId,
+        deletedAt: null,
+      },
+    });
 
-    return handleCreateProject(req, res, authCheck.scope);
+    return res.status(200).json({
+      data: projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        organization: {
+          id: project.organization.id,
+          name: project.organization.name,
+        },
+        metadata: project.metadata ?? {},
+        ...(project.retentionDays // Do not add if null or 0
+          ? { retentionDays: project.retentionDays }
+          : {}),
+      })),
+    });
+  } catch (error) {
+    logger.error(error);
+    return res.status(500).json({ message: "Internal server error" });
   }
 }

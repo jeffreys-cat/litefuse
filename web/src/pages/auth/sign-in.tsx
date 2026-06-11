@@ -34,7 +34,6 @@ import * as z from "zod/v4";
 import { CloudPrivacyNotice } from "@/src/features/auth/components/AuthCloudPrivacyNotice";
 import { CloudRegionSwitch } from "@/src/features/auth/components/AuthCloudRegionSwitch";
 import { PasswordInput } from "@/src/components/ui/password-input";
-import { isAnySsoConfigured } from "@/src/ee/features/multi-tenant-sso/utils";
 import { Code, Key } from "lucide-react";
 import { useRouter } from "next/router";
 import { captureException } from "@sentry/nextjs";
@@ -103,7 +102,9 @@ type CredentialsSubmitAction = "standard" | "demo";
 // Also used in src/pages/auth/sign-up.tsx
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
-  const sso: boolean = await isAnySsoConfigured();
+  // Multi-tenant SSO discovery was an EE feature; the OSS build never has
+  // dynamically-configured SSO providers.
+  const sso = false;
   return {
     props: {
       authProviders: {

@@ -28,8 +28,18 @@ import { SidebarMenuButton } from "@/src/components/ui/sidebar";
 import { useCommandMenu } from "@/src/features/command-k-menu/CommandMenuProvider";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 import { CloudStatusMenu } from "@/src/features/cloud-status-notification/components/CloudStatusMenu";
-import { type ProductModule } from "@/src/ee/features/ui-customization/productModuleSchema";
 import { env } from "@/src/env.mjs";
+
+// Product module identifier (inlined from the former EE customization schema).
+// Used to optionally show/hide top-level product groups via UI customization,
+// which is not available in the OSS build.
+type ProductModule =
+  | "dashboards"
+  | "tracing"
+  | "evaluation"
+  | "prompt-management"
+  | "playground"
+  | "datasets";
 
 export enum RouteSection {
   Main = "main",

@@ -26,8 +26,8 @@ import { Switch } from "@/src/components/ui/switch";
 import { api } from "@/src/utils/api";
 import { cn } from "@/src/utils/tailwind";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
-import { type useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { DialogFooter } from "@/src/components/ui/dialog";
+import { type UiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 import { DialogBody } from "@/src/components/ui/dialog";
 import { env } from "@/src/env.mjs";
 
@@ -77,7 +77,7 @@ const createFormSchema = (mode: "create" | "update") =>
 interface CreateLLMApiKeyFormProps {
   projectId?: string;
   onSuccess: () => void;
-  customization: ReturnType<typeof useUiCustomization>;
+  customization: UiCustomization | null;
   mode?: "create" | "update";
   existingKey?: LlmApiKeys;
 }

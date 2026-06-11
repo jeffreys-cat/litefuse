@@ -1,4 +1,3 @@
-import { mapStripeProductIdToPlan } from "@/src/ee/features/billing/utils/stripeCatalogue";
 import { env } from "@/src/env.mjs";
 import { type Plan } from "@langfuse/shared";
 import { type CloudConfigSchema } from "@langfuse/shared";
@@ -33,15 +32,9 @@ export function getOrganizationPlanServerSide(
             throw new Error(`Unhandled plan case: ${exhaustiveCheck}`);
         }
       }
-      // stripe plan via product id
-      if (cloudConfig.stripe?.activeProductId) {
-        const stripePlan = mapStripeProductIdToPlan(
-          cloudConfig.stripe.activeProductId,
-        );
-        if (stripePlan) {
-          return stripePlan;
-        }
-      }
+      // Stripe-product-id-based plan resolution lived in the EE billing
+      // catalogue, which is not part of the OSS build. Fall through to the
+      // default cloud:hobby plan when no manual override is set.
     }
     return "cloud:hobby";
   }

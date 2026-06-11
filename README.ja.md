@@ -276,8 +276,7 @@ _[Litefuseの公開トレース例](https://cloud.litefuse.ai/project/cloramnkj0
 
 ## 🥇 ライセンス
 
-このリポジトリは、`ee`フォルダを除き、MITライセンスの下で公開されています。  
-詳細は[LICENSE](LICENSE)および[オープンソースに関するドキュメント](https://litefuse.ai/docs/open-source)をご確認ください。
+このリポジトリは MIT ライセンスの下で公開されています。詳細は [LICENSE](LICENSE) をご確認ください。
 
 ## ⭐️ スターの履歴
 

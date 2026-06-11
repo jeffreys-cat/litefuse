@@ -8,17 +8,21 @@ import { useQueryOrganization } from "@/src/features/organizations/hooks";
 import { useRouter } from "next/router";
 import { SettingsDangerZone } from "@/src/components/SettingsDangerZone";
 import { DeleteOrganizationButton } from "@/src/features/organizations/components/DeleteOrganizationButton";
-import { BillingSettings } from "@/src/ee/features/billing/components/BillingSettings";
 import { useHasEntitlement, usePlan } from "@/src/features/entitlements/hooks";
 import ContainerPage from "@/src/components/layouts/container-page";
-import { SSOSettings } from "@/src/ee/features/sso-settings/components/SSOSettings";
 import { isCloudPlan } from "@langfuse/shared";
 import { useQueryProjectOrOrganization } from "@/src/features/projects/hooks";
 import { ApiKeyList } from "@/src/features/public-api/components/ApiKeyList";
 import AIFeatureSwitch from "@/src/features/organizations/components/AIFeatureSwitch";
-import { useIsCloudBillingAvailable } from "@/src/ee/features/billing/utils/isCloudBilling";
 import { env } from "@/src/env.mjs";
-import { OrgAuditLogsSettingsPage } from "@/src/ee/features/audit-log-viewer/OrgAuditLogsSettingsPage";
+
+// EE features removed from OSS build:
+//  - BillingSettings (cloud billing UI)
+//  - SSOSettings (multi-tenant SSO config)
+//  - OrgAuditLogsSettingsPage (audit log viewer)
+//  - useIsCloudBillingAvailable (cloud billing availability check)
+// The corresponding settings pages are gated off below.
+const useIsCloudBillingAvailable = (): boolean => false;
 
 type OrganizationSettingsPage = {
   title: string;
@@ -121,27 +125,8 @@ export const getOrganizationSettingsPages = ({
       </div>
     ),
   },
-  {
-    title: "Audit Logs",
-    slug: "audit-logs",
-    cmdKKeywords: ["audit", "logs", "history", "changes"],
-    content: <OrgAuditLogsSettingsPage orgId={organization.id} />,
-    show: showAuditLogs,
-  },
-  {
-    title: "Billing",
-    slug: "billing",
-    cmdKKeywords: ["payment", "subscription", "plan", "invoice"],
-    content: <BillingSettings />,
-    show: showBillingSettings,
-  },
-  {
-    title: "SSO",
-    slug: "sso",
-    cmdKKeywords: ["sso", "login", "auth", "okta", "saml", "azure"],
-    content: <SSOSettings />,
-    show: isLangfuseCloud,
-  },
+  // Audit Logs, Billing, and SSO settings pages were EE features and are not
+  // available in the OSS build.
   {
     title: "Projects",
     slug: "projects",

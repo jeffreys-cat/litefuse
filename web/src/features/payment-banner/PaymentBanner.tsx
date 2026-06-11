@@ -4,8 +4,11 @@ import { AlertCircle, CreditCard } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/src/components/ui/button";
 import { useQueryProjectOrOrganization } from "@/src/features/projects/hooks";
-import { useIsCloudBillingAvailable } from "@/src/ee/features/billing/utils/isCloudBilling";
 import { useTopBannerRegistration } from "@/src/features/top-banner";
+
+// Cloud billing was an EE feature; OSS builds never run the cloud billing flow,
+// so this is always false.
+const useIsCloudBillingAvailable = (): boolean => false;
 import { cn } from "@/src/utils/tailwind";
 import { env } from "@/src/env.mjs";
 import { hasOrganizationAccess } from "@/src/features/rbac/utils/checkOrganizationAccess";

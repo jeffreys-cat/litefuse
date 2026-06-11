@@ -29,7 +29,6 @@ litefuse/
 │   │   └── src/            # Shared TypeScript code
 │   ├── config-eslint/      # ESLint configuration
 │   └── config-typescript/  # TypeScript configuration
-├── ee/                     # Enterprise Edition features
 ├── fern/                   # API documentation and OpenAPI specs
 ├── generated/              # Auto-generated client code
 └── scripts/                # Development and deployment scripts
@@ -47,7 +46,6 @@ This is a **pnpm + Turbo monorepo** with the following key packages:
 
 ### Supporting Packages
 
-- **`/ee/`** - Enterprise Edition features (separate licensing)
 - **`/packages/config-eslint/`** - Shared ESLint configuration
 - **`/packages/config-typescript/`** - Shared TypeScript configuration
 

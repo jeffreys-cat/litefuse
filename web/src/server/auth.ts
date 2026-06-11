@@ -38,12 +38,6 @@ import WorkOSProvider from "next-auth/providers/workos";
 import WordPressProvider from "next-auth/providers/wordpress";
 import { type Provider } from "next-auth/providers/index";
 import { getCookieName, getCookieOptions } from "./utils/cookies";
-import {
-  findMultiTenantSsoConfig,
-  getSsoAuthProviderIdForDomain,
-  loadSsoProviders,
-} from "@/src/ee/features/multi-tenant-sso/utils";
-import { ENTERPRISE_SSO_REQUIRED_MESSAGE } from "@/src/features/auth/constants";
 import { z } from "zod/v4";
 import { CloudConfigSchema } from "@langfuse/shared";
 import {
@@ -111,12 +105,7 @@ const staticProviders: Provider[] = [
         );
       }
 
-      // EE: Check custom SSO enforcement
-      const multiTenantSsoProvider =
-        await getSsoAuthProviderIdForDomain(domain);
-      if (multiTenantSsoProvider) {
-        throw new Error(ENTERPRISE_SSO_REQUIRED_MESSAGE);
-      }
+      // Multi-tenant SSO enforcement was an EE feature; not available in the OSS build.
 
       const dbUser = await prisma.user.findUnique({
         where: {
@@ -662,14 +651,9 @@ const extendedPrismaAdapter: Adapter = {
  * @see https://next-auth.js.org/configuration/options
  */
 export async function getAuthOptions(): Promise<NextAuthOptions> {
-  let dynamicSsoProviders: Provider[] = [];
-  try {
-    dynamicSsoProviders = await loadSsoProviders();
-  } catch (e) {
-    logger.error("Error loading dynamic SSO providers", e);
-    traceException(e);
-  }
-  const providers = [...staticProviders, ...dynamicSsoProviders];
+  // Multi-tenant SSO providers were loaded dynamically by the EE module; in
+  // the OSS build the only providers available are the statically-configured ones.
+  const providers = [...staticProviders];
 
   const data: NextAuthOptions = {
     session: {
@@ -820,43 +804,9 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           span.setAttributes({
             "auth.email": email,
           });
-          // EE: Check custom SSO enforcement, enforce the specific SSO provider on email domain
-          // This also blocks setting a password for an email that is enforced to use SSO via password reset flow
-          const userDomain = email.split("@")[1].toLowerCase();
-          const multiTenantSsoProvider =
-            await getSsoAuthProviderIdForDomain(userDomain);
-          if (
-            multiTenantSsoProvider &&
-            account?.provider !== multiTenantSsoProvider
-          ) {
-            logger.info(
-              "Custom SSO provider enforced for domain, user signed in with other provider",
-              { email, attemptedProvider: account?.provider },
-            );
-            const params = new URLSearchParams({
-              reason: "sso_enforced_domain",
-            });
-            if (email) params.set("email", email);
-            if (account?.provider)
-              params.set("attemptedProvider", account.provider);
-            return `${env.NEXT_PUBLIC_BASE_PATH ?? ""}/auth/enterprise-sso-required?${params.toString()}`;
-          }
-
-          // EE: Check that provider is only used for the associated domain
-          if (account?.provider) {
-            const { isMultiTenantSsoProvider, domain: ssoDomain } =
-              await findMultiTenantSsoConfig({
-                providerId: account.provider,
-              });
-            if (
-              isMultiTenantSsoProvider &&
-              ssoDomain.toLowerCase() !== userDomain.toLowerCase()
-            ) {
-              throw new Error(
-                `This domain is not associated with this SSO provider.`,
-              );
-            }
-          }
+          // Multi-tenant SSO enforcement and provider/domain mapping were
+          // EE features; the OSS build only ships the statically-configured
+          // OAuth providers, so no domain enforcement happens here.
 
           // Only allow sign in via email link if user is already in db as this is used for password reset
           if (account?.provider === "email") {

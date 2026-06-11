@@ -11,8 +11,8 @@ import { membersRouter } from "@/src/features/rbac/server/membersRouter";
 import { userRouter } from "@/src/server/api/routers/users";
 import { userAccountRouter } from "@/src/server/api/routers/userAccount";
 import { datasetRouter } from "@/src/features/datasets/server/dataset-router";
-import { cloudBillingRouter } from "@/src/ee/features/billing/server/cloudBillingRouter";
-import { spendAlertRouter } from "@/src/ee/features/billing/server/spendAlertRouter";
+// Cloud billing, spend alerts, and UI customization tRPC routers lived in the
+// EE module and have been removed from the OSS build.
 import { observationsRouter } from "@/src/server/api/routers/observations";
 import { sessionRouter } from "@/src/server/api/routers/sessions";
 import { promptRouter } from "@/src/features/prompts/server/routers/promptRouter";
@@ -31,7 +31,6 @@ import { publicRouter } from "@/src/server/api/routers/public";
 import { credentialsRouter } from "@/src/features/auth-credentials/server/credentialsRouter";
 import { batchExportRouter } from "@/src/features/batch-exports/server/batchExport";
 import { utilsRouter } from "@/src/server/api/routers/utilities";
-import { uiCustomizationRouter } from "@/src/ee/features/ui-customization/uiCustomizationRouter";
 import { commentsRouter } from "@/src/server/api/routers/comments";
 import { commentReactionsRouter } from "@/src/server/api/routers/commentReactions";
 import { queueRouter } from "@/src/features/annotation-queues/server/annotationQueuesRouter";
@@ -81,8 +80,6 @@ export const appRouter = createTRPCRouter({
   projectApiKeys: projectApiKeysRouter,
   members: membersRouter,
   datasets: datasetRouter,
-  cloudBilling: cloudBillingRouter,
-  spendAlerts: spendAlertRouter,
   observations: observationsRouter,
   prompts: promptRouter,
   models: modelRouter,
@@ -98,7 +95,6 @@ export const appRouter = createTRPCRouter({
   public: publicRouter,
   credentials: credentialsRouter,
   utilities: utilsRouter,
-  uiCustomization: uiCustomizationRouter,
   comments: commentsRouter,
   commentReactions: commentReactionsRouter,
   media: mediaRouter,

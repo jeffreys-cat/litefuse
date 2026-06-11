@@ -1,8 +1,8 @@
 import { Card } from "@/src/components/ui/card";
 import { CodeView } from "@/src/components/ui/CodeJsonViewer";
 import Header from "@/src/components/layouts/header";
-import { useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { env } from "@/src/env.mjs";
+import { useUiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 
 export function HostNameProject() {
   const uiCustomization = useUiCustomization();
