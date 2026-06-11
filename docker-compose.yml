@@ -5,7 +5,7 @@
 # External connections from other machines will not be able to reach these services directly.
 services:
   litefuse-worker:
-    image: litefuse/litefuse-worker:opensource-main26061001
+    image: litefuse/litefuse-worker:26.0.0
     restart: always
     depends_on: &litefuse-depends-on
       postgres:
@@ -72,7 +72,7 @@ services:
       SMTP_CONNECTION_URL: ${SMTP_CONNECTION_URL:-}
 
   litefuse-web:
-    image: litefuse/litefuse-web:opensource-main26061001
+    image: litefuse/litefuse-web:26.0.0
     restart: always
     depends_on: *litefuse-depends-on
     ports:
