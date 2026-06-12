@@ -278,8 +278,6 @@ export const env = createEnv({
     LITEFUSE_UI_DEFAULT_BASE_URL_ANTHROPIC: z.string().url().optional(),
     LITEFUSE_UI_DEFAULT_BASE_URL_AZURE: z.string().url().optional(),
 
-    // EE License
-    LITEFUSE_EE_LICENSE_KEY: z.string().optional(),
     ADMIN_API_KEY: z.string().optional(),
     ENCRYPTION_KEY: z
       .string()
@@ -327,8 +325,6 @@ export const env = createEnv({
         );
       }, "LITEFUSE_ALLOWED_ORGANIZATION_CREATORS must be a comma separated list of valid email addresses"),
 
-    STRIPE_SECRET_KEY: z.string().optional(),
-    STRIPE_WEBHOOK_SIGNING_SECRET: z.string().optional(),
     SENTRY_AUTH_TOKEN: z.string().optional(),
     SENTRY_CSP_REPORT_URI: z.string().optional(),
     LITEFUSE_RATE_LIMITS_ENABLED: z.enum(["true", "false"]).default("true"),
@@ -710,8 +706,6 @@ export const env = createEnv({
     NEXT_PUBLIC_LITEFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT:
       process.env.NEXT_PUBLIC_LITEFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT,
     NEXT_PUBLIC_ENABLE_LOGGING: process.env.NEXT_PUBLIC_ENABLE_LOGGING,
-    // EE License
-    LITEFUSE_EE_LICENSE_KEY: process.env.LITEFUSE_EE_LICENSE_KEY,
     ADMIN_API_KEY: process.env.ADMIN_API_KEY,
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
     // langfuse caching
@@ -720,8 +714,6 @@ export const env = createEnv({
       process.env.LITEFUSE_CACHE_API_KEY_TTL_SECONDS,
     LITEFUSE_ALLOWED_ORGANIZATION_CREATORS:
       process.env.LITEFUSE_ALLOWED_ORGANIZATION_CREATORS,
-    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
-    STRIPE_WEBHOOK_SIGNING_SECRET: process.env.STRIPE_WEBHOOK_SIGNING_SECRET,
     SENTRY_AUTH_TOKEN: process.env.SENTRY_AUTH_TOKEN,
     SENTRY_CSP_REPORT_URI: process.env.SENTRY_CSP_REPORT_URI,
     LITEFUSE_RATE_LIMITS_ENABLED: process.env.LITEFUSE_RATE_LIMITS_ENABLED,

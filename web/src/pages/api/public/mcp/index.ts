@@ -97,13 +97,6 @@ export default async function handler(
       );
     }
 
-    // Check if ingestion is suspended due to usage limits
-    if (authCheck.scope.isIngestionSuspended) {
-      throw new ForbiddenError(
-        "Access suspended: Usage threshold exceeded. Please upgrade your plan.",
-      );
-    }
-
     // Rate limit MCP requests
     const rateLimitCheck =
       await RateLimitService.getInstance().rateLimitRequest(

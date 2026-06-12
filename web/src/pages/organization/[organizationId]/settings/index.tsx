@@ -8,9 +8,8 @@ import { useQueryOrganization } from "@/src/features/organizations/hooks";
 import { useRouter } from "next/router";
 import { SettingsDangerZone } from "@/src/components/SettingsDangerZone";
 import { DeleteOrganizationButton } from "@/src/features/organizations/components/DeleteOrganizationButton";
-import { useHasEntitlement, usePlan } from "@/src/features/entitlements/hooks";
+import { useHasEntitlement } from "@/src/features/entitlements/hooks";
 import ContainerPage from "@/src/components/layouts/container-page";
-import { isCloudPlan } from "@langfuse/shared";
 import { useQueryProjectOrOrganization } from "@/src/features/projects/hooks";
 import { ApiKeyList } from "@/src/features/public-api/components/ApiKeyList";
 import AIFeatureSwitch from "@/src/features/organizations/components/AIFeatureSwitch";
@@ -20,9 +19,6 @@ import { env } from "@/src/env.mjs";
 //  - BillingSettings (cloud billing UI)
 //  - SSOSettings (multi-tenant SSO config)
 //  - OrgAuditLogsSettingsPage (audit log viewer)
-//  - useIsCloudBillingAvailable (cloud billing availability check)
-// The corresponding settings pages are gated off below.
-const useIsCloudBillingAvailable = (): boolean => false;
 
 type OrganizationSettingsPage = {
   title: string;
@@ -33,36 +29,22 @@ type OrganizationSettingsPage = {
 
 export function useOrganizationSettingsPages(): OrganizationSettingsPage[] {
   const { organization } = useQueryProjectOrOrganization();
-  const showBillingSettings = useHasEntitlement("cloud-billing");
   const showOrgApiKeySettings = useHasEntitlement("admin-api");
-  const showAuditLogs = useHasEntitlement("audit-logs");
-  const plan = usePlan();
-  const isLangfuseCloud = isCloudPlan(plan) ?? false;
-  const isCloudBillingAvailable = useIsCloudBillingAvailable();
 
   if (!organization) return [];
 
   return getOrganizationSettingsPages({
     organization,
-    showBillingSettings: showBillingSettings && isCloudBillingAvailable,
     showOrgApiKeySettings,
-    showAuditLogs,
-    isLangfuseCloud,
   });
 }
 
 export const getOrganizationSettingsPages = ({
   organization,
-  showBillingSettings,
   showOrgApiKeySettings,
-  showAuditLogs,
-  isLangfuseCloud,
 }: {
   organization: { id: string; name: string; metadata: Record<string, unknown> };
-  showBillingSettings: boolean;
   showOrgApiKeySettings: boolean;
-  showAuditLogs: boolean;
-  isLangfuseCloud: boolean;
 }): OrganizationSettingsPage[] => [
   {
     title: "General",

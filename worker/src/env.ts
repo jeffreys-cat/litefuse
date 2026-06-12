@@ -20,8 +20,6 @@ const EnvSchema = z.object({
     .enum(["US", "EU", "STAGING", "DEV", "HIPAA", "JP"])
     .optional(),
 
-  STRIPE_SECRET_KEY: z.string().optional(),
-
   LITEFUSE_CACHE_AUTOMATIONS_ENABLED: z.enum(["true", "false"]).default("true"),
   LITEFUSE_CACHE_AUTOMATIONS_TTL_SECONDS: z.coerce.number().default(60),
   LITEFUSE_S3_BATCH_EXPORT_ENABLED: z.enum(["true", "false"]).default("false"),

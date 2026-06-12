@@ -50,33 +50,16 @@ import {
   logger,
   resolveProjectRole,
 } from "@langfuse/shared/src/server";
-import {
-  getOrganizationPlanServerSide,
-  getSelfHostedInstancePlanServerSide,
-} from "@/src/features/entitlements/server/getPlan";
+import { getOrganizationPlanServerSide } from "@/src/features/entitlements/server/getPlan";
 import { projectRoleAccessRights } from "@/src/features/rbac/constants/projectAccessRights";
-import { hasEntitlementBasedOnPlan } from "@/src/features/entitlements/server/hasEntitlement";
 import { getSSOBlockedDomains } from "@/src/features/auth-credentials/server/signupApiHandler";
 import { createSupportEmailHash } from "@/src/features/support-chat/createSupportEmailHash";
 
-function canCreateOrganizations(userEmail: string | null): boolean {
-  const instancePlan = getSelfHostedInstancePlanServerSide();
-
-  // if no allowlist is set or no entitlement for self-host-allowed-organization-creators, allow all users to create organizations
-  if (
-    !env.LITEFUSE_ALLOWED_ORGANIZATION_CREATORS ||
-    !hasEntitlementBasedOnPlan({
-      plan: instancePlan,
-      entitlement: "self-host-allowed-organization-creators",
-    })
-  )
-    return true;
-
-  if (!userEmail) return false;
-
-  const allowedOrgCreators =
-    env.LITEFUSE_ALLOWED_ORGANIZATION_CREATORS.toLowerCase().split(",");
-  return allowedOrgCreators.includes(userEmail.toLowerCase());
+function canCreateOrganizations(): boolean {
+  // Restricting organization creation (`self-host-allowed-organization-creators`)
+  // was an enterprise-licensed entitlement; in the OSS build all users may
+  // create organizations.
+  return true;
 }
 
 const staticProviders: Provider[] = [
@@ -138,7 +121,7 @@ const staticProviders: Provider[] = [
         image: dbUser.image,
         emailVerified: dbUser.emailVerified?.toISOString(),
         featureFlags: parseFlags(dbUser.featureFlags),
-        canCreateOrganizations: canCreateOrganizations(dbUser.email),
+        canCreateOrganizations: canCreateOrganizations(),
         organizations: [],
       };
 
@@ -707,9 +690,9 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             environment: {
               enableExperimentalFeatures:
                 env.LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES === "true",
-              // Enables features that are only available under an enterprise license when self-hosting Langfuse
-              // If you edit this line, you risk executing code that is not MIT licensed (self-contained in /ee folders otherwise)
-              selfHostedInstancePlan: getSelfHostedInstancePlanServerSide(),
+              // EE license keys are not supported in the OSS build; there is
+              // no elevated self-hosted instance plan.
+              selfHostedInstancePlan: null,
             },
             user:
               dbUser !== null
@@ -724,9 +707,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                     image: dbUser.image,
                     admin: dbUser.admin,
                     v4BetaEnabled: dbUser.v4BetaEnabled,
-                    canCreateOrganizations: canCreateOrganizations(
-                      dbUser.email,
-                    ),
+                    canCreateOrganizations: canCreateOrganizations(),
                     organizations: dbUser.organizationMemberships.map(
                       (orgMembership) => {
                         const parsedCloudConfig = CloudConfigSchema.safeParse(

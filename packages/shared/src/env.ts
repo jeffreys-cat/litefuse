@@ -316,9 +316,6 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
 
-  // EE License
-  LITEFUSE_EE_LICENSE_KEY: z.string().optional(),
-
   // Ingestion Masking (EE feature)
   LITEFUSE_INGESTION_MASKING_CALLBACK_URL: z.string().url().optional(),
   LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: z.coerce

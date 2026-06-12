@@ -578,12 +578,6 @@ export default function SignIn({
   const [credentialsFormError, setCredentialsFormError] = useState<
     string | null
   >(errorMessage);
-  // Two-step login flow: ask for email first, detect SSO, then either redirect to SSO or reveal password field.
-  // Skip this flow when no SSO is configured - show password field immediately
-  const [showPasswordStep, setShowPasswordStep] = useState<boolean>(
-    !authProviders.sso,
-  );
-  const [continueLoading, setContinueLoading] = useState<boolean>(false);
   const [activeCredentialsAction, setActiveCredentialsAction] =
     useState<CredentialsSubmitAction | null>(null);
   const [lastUsedAuthMethod, setLastUsedAuthMethod] =
@@ -667,7 +661,6 @@ export default function SignIn({
   }
 
   async function handleDemoSignIn() {
-    setShowPasswordStep(true);
     setCredentialsFormError(null);
     credentialsForm.clearErrors();
     credentialsForm.setValue("email", DEMO_CREDENTIALS.email, {
@@ -682,79 +675,6 @@ export default function SignIn({
     });
 
     await submitCredentials("demo");
-  }
-
-  /**
-   * First-step handler ("Continue" button).
-   * 1. Validates email.
-   * 2. Queries backend to see if a tenant-specific SSO provider is configured.
-   *    ‑ If found: redirects to that provider immediately.
-   *    ‑ Otherwise: reveals password input so the user can finish with credentials.
-   * 3. Gracefully handles network errors and edge cases.
-   */
-  async function handleContinue() {
-    setContinueLoading(true);
-    setCredentialsFormError(null);
-    credentialsForm.clearErrors();
-
-    // Ensure email is valid before hitting the API
-    const emailSchema = z.string().email();
-    const email = emailSchema.safeParse(credentialsForm.getValues("email"));
-    if (!email.success) {
-      credentialsForm.setError("email", {
-        message: "Invalid email address",
-      });
-      setContinueLoading(false);
-      return;
-    }
-
-    // Extract domain and check whether SSO is configured for it
-    const domain = email.data.split("@")[1]?.toLowerCase();
-
-    try {
-      const res = await fetch(
-        `${env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/auth/check-sso`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ domain }),
-        },
-      );
-
-      if (res.ok) {
-        // Enterprise SSO found – redirect straight away
-        const { providerId } = await res.json();
-        capture("sign_in:button_click", { provider: "sso_auto" });
-
-        // Store the SSO provider as the last used auth method
-        setLastUsedAuthMethod(providerId as NextAuthProvider);
-
-        void signIn(providerId);
-        return; // stop further execution – page redirect expected
-      }
-
-      // No SSO – fall back to password step
-      setShowPasswordStep(true);
-
-      // Auto-focus password input when password step becomes visible
-      setTimeout(() => {
-        // Find and focus the password input
-        // Ref did not work, so we use a more specific selector
-        const passwordInput = document.querySelector(
-          'input[name="password"]',
-        ) as HTMLInputElement;
-        if (passwordInput) {
-          passwordInput.focus();
-        }
-      }, 100);
-    } catch (error) {
-      console.error(error);
-      setCredentialsFormError(
-        "Unable to check SSO configuration. Please try again.",
-      );
-    } finally {
-      setContinueLoading(false);
-    }
   }
 
   return (
@@ -793,17 +713,10 @@ export default function SignIn({
                 <Form {...credentialsForm}>
                   <form
                     className="space-y-6"
-                    onSubmit={
-                      showPasswordStep
-                        ? (e) => {
-                            e.preventDefault();
-                            void submitCredentials("standard");
-                          }
-                        : (e) => {
-                            e.preventDefault();
-                            void handleContinue();
-                          }
-                    }
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void submitCredentials("standard");
+                    }}
                   >
                     {/* Email input – always visible */}
                     <FormField
@@ -825,51 +738,45 @@ export default function SignIn({
                       )}
                     />
 
-                    {/* Password only shown once we know SSO is not configured */}
-                    {showPasswordStep && (
-                      <FormField
-                        control={credentialsForm.control}
-                        name="password"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>
-                              Password{" "}
-                              <Link
-                                href="/auth/reset-password"
-                                className="text-primary-accent hover:text-hover-primary-accent ml-1 text-xs"
-                                tabIndex={-1}
-                                title="What is this?"
-                              >
-                                (forgot password?)
-                              </Link>
-                            </FormLabel>
-                            <FormControl>
-                              <PasswordInput {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    )}
+                    <FormField
+                      control={credentialsForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            Password{" "}
+                            <Link
+                              href="/auth/reset-password"
+                              className="text-primary-accent hover:text-hover-primary-accent ml-1 text-xs"
+                              tabIndex={-1}
+                              title="What is this?"
+                            >
+                              (forgot password?)
+                            </Link>
+                          </FormLabel>
+                          <FormControl>
+                            <PasswordInput {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
                     {/* Primary action button */}
                     <Button
                       type="submit"
                       className="w-full"
                       loading={
-                        showPasswordStep
-                          ? credentialsForm.formState.isSubmitting &&
-                            activeCredentialsAction === "standard"
-                          : continueLoading
+                        credentialsForm.formState.isSubmitting &&
+                        activeCredentialsAction === "standard"
                       }
                       disabled={
                         credentialsForm.watch("email") === "" ||
-                        (showPasswordStep &&
-                          credentialsForm.watch("password") === "")
+                        credentialsForm.watch("password") === ""
                       }
                       data-testid="submit-email-password-sign-in-form"
                     >
-                      {showPasswordStep ? "Sign in" : "Continue"}
+                      Sign in
                     </Button>
                     {showDemoSignIn ? (
                       <Button
@@ -881,7 +788,6 @@ export default function SignIn({
                           credentialsForm.formState.isSubmitting &&
                           activeCredentialsAction === "demo"
                         }
-                        disabled={continueLoading}
                       >
                         Sign as Demo
                       </Button>

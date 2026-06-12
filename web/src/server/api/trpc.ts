@@ -93,48 +93,7 @@ import {
 } from "@langfuse/shared/src/server";
 
 import { env } from "@/src/env.mjs";
-
-/**
- * Inline replacement for the EE `AdminApiAuthService.verifyAdminAuthFromAuthString`.
- *
- * The full EE admin API has been removed from this OSS build, but a couple of
- * dev/self-host-only mutations (e.g. retrying background migrations) still
- * gate themselves on an `ADMIN_API_KEY` env var via `adminProcedure`. Keep that
- * narrow check here without dragging in any EE code.
- */
-function verifyAdminAuthFromAuthString(authString: string): {
-  isAuthorized: boolean;
-  error?: string;
-} {
-  // Block access on Litefuse Cloud (DEV/CI excluded).
-  if (
-    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
-    env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION !== "DEV"
-  ) {
-    return {
-      isAuthorized: false,
-      error: "Not accessible on Litefuse Cloud",
-    };
-  }
-
-  if (!env.ADMIN_API_KEY) {
-    logger.error("ADMIN_API_KEY is not set");
-    return {
-      isAuthorized: false,
-      error: "ADMIN_API_KEY is not set",
-    };
-  }
-
-  const [scheme, token] = authString.split(" ");
-  if (scheme !== "Bearer" || !token || token !== env.ADMIN_API_KEY) {
-    return {
-      isAuthorized: false,
-      error: "Unauthorized: Invalid token",
-    };
-  }
-
-  return { isAuthorized: true };
-}
+import { AdminApiAuthService } from "@/src/server/adminApiAuth";
 import { BaseError, parseIO } from "@langfuse/shared";
 
 setUpSuperjson();
@@ -664,7 +623,7 @@ const enforceAdminAuth = t.middleware(async (opts) => {
     });
   }
 
-  const adminAuthResult = verifyAdminAuthFromAuthString(
+  const adminAuthResult = AdminApiAuthService.verifyAdminAuthFromAuthString(
     result.data.adminApiKey,
   );
 
