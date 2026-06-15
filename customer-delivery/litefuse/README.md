@@ -31,18 +31,18 @@ curl http://localhost:3000/api/public/health
 正常返回示例：
 
 ```json
-{"status":"OK","version":"3.67.0"}
+{"status":"OK","version":"3.159.0"}
 ```
 
 ## 目录内容
 
-| 文件 | 说明 |
-| --- | --- |
-| `start.sh` | 一键启动脚本。首次运行会自动生成 `.env`。 |
-| `stop.sh` | 停止并移除容器和网络，保留数据卷。 |
-| `.env.example` | 环境变量模板。 |
-| `docker-compose.yml` | 单机 Docker Compose 部署定义。 |
-| `doris-config/fe_custom.conf` | Doris FE 自定义配置。 |
+| 文件                          | 说明                                      |
+| ----------------------------- | ----------------------------------------- |
+| `start.sh`                    | 一键启动脚本。首次运行会自动生成 `.env`。 |
+| `stop.sh`                     | 停止并移除容器和网络，保留数据卷。        |
+| `.env.example`                | 环境变量模板。                            |
+| `docker-compose.yml`          | 单机 Docker Compose 部署定义。            |
+| `doris-config/fe_custom.conf` | Doris FE 自定义配置。                     |
 
 ## 前置要求
 
@@ -56,8 +56,8 @@ Apple Silicon 机器可能出现 `linux/amd64` 镜像平台提示，这是 Docke
 
 | 服务 | 容器名 | 作用 | 对外端口 |
 | --- | --- | --- | --- |
-| `langfuse-web` | `litefuse-web` | Web/API 服务 | `3000` |
-| `langfuse-worker` | `litefuse-worker` | 后台任务和队列消费者 | `3030` |
+| `litefuse-web` | `litefuse-web` | Web/API 服务 | `3000` |
+| `litefuse-worker` | `litefuse-worker` | 后台任务和队列消费者 | `3030` |
 | `postgres` | `litefuse-postgres` | 元数据数据库 | `127.0.0.1:5432` |
 | `redis` | `litefuse-redis` | 队列和缓存 | `127.0.0.1:16379` |
 | `minio` | `litefuse-minio` | S3 兼容对象存储 | `19090`, `127.0.0.1:19091` |
@@ -149,8 +149,8 @@ docker exec litefuse-postgres pg_dump -U postgres postgres > litefuse-postgres.s
 
 以下 Docker volumes 保存持久化数据：
 
-- `litefuse_langfuse_postgres_data`
-- `litefuse_langfuse_minio_data`
+- `litefuse_postgres_data`
+- `litefuse_minio_data`
 - `litefuse_doris_fe_meta`
 - `litefuse_doris_be_storage`
 
@@ -223,5 +223,5 @@ docker logs --tail 200 litefuse-worker
 当前 Compose 已补齐底层镜像需要的 ClickHouse 兼容环境变量，并禁用了 ClickHouse migration。修改 `.env` 后请重建 Web 和 Worker：
 
 ```bash
-docker compose --env-file .env -f docker-compose.yml up -d --force-recreate langfuse-web langfuse-worker
+docker compose --env-file .env -f docker-compose.yml up -d --force-recreate litefuse-web litefuse-worker
 ```
