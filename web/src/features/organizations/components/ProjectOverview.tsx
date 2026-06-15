@@ -29,7 +29,6 @@ import {
   createOrganizationRoute,
   createProjectRoute,
 } from "@/src/features/setup/setupRoutes";
-import { isCloudPlan, planLabels } from "@langfuse/shared";
 import ContainerPage from "@/src/components/layouts/container-page";
 import { type User } from "next-auth";
 
@@ -217,14 +216,6 @@ const SingleOrganizationProjectOverviewTile = ({
         title={org.name}
         className="truncate"
         status={orgId === env.NEXT_PUBLIC_DEMO_ORG_ID ? "Demo Org" : undefined}
-        label={
-          isCloudPlan(org.plan)
-            ? {
-                text: planLabels[org.plan],
-                href: `/organization/${org.id}/settings/billing`,
-              }
-            : undefined
-        }
         actionButtons={
           <OrganizationActionButtons
             orgId={orgId}

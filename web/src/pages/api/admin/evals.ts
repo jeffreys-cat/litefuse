@@ -7,7 +7,7 @@ import {
   getQueue,
   QueueJobs,
 } from "@langfuse/shared/src/server";
-import { AdminApiAuthService } from "@/src/ee/features/admin-api/server/adminApiAuth";
+import { AdminApiAuthService } from "@/src/server/adminApiAuth";
 import { prisma } from "@langfuse/shared/src/db";
 
 const ManageEvalBody = z.discriminatedUnion("action", [

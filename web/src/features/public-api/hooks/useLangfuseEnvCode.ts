@@ -1,5 +1,5 @@
-import { useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { env } from "@/src/env.mjs";
+import { useUiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 
 export function useLangfuseEnvCode(keys?: {
   secretKey: string;

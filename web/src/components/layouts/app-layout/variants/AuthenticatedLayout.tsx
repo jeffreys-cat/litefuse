@@ -27,16 +27,6 @@ const CommandMenu = dynamic(
   },
 );
 
-const PaymentBanner = dynamic(
-  () =>
-    import("@/src/features/payment-banner").then((mod) => ({
-      default: mod.PaymentBanner,
-    })),
-  {
-    ssr: false,
-  },
-);
-
 const V4BetaEnabledBanner = dynamic(
   () =>
     import("@/src/features/events/components/V4BetaEnabledBanner").then(
@@ -139,7 +129,6 @@ export function AuthenticatedLayout({
       <TopBannerProvider>
         <SidebarProvider>
           <div className="flex h-dvh w-full flex-col">
-            <PaymentBanner />
             <V4BetaEnabledBanner />
             <V4BetaPromoBanner />
             <div className="pt-banner-offset flex min-h-0 flex-1">

@@ -18,14 +18,9 @@ import {
 import { batchExportQueueProcessor } from "./queues/batchExportQueue";
 import { onShutdown } from "./utils/shutdown";
 import helmet from "helmet";
-import { cloudUsageMeteringQueueProcessor } from "./queues/cloudUsageMeteringQueue";
-import { cloudSpendAlertQueueProcessor } from "./queues/cloudSpendAlertQueue";
-import { cloudFreeTierUsageThresholdQueueProcessor } from "./queues/cloudFreeTierUsageThresholdQueue";
 import { WorkerManager } from "./queues/workerManager";
 import {
   CoreDataS3ExportQueue,
-  DataRetentionQueue,
-  MeteringDataPostgresExportQueue,
   PostHogIntegrationQueue,
   MixpanelIntegrationQueue,
   QueueName,
@@ -35,7 +30,6 @@ import {
   IngestionQueue,
   OtelIngestionQueue,
   TraceUpsertQueue,
-  CloudFreeTierUsageThresholdQueue,
   EventPropagationQueue,
 } from "@langfuse/shared/src/server";
 import { env } from "./env";
@@ -59,11 +53,6 @@ import {
   blobStorageIntegrationProcessor,
 } from "./queues/blobStorageIntegrationQueue";
 import { coreDataS3ExportProcessor } from "./queues/coreDataS3ExportQueue";
-import { meteringDataPostgresExportProcessor } from "./ee/meteringDataPostgresExport/handleMeteringDataPostgresExportJob";
-import {
-  dataRetentionProcessingProcessor,
-  dataRetentionProcessor,
-} from "./queues/dataRetentionQueue";
 import { batchActionQueueProcessor } from "./queues/batchActionQueue";
 import { scoreDeleteProcessor } from "./queues/scoreDelete";
 import { DlqRetryService } from "./services/dlq/dlqRetryService";
@@ -151,22 +140,6 @@ if (env.LITEFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
   WorkerManager.register(
     QueueName.CoreDataS3ExportQueue,
     coreDataS3ExportProcessor,
-  );
-}
-
-if (env.LITEFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  MeteringDataPostgresExportQueue.getInstance();
-  WorkerManager.register(
-    QueueName.MeteringDataPostgresExportQueue,
-    meteringDataPostgresExportProcessor,
-    {
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
-      },
-    },
   );
 }
 
@@ -338,67 +311,6 @@ if (env.QUEUE_CONSUMER_INGESTION_SECONDARY_QUEUE_IS_ENABLED === "true") {
   );
 }
 
-if (
-  env.QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED === "true" &&
-  env.STRIPE_SECRET_KEY
-) {
-  WorkerManager.register(
-    QueueName.CloudUsageMeteringQueue,
-    cloudUsageMeteringQueueProcessor,
-    {
-      concurrency: 1,
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
-      },
-    },
-  );
-}
-
-// Cloud Spend Alert Queue: Only enable in cloud environment with Stripe
-if (
-  env.QUEUE_CONSUMER_CLOUD_SPEND_ALERT_QUEUE_IS_ENABLED === "true" &&
-  env.STRIPE_SECRET_KEY
-) {
-  WorkerManager.register(
-    QueueName.CloudSpendAlertQueue,
-    cloudSpendAlertQueueProcessor,
-    {
-      concurrency: 20,
-      limiter: {
-        // Process at most 600 jobs per minute / 10 jobs per second for Stripe API rate limits
-        // - stripe allows 100 ops / sec but we want to use a lower limit to account for 3 environments and other calls
-        // - See: https://docs.stripe.com/rate-limits
-        max: 900,
-        duration: 60_000,
-      },
-    },
-  );
-}
-
-// Free Tier Usage Threshold Queue: Only enable in cloud environment
-if (
-  env.QUEUE_CONSUMER_FREE_TIER_USAGE_THRESHOLD_QUEUE_IS_ENABLED === "true" &&
-  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION && // Only in cloud deployments
-  env.STRIPE_SECRET_KEY
-) {
-  // Instantiate the queue to trigger scheduled jobs
-  CloudFreeTierUsageThresholdQueue.getInstance();
-  WorkerManager.register(
-    QueueName.CloudFreeTierUsageThresholdQueue,
-    cloudFreeTierUsageThresholdQueueProcessor,
-    {
-      concurrency: 1,
-      limiter: {
-        // Process at most `max` jobs per 30 seconds
-        max: 1,
-        duration: 30_000,
-      },
-    },
-  );
-}
-
 if (env.QUEUE_CONSUMER_EXPERIMENT_CREATE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(
     QueueName.ExperimentCreate,
@@ -499,28 +411,6 @@ if (env.QUEUE_CONSUMER_BLOB_STORAGE_INTEGRATION_QUEUE_IS_ENABLED === "true") {
       lockDuration: 60000, // 60 seconds
       stalledInterval: 120000, // 120 seconds
       maxStalledCount: 3,
-    },
-  );
-}
-
-if (env.QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED === "true") {
-  // Instantiate the queue to trigger scheduled jobs
-  DataRetentionQueue.getInstance();
-
-  WorkerManager.register(QueueName.DataRetentionQueue, dataRetentionProcessor, {
-    concurrency: 1,
-  });
-
-  WorkerManager.register(
-    QueueName.DataRetentionProcessingQueue,
-    dataRetentionProcessingProcessor,
-    {
-      concurrency: 1,
-      limiter: {
-        // Process at most `max` delete jobs per LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
-        max: env.LITEFUSE_PROJECT_DELETE_CONCURRENCY,
-        duration: env.LITEFUSE_DORIS_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
-      },
     },
   );
 }

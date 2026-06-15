@@ -2,8 +2,8 @@ import { cn } from "@/src/utils/tailwind";
 import Link from "next/link";
 import { VersionLabel } from "./VersionLabel";
 import { env } from "@/src/env.mjs";
-import { useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { PlusIcon } from "lucide-react";
+import { useUiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 
 export const LangfuseIcon = ({
   size = 32,

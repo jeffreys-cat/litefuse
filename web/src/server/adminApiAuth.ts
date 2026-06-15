@@ -1,7 +1,9 @@
-import { env } from "@/src/env.mjs";
-import { logger } from "@langfuse/shared/src/server";
+import { timingSafeEqual } from "crypto";
 import { type IncomingHttpHeaders } from "http";
 import { type NextApiRequest, type NextApiResponse } from "next";
+
+import { env } from "@/src/env.mjs";
+import { logger } from "@langfuse/shared/src/server";
 
 export interface AdminAuthResult {
   isAuthorized: boolean;
@@ -12,6 +14,20 @@ export interface AdminAuthOptions {
   isAllowedOnLangfuseCloud?: boolean;
 }
 
+/**
+ * Constant-time comparison of the provided token against the expected key.
+ * Compares byte lengths first since `timingSafeEqual` throws on unequal
+ * buffer lengths.
+ */
+const isTokenValid = (token: string, expectedKey: string): boolean => {
+  const tokenBuffer = Buffer.from(token);
+  const expectedBuffer = Buffer.from(expectedKey);
+  if (tokenBuffer.byteLength !== expectedBuffer.byteLength) {
+    return false;
+  }
+  return timingSafeEqual(tokenBuffer, expectedBuffer);
+};
+
 export class AdminApiAuthService {
   static verifyAdminAuthFromAuthString = (
     authString: string,
@@ -19,7 +35,7 @@ export class AdminApiAuthService {
   ): AdminAuthResult => {
     const { isAllowedOnLangfuseCloud = false } = options;
 
-    // Block access on Langfuse Cloud unless explicitly allowed
+    // Block access on Litefuse Cloud unless explicitly allowed
     if (
       !isAllowedOnLangfuseCloud &&
       env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
@@ -41,7 +57,11 @@ export class AdminApiAuthService {
     }
 
     const [scheme, token] = authString.split(" ");
-    if (scheme !== "Bearer" || !token || token !== env.ADMIN_API_KEY) {
+    if (
+      scheme !== "Bearer" ||
+      !token ||
+      !isTokenValid(token, env.ADMIN_API_KEY)
+    ) {
       return {
         isAuthorized: false,
         error: "Unauthorized: Invalid token",
@@ -81,7 +101,7 @@ export class AdminApiAuthService {
    * Middleware function to handle admin authentication in Next.js API routes
    * @param req The Next.js API request
    * @param res The Next.js API response
-   * @param options Admin auth options. By default, blocks access on Langfuse Cloud (isAllowedOnLangfuseCloud: false)
+   * @param options Admin auth options. By default, blocks access on Litefuse Cloud (isAllowedOnLangfuseCloud: false)
    * @returns true if authorized, false otherwise (and sets appropriate response)
    */
   public static handleAdminAuth(

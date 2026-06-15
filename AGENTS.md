@@ -19,7 +19,6 @@ litefuse/
 ├─ web/                     # Next.js app (UI + tRPC + public REST)
 ├─ worker/                  # Queue consumers and background processing
 ├─ packages/shared/         # Shared domain, DB, queue contracts, repositories
-├─ ee/                      # Enterprise package consumed by web
 ├─ generated/               # Generated API clients (do not hand-edit)
 ├─ fern/                    # API definition sources
 └─ scripts/                 # Repo scripts
@@ -29,12 +28,10 @@ litefuse/
   - `web/AGENTS.md`
   - `worker/AGENTS.md`
   - `packages/shared/AGENTS.md`
-  - `ee/AGENTS.md`
 - Dependency direction:
-  - `web` -> `@langfuse/shared`, `@langfuse/ee`
+  - `web` -> `@langfuse/shared`
   - `worker` -> `@langfuse/shared`
-  - `@langfuse/ee` -> `@langfuse/shared`
-  - `@langfuse/shared` -> no imports from `web`, `worker`, or `ee`
+  - `@langfuse/shared` -> no imports from `web` or `worker`
 - Queue payload schemas and queue-name contracts are owned by
   `packages/shared/src/server/queues.ts`.
 

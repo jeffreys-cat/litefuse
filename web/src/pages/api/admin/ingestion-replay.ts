@@ -7,7 +7,7 @@ import {
   SecondaryIngestionQueue,
   OtelIngestionQueue,
 } from "@langfuse/shared/src/server";
-import { AdminApiAuthService } from "@/src/ee/features/admin-api/server/adminApiAuth";
+import { AdminApiAuthService } from "@/src/server/adminApiAuth";
 
 const IngestionReplayBody = z.object({
   keys: z.array(z.string()).min(1).max(1000),

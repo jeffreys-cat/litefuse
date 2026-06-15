@@ -260,7 +260,7 @@ Your contributions are welcome!
 
 ## 🥇 License
 
-This repository is MIT licensed, except for the `ee` folders. See [LICENSE](LICENSE) and [docs](https://litefuse.ai/docs/open-source) for more details.
+This repository is MIT licensed. See [LICENSE](LICENSE) for details.
 
 ## Dependencies
 

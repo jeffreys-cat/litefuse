@@ -7,8 +7,8 @@ import { useRouter } from "next/router";
 import { useMemo } from "react";
 import type { Session, User } from "next-auth";
 import { useEntitlements } from "@/src/features/entitlements/hooks";
-import { useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
+import { useUiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 import {
   ROUTES,
   RouteSection,

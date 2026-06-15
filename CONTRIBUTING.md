@@ -104,7 +104,6 @@ We built a monorepo using [pnpm](https://pnpm.io/motivation) and [turbo](https:/
   - `shared`: contains shared code between the above packages.
   - `config-eslint`: contains eslint configurations which are shared between the above packages.
   - `config-typescript`: contains typescript configurations which are shared between the above packages.
-- `ee`: contains all enterprise features. See [EE README](ee/README.md) for more details.
 
 ## Development Setup
 
@@ -473,6 +472,6 @@ npx fern-api generate --api organizations  # for the organizations API
 
 ## License
 
-Litefuse is MIT licensed, except for `ee/` folder. See [LICENSE](LICENSE) and [docs](https://litefuse.ai/docs/open-source) for more details.
+Litefuse is MIT licensed. See [LICENSE](LICENSE) for details.
 
 When contributing to the Litefuse codebase, you need to agree to the [Contributor License Agreement](https://cla-assistant.io/litefuse/litefuse). You only need to do this once and the CLA bot will remind you if you haven't signed it yet.

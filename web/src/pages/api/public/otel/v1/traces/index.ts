@@ -9,7 +9,6 @@ import {
 import { z } from "zod/v4";
 import { $root } from "@/src/pages/api/public/otel/otlp-proto/generated/root";
 import { gunzip } from "node:zlib";
-import { ForbiddenError } from "@langfuse/shared";
 import { env } from "@/src/env.mjs";
 
 /** Read a Langfuse header that may arrive with hyphens or underscores. */
@@ -37,13 +36,6 @@ export default withMiddlewares({
     responseSchema: z.any(),
     rateLimitResource: "ingestion",
     fn: async ({ req, res, auth }) => {
-      // Check if ingestion is suspended due to usage threshold
-      if (auth.scope.isIngestionSuspended) {
-        throw new ForbiddenError(
-          "Ingestion suspended: Usage threshold exceeded. Please upgrade your plan.",
-        );
-      }
-
       // Mark project as using OTEL API
       await markProjectAsOtelUser(auth.scope.projectId);
 

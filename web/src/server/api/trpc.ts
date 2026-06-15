@@ -92,8 +92,8 @@ import {
   contextWithLangfuseProps,
 } from "@langfuse/shared/src/server";
 
-import { AdminApiAuthService } from "@/src/ee/features/admin-api/server/adminApiAuth";
 import { env } from "@/src/env.mjs";
+import { AdminApiAuthService } from "@/src/server/adminApiAuth";
 import { BaseError, parseIO } from "@langfuse/shared";
 
 setUpSuperjson();

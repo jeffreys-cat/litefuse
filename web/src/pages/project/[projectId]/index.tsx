@@ -27,8 +27,8 @@ import { useDashboardDateRange } from "@/src/hooks/useDashboardDateRange";
 import { useDebounce } from "@/src/hooks/useDebounce";
 import { ScoreAnalytics } from "@/src/features/dashboard/components/score-analytics/ScoreAnalytics";
 import SetupTracingButton from "@/src/features/setup/components/SetupTracingButton";
-import { useUiCustomization } from "@/src/ee/features/ui-customization/useUiCustomization";
 import { useEntitlementLimit } from "@/src/features/entitlements/hooks";
+import { useUiCustomization } from "@/src/features/ui-customization/useUiCustomization";
 import Page from "@/src/components/layouts/page";
 import { MultiSelect } from "@/src/features/filters/components/multi-select";
 import {

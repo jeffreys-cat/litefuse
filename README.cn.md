@@ -275,7 +275,7 @@ _[Litefuse 中的公共示例追踪](https://cloud.litefuse.ai/project/cloramnkj
 
 ## 🥇 许可证
 
-除 `ee` 文件夹外，本仓库采用 MIT 许可证。详情请参见 [LICENSE](LICENSE) 以及 [文档](https://litefuse.ai/docs/open-source)。
+本仓库采用 MIT 许可证。详情请参见 [LICENSE](LICENSE)。
 
 ## ⭐️ 星标历史
 
