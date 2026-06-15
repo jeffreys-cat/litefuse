@@ -570,7 +570,7 @@ Dual database architecture (PostgreSQL via Prisma + ClickHouse via direct client
 
 ### [configuration.md](resources/configuration.md)
 
-Environment variable validation with Zod, package-specific configs (web/env.mjs with t3-oss/env-nextjs, worker/env.ts, shared/env.ts), NEXT_PUBLIC_LITEFUSE_CLOUD_REGION usage, LITEFUSE_EE_LICENSE_KEY for enterprise features, best practices for env management
+Environment variable validation with Zod, package-specific configs (web/env.mjs with t3-oss/env-nextjs, worker/env.ts, shared/env.ts), NEXT_PUBLIC_LITEFUSE_CLOUD_REGION usage, best practices for env management
 
 ### [testing-guide.md](resources/testing-guide.md)
 

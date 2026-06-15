@@ -754,8 +754,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                               ),
                             ),
 
-                          // Enables features/entitlements based on the plan of the organization, either cloud or EE version when self-hosting
-                          // If you edit this line, you risk executing code that is not MIT licensed (contained in /ee folders, see LICENSE)
+                          // Resolves the organization plan/entitlements (cloud plans, or the OSS plan when self-hosting)
                           plan: getOrganizationPlanServerSide(
                             parsedCloudConfig.data,
                           ),

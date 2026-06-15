@@ -50,9 +50,6 @@ export const BatchExportJobSchema = z.object({
   projectId: z.string(),
   batchExportId: z.string(),
 });
-export const CloudSpendAlertJobSchema = z.object({
-  orgId: z.string(),
-});
 export const TraceQueueEventSchema = z.object({
   projectId: z.string(),
   traceId: z.string(),
@@ -119,10 +116,6 @@ export const ExperimentCreateEventSchema = z.object({
   datasetId: z.string(),
   runId: z.string(),
   description: z.string().optional(),
-});
-export const DataRetentionProcessingEventSchema = z.object({
-  projectId: z.string(),
-  retention: z.number(),
 });
 export const BatchActionProcessingEventSchema = z.discriminatedUnion(
   "actionId",
@@ -274,7 +267,6 @@ export type CreateEvalQueueEventType = z.infer<
   typeof CreateEvalQueueEventSchema
 >;
 export type BatchExportJobType = z.infer<typeof BatchExportJobSchema>;
-export type CloudSpendAlertJobType = z.infer<typeof CloudSpendAlertJobSchema>;
 export type TraceQueueEventType = z.infer<typeof TraceQueueEventSchema>;
 export type TracesQueueEventType = z.infer<typeof TracesQueueEventSchema>;
 export type ScoresQueueEventType = z.infer<typeof ScoresQueueEventSchema>;
@@ -297,9 +289,6 @@ export type PostHogIntegrationProcessingEventType = z.infer<
 >;
 export type MixpanelIntegrationProcessingEventType = z.infer<
   typeof MixpanelIntegrationProcessingEventSchema
->;
-export type DataRetentionProcessingEventType = z.infer<
-  typeof DataRetentionProcessingEventSchema
 >;
 export type BatchActionProcessingEventType = z.infer<
   typeof BatchActionProcessingEventSchema
@@ -331,9 +320,6 @@ export enum QueueName {
   OtelIngestionQueue = "otel-ingestion-queue",
   IngestionQueue = "ingestion-queue", // Process single events with S3-merge
   IngestionSecondaryQueue = "secondary-ingestion-queue", // Separates high priority + high throughput projects from other projects.
-  CloudUsageMeteringQueue = "cloud-usage-metering-queue",
-  CloudSpendAlertQueue = "cloud-spend-alert-queue",
-  CloudFreeTierUsageThresholdQueue = "cloud-free-tier-usage-threshold-queue",
   ExperimentCreate = "experiment-create-queue",
   PostHogIntegrationQueue = "posthog-integration-queue",
   PostHogIntegrationProcessingQueue = "posthog-integration-processing-queue",
@@ -342,9 +328,6 @@ export enum QueueName {
   BlobStorageIntegrationQueue = "blobstorage-integration-queue",
   BlobStorageIntegrationProcessingQueue = "blobstorage-integration-processing-queue",
   CoreDataS3ExportQueue = "core-data-s3-export-queue",
-  MeteringDataPostgresExportQueue = "metering-data-postgres-export-queue",
-  DataRetentionQueue = "data-retention-queue",
-  DataRetentionProcessingQueue = "data-retention-processing-queue",
   BatchActionQueue = "batch-action-queue",
   CreateEvalQueue = "create-eval-queue",
   ScoreDelete = "score-delete",
@@ -364,9 +347,6 @@ export enum QueueJobs {
   EvaluationExecution = "evaluation-execution-job",
   LLMAsJudgeExecution = "llm-as-a-judge-execution-job",
   BatchExportJob = "batch-export-job",
-  CloudUsageMeteringJob = "cloud-usage-metering-job",
-  CloudSpendAlertJob = "cloud-spend-alert-job",
-  CloudFreeTierUsageThresholdJob = "cloud-free-tier-usage-threshold-job",
   OtelIngestionJob = "otel-ingestion-job",
   IngestionJob = "ingestion-job",
   IngestionSecondaryJob = "secondary-ingestion-job",
@@ -378,9 +358,6 @@ export enum QueueJobs {
   BlobStorageIntegrationJob = "blobstorage-integration-job",
   BlobStorageIntegrationProcessingJob = "blobstorage-integration-processing-job",
   CoreDataS3ExportJob = "core-data-s3-export-job",
-  MeteringDataPostgresExportJob = "metering-data-postgres-export-job",
-  DataRetentionJob = "data-retention-job",
-  DataRetentionProcessingJob = "data-retention-processing-job",
   BatchActionProcessingJob = "batch-action-processing-job",
   CreateEvalJob = "create-eval-job",
   ScoreDelete = "score-delete",
@@ -494,12 +471,6 @@ export type TQueueJobTypes = {
     payload: MixpanelIntegrationProcessingEventType;
     name: QueueJobs.MixpanelIntegrationProcessingJob;
   };
-  [QueueName.DataRetentionProcessingQueue]: {
-    timestamp: Date;
-    id: string;
-    payload: DataRetentionProcessingEventType;
-    name: QueueJobs.DataRetentionProcessingJob;
-  };
   [QueueName.BatchActionQueue]: {
     timestamp: Date;
     id: string;
@@ -535,17 +506,6 @@ export type TQueueJobTypes = {
     id: string;
     payload: EntityChangeEventType;
     name: QueueJobs.EntityChangeJob;
-  };
-  [QueueName.CloudSpendAlertQueue]: {
-    timestamp: Date;
-    id: string;
-    payload: CloudSpendAlertJobType;
-    name: QueueJobs.CloudSpendAlertJob;
-  };
-  [QueueName.CloudFreeTierUsageThresholdQueue]: {
-    timestamp: Date;
-    id: string;
-    name: QueueJobs.CloudFreeTierUsageThresholdJob;
   };
   [QueueName.EventPropagationQueue]: {
     timestamp: Date;

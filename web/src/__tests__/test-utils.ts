@@ -89,11 +89,9 @@ export const getQueues = () => {
   );
 
   const listOfQueuesToIgnore = [
-    QueueName.DataRetentionQueue,
     QueueName.BlobStorageIntegrationQueue,
     QueueName.DeadLetterRetryQueue,
     QueueName.PostHogIntegrationQueue,
-    QueueName.CloudFreeTierUsageThresholdQueue,
   ];
 
   return queues
