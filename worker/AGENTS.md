@@ -51,7 +51,6 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 
 ## Operational Scripts
 - Refill ingestion events: `pnpm --filter worker run refill-ingestion-events`
-- Refill billing event: `pnpm --filter worker run refill-billing-event`
 - Refill queue event: `pnpm --filter worker run refill-queue-event`
 
 ## Package-Specific Rules

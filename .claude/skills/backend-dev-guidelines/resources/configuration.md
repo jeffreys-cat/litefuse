@@ -41,8 +41,7 @@ Each package has its own `env.ts` or `env.mjs` file that validates and exports e
 litefuse/
 ├── web/src/env.mjs              # Next.js app (t3-env pattern)
 ├── worker/src/env.ts            # Worker service (Zod schema)
-├── packages/shared/src/env.ts   # Shared config (Zod schema)
-└── ee/src/env.ts                # Enterprise Edition (Zod schema)
+└── packages/shared/src/env.ts   # Shared config (Zod schema)
 ```
 
 ### Web Package (`web/src/env.mjs`)
@@ -240,32 +239,6 @@ const redisHost = env.REDIS_HOST;
 const clickhouseUrl = env.CLICKHOUSE_URL;
 ```
 
-### Enterprise Edition Package (`ee/src/env.ts`)
-
-Minimal Zod schema for EE-specific variables.
-
-**Structure:**
-
-```typescript
-import { z } from "zod/v4";
-import { removeEmptyEnvVariables } from "@langfuse/shared";
-
-const EnvSchema = z.object({
-  NEXT_PUBLIC_LITEFUSE_CLOUD_REGION: z.string().optional(),
-  LITEFUSE_EE_LICENSE_KEY: z.string().optional(),
-});
-
-export const env = EnvSchema.parse(removeEmptyEnvVariables(process.env));
-```
-
-**Usage:**
-
-```typescript
-import { env } from "@langfuse/ee/src/env";
-
-const licenseKey = env.LITEFUSE_EE_LICENSE_KEY;
-```
-
 ---
 
 ## Special Environment Variables
@@ -279,7 +252,6 @@ const licenseKey = env.LITEFUSE_EE_LICENSE_KEY;
 **Where Used:**
 
 - **web/src/env.mjs** - Client-side accessible (prefixed with `NEXT_PUBLIC_`)
-- **ee/src/env.ts** - Enterprise features
 - **packages/shared/src/env.ts** - Shared logic
 - **worker/src/env.ts** - Worker processing
 
@@ -329,68 +301,6 @@ NEXT_PUBLIC_LITEFUSE_CLOUD_REGION=US
 
 # Self-hosted OSS deployment
 # (variable not set)
-```
-
-### LITEFUSE_EE_LICENSE_KEY
-
-**Purpose:** Enables Enterprise Edition features in self-hosted deployments.
-
-**Type:** `string | undefined`
-
-**Where Used:**
-
-- **web/src/env.mjs** - Web app EE features
-- **ee/src/env.ts** - EE package
-
-**When Set:**
-
-| Deployment          | Value              | Features Enabled                                                 |
-| ------------------- | ------------------ | ---------------------------------------------------------------- |
-| **Litefuse Cloud**  | Not set            | Cloud features controlled by `NEXT_PUBLIC_LITEFUSE_CLOUD_REGION` |
-| **OSS Self-Hosted** | Not set            | Core open-source features only                                   |
-| **EE Self-Hosted**  | License key string | Enterprise features enabled                                      |
-
-**Enterprise Features Controlled:**
-
-When `LITEFUSE_EE_LICENSE_KEY` is set and valid:
-
-- SSO integrations (custom OIDC, SAML)
-- Advanced RBAC
-- Audit logging
-- Custom branding
-- SLA support
-- Advanced security features
-
-**Usage Pattern:**
-
-```typescript
-import { env } from "@/src/env.mjs";
-
-// Check if EE license is present
-if (env.LITEFUSE_EE_LICENSE_KEY) {
-  // Validate license
-  const isValidLicense = await validateEELicense(env.LITEFUSE_EE_LICENSE_KEY);
-
-  if (isValidLicense) {
-    // Enable EE features
-    enableCustomSSO();
-    enableAdvancedRBAC();
-  }
-}
-```
-
-**Example Configuration:**
-
-```bash
-# OSS self-hosted (no license)
-# LITEFUSE_EE_LICENSE_KEY not set
-
-# EE self-hosted
-LITEFUSE_EE_LICENSE_KEY=ee_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Litefuse Cloud (uses region instead)
-NEXT_PUBLIC_LITEFUSE_CLOUD_REGION=US
-# LITEFUSE_EE_LICENSE_KEY not used
 ```
 
 ### Other Important Variables
@@ -545,8 +455,7 @@ litefuse/
 ├── .env.dev.example              # Example dev configuration
 ├── web/src/env.mjs               # Web app env validation
 ├── worker/src/env.ts             # Worker env validation
-├── packages/shared/src/env.ts    # Shared env validation
-└── ee/src/env.ts                 # EE env validation
+└── packages/shared/src/env.ts    # Shared env validation
 ```
 
 **DO NOT commit:**
