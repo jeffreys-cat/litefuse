@@ -4,8 +4,8 @@
 # All other components are bound to localhost (127.0.0.1) to only accept connections from the local machine.
 # External connections from other machines will not be able to reach these services directly.
 services:
-  litefuse-worker:
-    image: litefuse/litefuse-worker:26.0.1
+  litefuse-web:
+    image: litefuse/litefuse-web:26.0.1
     restart: always
     depends_on: &litefuse-depends-on
       postgres:
@@ -22,9 +22,15 @@ services:
       - default
       - doris_internal
     ports:
-      - 127.0.0.1:3030:3030
-    environment: &litefuse-worker-env
+      - 3000:3000
+    environment: &litefuse-web-env
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret} # CHANGEME
+      # Next.js standalone binds to $HOSTNAME; without this it inherits the
+      # Docker-injected container id and never listens on 0.0.0.0, so the
+      # published 3000 port is unreachable from the host.
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
       DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/postgres} # CHANGEME
       SALT: ${SALT:-mysalt} # CHANGEME
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000} # CHANGEME: generate via `openssl rand -hex 32`
@@ -75,24 +81,6 @@ services:
       REDIS_TLS_KEY: ${REDIS_TLS_KEY:-/certs/redis.key}
       EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
       SMTP_CONNECTION_URL: ${SMTP_CONNECTION_URL:-}
-
-  litefuse-web:
-    image: litefuse/litefuse-web:26.0.1
-    restart: always
-    depends_on: *litefuse-depends-on
-    networks:
-      - default
-      - doris_internal
-    ports:
-      - 3000:3000
-    environment:
-      <<: *litefuse-worker-env
-      # Next.js standalone binds to $HOSTNAME; without this it inherits the
-      # Docker-injected container id and never listens on 0.0.0.0, so the
-      # published 3000 port is unreachable from the host.
-      HOSTNAME: "0.0.0.0"
-      PORT: "3000"
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret} # CHANGEME
       LITEFUSE_INIT_ORG_ID: ${LITEFUSE_INIT_ORG_ID:-}
       LITEFUSE_INIT_ORG_NAME: ${LITEFUSE_INIT_ORG_NAME:-}
       LITEFUSE_INIT_PROJECT_ID: ${LITEFUSE_INIT_PROJECT_ID:-}
@@ -102,6 +90,18 @@ services:
       LITEFUSE_INIT_USER_EMAIL: ${LITEFUSE_INIT_USER_EMAIL:-}
       LITEFUSE_INIT_USER_NAME: ${LITEFUSE_INIT_USER_NAME:-}
       LITEFUSE_INIT_USER_PASSWORD: ${LITEFUSE_INIT_USER_PASSWORD:-}
+
+  litefuse-worker:
+    image: litefuse/litefuse-worker:26.0.1
+    restart: always
+    depends_on: *litefuse-depends-on
+    networks:
+      - default
+      - doris_internal
+    ports:
+      - 127.0.0.1:3030:3030
+    environment:
+      <<: *litefuse-web-env
 
   # Doris is deployed as separate FE and BE containers (not the all-in-one
   # image) — the split topology with static IPs + disable_backend_black_list
