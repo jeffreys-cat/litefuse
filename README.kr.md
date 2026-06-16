@@ -9,7 +9,7 @@
          <a href="https://cloud.litefuse.ai">
             <strong>Litefuse Cloud</strong>
          </a> · 
-         <a href="https://litefuse.ai/docs/deployment/self-host">
+         <a href="https://litefuse.ai/self-hosting">
             <strong>셀프 호스트</strong>
          </a> · 
          <a href="https://litefuse.ai/demo">

@@ -167,8 +167,7 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
 
     // Authorization must reach BOTH FE and BE. If the BE leg silently dropped
     // it (e.g. via instance.auth overwrite), Doris would reject with 401.
-    const expected =
-      "Basic " + Buffer.from("admin:secret").toString("base64");
+    const expected = "Basic " + Buffer.from("admin:secret").toString("base64");
     expect(fe.requests[0].authorization).toBe(expected);
     expect(be.requests[0].authorization).toBe(expected);
   });
@@ -249,8 +248,7 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
   it("Location credential-strip regex covers http, https and @ in path", () => {
     // Mirror the regex literal in client.ts so a future edit that re-introduces
     // the old greedy /^http:\/\/[^@]+@/ trips a test immediately.
-    const strip = (loc: string) =>
-      loc.replace(/^(https?:\/\/)[^@/]+@/, "$1");
+    const strip = (loc: string) => loc.replace(/^(https?:\/\/)[^@/]+@/, "$1");
     expect(strip("http://user:pass@host:8040/x")).toBe("http://host:8040/x");
     expect(strip("https://user:pass@host:8040/x")).toBe("https://host:8040/x");
     expect(strip("http://host:8040/x")).toBe("http://host:8040/x");
@@ -287,9 +285,9 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
       maxSockets: 8,
     });
 
-    await expect(
-      client.insert("traces", [{ id: "x" }]),
-    ).rejects.toThrowError(/Stream load failed after 3 attempts/);
+    await expect(client.insert("traces", [{ id: "x" }])).rejects.toThrowError(
+      /Stream load failed after 3 attempts/,
+    );
     expect(beHits).toBe(3);
   });
 });
