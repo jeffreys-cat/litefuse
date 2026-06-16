@@ -87,6 +87,11 @@ services:
       - 3000:3000
     environment:
       <<: *litefuse-worker-env
+      # Next.js standalone binds to $HOSTNAME; without this it inherits the
+      # Docker-injected container id and never listens on 0.0.0.0, so the
+      # published 3000 port is unreachable from the host.
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-mysecret} # CHANGEME
       LITEFUSE_INIT_ORG_ID: ${LITEFUSE_INIT_ORG_ID:-}
       LITEFUSE_INIT_ORG_NAME: ${LITEFUSE_INIT_ORG_NAME:-}
