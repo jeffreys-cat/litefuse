@@ -1,6 +1,6 @@
 services:
   litefuse-web:
-    image: litefuse/litefuse-web:26.0.0
+    image: litefuse/litefuse-web:26.0.1
     container_name: litefuse-web
     hostname: litefuse-web
     depends_on: &litefuse-depends-on
@@ -82,7 +82,7 @@ services:
       - doris_internal
 
   litefuse-worker:
-    image: litefuse/litefuse-worker:26.0.0
+    image: litefuse/litefuse-worker:26.0.1
     container_name: litefuse-worker
     hostname: litefuse-worker
     depends_on: *litefuse-depends-on
