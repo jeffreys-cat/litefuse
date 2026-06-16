@@ -165,7 +165,10 @@ export const VersionLabel = ({ className }: { className?: string }) => {
         </DropdownMenuItem>
         {!isLangfuseCloud && (
           <DropdownMenuItem asChild>
-            <Link href="https://litefuse.ai/pricing-self-host" target="_blank">
+            <Link
+              href="https://litefuse.ai/pricing-self-hosting"
+              target="_blank"
+            >
               <Info size={16} className="mr-2" />
               Compare Versions
             </Link>
@@ -176,7 +179,7 @@ export const VersionLabel = ({ className }: { className?: string }) => {
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link
-                href="https://litefuse.ai/docs/deployment/self-host#update"
+                href="https://litefuse.ai/self-hosting#update"
                 target="_blank"
               >
                 <HardDriveDownload size={16} className="mr-2" />
