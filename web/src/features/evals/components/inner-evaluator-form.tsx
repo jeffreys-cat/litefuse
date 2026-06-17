@@ -44,10 +44,10 @@ import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePos
 import { Checkbox } from "@/src/components/ui/checkbox";
 import { Switch } from "@/src/components/ui/switch";
 import {
+  createDefaultFormMappings,
   evalConfigFormSchema,
   type EvalFormType,
   getTargetDisplayName,
-  inferDefaultMapping,
   type LangfuseObject,
 } from "@/src/features/evals/utils/evaluator-form-utils";
 import { validateAndTransformVariableMapping } from "@/src/features/evals/utils/variable-mapping-validation";
@@ -328,16 +328,9 @@ export const InnerEvaluatorForm = (props: {
           : z
               .array(variableMapping)
               .parse(props.existingEvaluator.variableMapping)
-        : z.array(variableMapping).parse(
-            props.evalTemplate
-              ? props.evalTemplate.vars.map((v) => ({
-                  templateVariable: v,
-                  langfuseObject: "trace" as const,
-                  objectName: null,
-                  selectedColumnId: "input",
-                  jsonSelector: null,
-                }))
-              : [],
+        : createDefaultFormMappings(
+            props.evalTemplate?.vars ?? [],
+            props.existingEvaluator?.targetObject ?? EvalTargetObject.EVENT,
           ),
       sampling: props.existingEvaluator?.sampling
         ? props.existingEvaluator.sampling.toNumber()
@@ -360,13 +353,7 @@ export const InnerEvaluatorForm = (props: {
       const target = form.getValues("target");
       form.setValue(
         "mapping",
-        props.evalTemplate.vars.map((v) => ({
-          templateVariable: v,
-          langfuseObject: isLegacyEvalTarget(target)
-            ? ("trace" as const)
-            : undefined,
-          ...inferDefaultMapping(v),
-        })),
+        createDefaultFormMappings(props.evalTemplate.vars, target),
       );
       form.setValue("scoreName", `${props.evalTemplate.name}`);
     }

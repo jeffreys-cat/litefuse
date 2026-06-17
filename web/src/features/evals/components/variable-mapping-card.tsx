@@ -438,7 +438,7 @@ export const VariableMappingCard = ({
                                       }}
                                     >
                                       <SelectTrigger>
-                                        <SelectValue placeholder="Object type" />
+                                        <SelectValue placeholder="Select field" />
                                       </SelectTrigger>
                                       <SelectContent>
                                         {availableVariables
