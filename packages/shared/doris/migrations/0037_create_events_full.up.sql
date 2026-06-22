@@ -135,11 +135,11 @@ CREATE TABLE if not exists events_full (
     INDEX idx_trace_name (`trace_name`) USING INVERTED COMMENT 'inverted index for trace_name (trace name search)',
     -- Tokenized full-text indexes for content (input/output) search. parser=unicode
     -- tokenizes CJK by character and Latin by word; support_phrase enables
-    -- MATCH_PHRASE. These accelerate content search as a prefilter — search.ts
-    -- pairs `CAST(col AS STRING) LIKE '%q%'` (exact substring, correctness) with
-    -- `col MATCH_PHRASE 'q'` (index prefilter), mirroring upstream Langfuse's
-    -- ILIKE + hasAllTokens pattern. As upstream notes, the token prefilter drops
-    -- embedded-word substrings (search "open" won't find "openai"); accepted.
+    -- MATCH_PHRASE. Content search (search.ts) is full-text retrieval: it queries
+    -- these columns with `col MATCH_PHRASE 'q'` directly (phrase/token match), not
+    -- LIKE substring. As a consequence token matching does not find embedded-word
+    -- substrings (search "open" won't find "openai"); this is the intended
+    -- text-retrieval behavior.
     INDEX idx_input (`input`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for input content search',
     INDEX idx_output (`output`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for output content search'
 ) ENGINE=OLAP
