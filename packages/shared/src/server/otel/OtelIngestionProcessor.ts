@@ -2132,9 +2132,21 @@ export class OtelIngestionProcessor {
       key.startsWith("openclaw.tokens."),
     );
     if (openclawTokenKeys.length > 0) {
+      // Normalize the raw Anthropic cache key names openclaw emits to the
+      // `input_*` vocabulary used by the rest of the processor (matches the
+      // pydantic-ai branch above). Without this, cache keys keep a `cache_`
+      // prefix, so reduceUsageOrCostDetails (startsWith "input", used for the
+      // cell / promptTokens) and BreakdownTooltip (includes "input") disagree on
+      // whether cache counts as input — the cell and the hover show different
+      // input totals for the same row.
+      const openclawKeyMapping: Record<string, string> = {
+        cache_read_input_tokens: "input_cache_read",
+        cache_creation_input_tokens: "input_cache_creation",
+      };
       const result: Record<string, number> = {};
       for (const key of openclawTokenKeys) {
         const shortKey = key.replace("openclaw.tokens.", "");
+        const mappedKey = openclawKeyMapping[shortKey] ?? shortKey;
         const val = attributes[key];
         const num =
           typeof val === "number"
@@ -2143,7 +2155,7 @@ export class OtelIngestionProcessor {
               ? (val as any).low
               : Number(val);
         if (!Number.isNaN(num)) {
-          result[shortKey] = num;
+          result[mappedKey] = num;
         }
       }
       if (Object.keys(result).length > 0) return result;
