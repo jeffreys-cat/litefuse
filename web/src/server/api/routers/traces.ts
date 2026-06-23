@@ -42,6 +42,7 @@ import {
   getCategoricalScoresGroupedByName,
   convertDateToAnalyticsDateTime,
   getAgentGraphData,
+  getTraceUsageBreakdown,
   tracesTableUiColumnDefinitionsForDoris,
   getTracesGroupedByUsers,
   getTracesGroupedBySessionId,
@@ -336,6 +337,24 @@ export const traceRouter = createTRPCRouter({
           ? JSON.stringify(ctx.trace.metadata)
           : undefined,
       };
+    }),
+  // Per-trace usage/cost breakdown for the traces-list hover tooltip. The list
+  // metrics query returns only scalar totals; the per-key breakdown is fetched
+  // lazily here when the user hovers a row (scoped to one trace → one bucket).
+  usageBreakdownById: protectedProjectProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        traceId: z.string(),
+        timestamp: z.date().nullish(),
+      }),
+    )
+    .query(async ({ input }) => {
+      return getTraceUsageBreakdown({
+        projectId: input.projectId,
+        traceId: input.traceId,
+        timestamp: input.timestamp ?? undefined,
+      });
     }),
   byIdWithObservationsAndScores: protectedGetTraceProcedure
     .input(

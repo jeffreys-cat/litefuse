@@ -303,6 +303,94 @@ export const getTracesByIds = async (
   return records.map((r) => convertDorisToDomain(r));
 };
 
+/**
+ * Per-trace usage/cost breakdown for the traces-list hover tooltip.
+ *
+ * The list query (traces-ui-table-service) now returns only the precomputed
+ * scalar totals, so the per-key breakdown (input_cache_read, etc.) is fetched
+ * lazily, per trace, when the user hovers. Scoped to a single trace_id it hits
+ * one bucket and a handful of observation rows, so we just read their
+ * usage_details / cost_details maps and sum them by key in TS — no explode_map.
+ */
+export const getTraceUsageBreakdown = async ({
+  projectId,
+  traceId,
+  timestamp,
+}: {
+  projectId: string;
+  traceId: string;
+  timestamp?: Date;
+}): Promise<{
+  usageDetails: Record<string, number>;
+  costDetails: Record<string, number>;
+}> => {
+  const rows = await queryDoris<{
+    usage_details: string | Record<string, number> | null;
+    cost_details: string | Record<string, number> | null;
+  }>({
+    query: `
+      SELECT
+        to_json(usage_details) AS usage_details,
+        to_json(cost_details) AS cost_details
+      FROM events_full
+      WHERE project_id = {projectId: String}
+      AND trace_id = {traceId: String}
+      AND parent_span_id != ''
+      ${timestamp ? `AND start_time >= DATE_SUB({timestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+    `,
+    params: {
+      projectId,
+      traceId,
+      timestamp: timestamp ? convertDateToAnalyticsDateTime(timestamp) : null,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "byId",
+      projectId,
+    },
+  });
+
+  const sumInto = (
+    acc: Record<string, number>,
+    details: string | Record<string, number> | null,
+  ) => {
+    if (!details) return;
+    let parsed: Record<string, unknown> | null = null;
+    if (typeof details === "string") {
+      const trimmed = details.trim();
+      if (
+        !trimmed ||
+        trimmed === "null" ||
+        trimmed === "NULL" ||
+        trimmed === "{}"
+      ) {
+        return;
+      }
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        return;
+      }
+    } else if (typeof details === "object" && !Array.isArray(details)) {
+      parsed = details;
+    }
+    if (!parsed) return;
+    for (const [key, value] of Object.entries(parsed)) {
+      const num = Number(value);
+      if (!Number.isNaN(num)) acc[key] = (acc[key] ?? 0) + num;
+    }
+  };
+
+  const usageDetails: Record<string, number> = {};
+  const costDetails: Record<string, number> = {};
+  for (const row of rows) {
+    sumInto(usageDetails, row.usage_details);
+    sumInto(costDetails, row.cost_details);
+  }
+  return { usageDetails, costDetails };
+};
+
 export const getTracesBySessionId = async (
   projectId: string,
   sessionIds: string[],

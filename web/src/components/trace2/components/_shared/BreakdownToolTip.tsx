@@ -63,6 +63,9 @@ interface BreakdownTooltipProps {
   children: React.ReactNode;
   isCost?: boolean;
   pricingTierName?: string;
+  // Notified when the tooltip opens/closes. The traces list uses this to lazily
+  // fetch a trace's per-key breakdown only when the user actually hovers a row.
+  onOpenChange?: (open: boolean) => void;
 }
 
 export const BreakdownTooltip = ({
@@ -70,8 +73,13 @@ export const BreakdownTooltip = ({
   children,
   isCost = false,
   pricingTierName,
+  onOpenChange,
 }: BreakdownTooltipProps) => {
   const [isOpen, setIsOpen] = useState(false);
+  const setOpen = (open: boolean) => {
+    setIsOpen(open);
+    onOpenChange?.(open);
+  };
 
   // Aggregate details if array is provided
   const aggregatedDetails = Array.isArray(details)
@@ -101,10 +109,10 @@ export const BreakdownTooltip = ({
 
   return (
     <TooltipProvider>
-      <Tooltip open={isOpen} onOpenChange={setIsOpen}>
+      <Tooltip open={isOpen} onOpenChange={setOpen}>
         <TooltipTrigger
           className="flex cursor-pointer"
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => setOpen(!isOpen)}
         >
           {children}
         </TooltipTrigger>
