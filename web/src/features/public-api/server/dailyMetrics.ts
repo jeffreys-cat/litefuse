@@ -57,9 +57,9 @@ export const generateDailyMetrics = async (props: QueryType) => {
       o.provided_model_name AS model,
       count(o.span_id) AS countObservations,
       count(distinct o.trace_id) AS countTraces,
-      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS inputUsage,
-      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS outputUsage,
-      COALESCE(sum(if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], 0)), 0) AS totalUsage,
+      COALESCE(sum(o.input_tokens_calculated), 0) AS inputUsage,
+      COALESCE(sum(o.output_tokens_calculated), 0) AS outputUsage,
+      COALESCE(sum(o.total_tokens_calculated), 0) AS totalUsage,
       COALESCE(sum(coalesce(o.total_cost, 0)), 0) AS totalCost
     FROM events_full o
     ${hasNonTimestampsFilter ? "LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''" : ""}

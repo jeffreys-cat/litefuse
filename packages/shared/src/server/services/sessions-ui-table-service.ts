@@ -286,7 +286,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         ${
           selectMetrics
             ? `filtered_observations AS (
-            SELECT span_id AS id, trace_id, project_id, start_time, end_time, usage_details, cost_details, total_cost, event_ts
+            SELECT span_id AS id, trace_id, project_id, start_time, end_time, input_tokens_calculated, output_tokens_calculated, total_tokens_calculated, input_cost_calculated, output_cost_calculated, total_cost, event_ts
             FROM events_full o
             WHERE o.project_id = {projectId: String}
             AND o.parent_span_id != ''
@@ -301,14 +301,13 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                   count(*) as obs_count,
                   min(o.start_time) as min_start_time,
                   max(o.end_time) as max_end_time,
-                  -- Use substring matching on map keys to include all input/output related keys
-                  -- (e.g. input, cache_read_input_tokens, cache_creation_input_tokens)
-                  -- mirroring upstream's positionCaseInsensitive behavior
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_input_usage,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_output_usage,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'total') THEN usage_details['total'] ELSE 0 END) as sum_total_usage,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_input_cost,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_output_cost,
+                  -- Sum the precomputed per-observation scalar columns (see
+                  -- migration 0037) instead of explode/array_filter over the maps.
+                  sum(COALESCE(o.input_tokens_calculated, 0)) as sum_input_usage,
+                  sum(COALESCE(o.output_tokens_calculated, 0)) as sum_output_usage,
+                  sum(COALESCE(o.total_tokens_calculated, 0)) as sum_total_usage,
+                  sum(COALESCE(o.input_cost_calculated, 0)) as sum_input_cost,
+                  sum(COALESCE(o.output_cost_calculated, 0)) as sum_output_cost,
                   -- total_cost is a denormalized column on events_full populated by the ingestion writer
                   -- (cost_details['total']). Use it directly instead of re-extracting from the map.
                   sum(COALESCE(o.total_cost, 0)) as sum_total_cost,

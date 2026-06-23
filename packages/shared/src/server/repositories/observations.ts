@@ -1297,8 +1297,9 @@ export const getObservationMetricsForPrompts = async (
                     prompt_version,
                     start_time,
                     end_time,
-                    usage_details,
-                    cost_details,
+                    input_tokens_calculated,
+                    output_tokens_calculated,
+                    total_cost,
                     milliseconds_diff(end_time, start_time) AS latency_ms
                 FROM events_full
                 WHERE (type = 'GENERATION')
@@ -1312,13 +1313,9 @@ export const getObservationMetricsForPrompts = async (
             prompt_version,
             min(start_time) AS first_observation,
             max(start_time) AS last_observation,
-            percentile_approx(
-              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_input_usage,
-            percentile_approx(
-              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_output_usage,
-            percentile_approx(
-              CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN 
-                cost_details['total'] ELSE 0 END, 0.5) AS median_total_cost,
+            percentile_approx(COALESCE(input_tokens_calculated, 0), 0.5) AS median_input_usage,
+            percentile_approx(COALESCE(output_tokens_calculated, 0), 0.5) AS median_output_usage,
+            percentile_approx(COALESCE(total_cost, 0), 0.5) AS median_total_cost,
             percentile_approx(latency_ms, 0.5) AS median_latency_ms
         FROM latencies
         GROUP BY
@@ -1703,9 +1700,9 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
         CASE WHEN o.completion_start_time IS NULL THEN NULL
              ELSE milliseconds_diff(o.completion_start_time, o.start_time)
         END as time_to_first_token,
-        o.usage_details['input'] as input_tokens,
-        o.usage_details['output'] as output_tokens,
-        o.usage_details['total'] as total_tokens,
+        o.input_tokens_calculated as input_tokens,
+        o.output_tokens_calculated as output_tokens,
+        o.total_tokens_calculated as total_tokens,
         o.project_id as project_id,
         CASE WHEN o.end_time IS NULL THEN NULL
              ELSE milliseconds_diff(o.end_time, o.start_time) / 1000

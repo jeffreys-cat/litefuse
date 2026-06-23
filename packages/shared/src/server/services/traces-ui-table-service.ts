@@ -5,7 +5,6 @@ import { FilterState } from "../../types";
 import { TraceRecordReadType } from "../repositories/definitions";
 import Decimal from "decimal.js";
 import { ScoreAggregate } from "../../features/scores";
-import { reduceUsageOrCostDetails } from "../repositories";
 import { TracingSearchType } from "../../interfaces/search";
 import { ObservationLevelType, TraceDomain } from "../../domain";
 // Doris imports
@@ -23,7 +22,6 @@ import {
 } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
-import { logger } from "../logger";
 
 export type TracesTableReturnType = Pick<
   TraceRecordReadType,
@@ -113,8 +111,15 @@ export type TracesTableMetricsDorisReturnType = {
   level: ObservationLevelType;
   observation_count: number | null;
   latency: string | null;
-  usage_details: Record<string, number>;
-  cost_details: Record<string, number>;
+  // Trace-level rollups of the precomputed per-observation scalar columns
+  // (SUM of input_tokens_calculated etc., see migration 0037). Doris may return
+  // them as strings, so callers coerce with Number()/Decimal.
+  total_cost: number | string | null;
+  input_tokens: number | string | null;
+  output_tokens: number | string | null;
+  total_tokens: number | string | null;
+  input_cost: number | string | null;
+  output_cost: number | string | null;
   scores_avg: Array<{ name: string; avg_value: number }>;
   score_categories: Array<string>;
   error_count: number | null;
@@ -126,41 +131,25 @@ export type TracesTableMetricsDorisReturnType = {
 export const convertToUITableMetrics = (
   row: TracesTableMetricsDorisReturnType,
 ): Omit<TracesMetricsUiReturnType, "scores"> => {
-  const usageDetails = reduceUsageOrCostDetails(row.usage_details);
-
   return {
     id: row.id,
     projectId: row.project_id,
     latency: Number(row.latency),
-    promptTokens: BigInt(usageDetails.input ?? 0),
-    completionTokens: BigInt(usageDetails.output ?? 0),
-    totalTokens: BigInt(usageDetails.total ?? 0),
-    usageDetails: row.usage_details
-      ? Object.fromEntries(
-          Object.entries(row.usage_details).map(([key, value]) => [
-            key,
-            Number(value),
-          ]),
-        )
-      : {},
-    costDetails: row.cost_details
-      ? Object.fromEntries(
-          Object.entries(row.cost_details).map(([key, value]) => [
-            key,
-            Number(value),
-          ]),
-        )
-      : {},
+    promptTokens: BigInt(Number(row.input_tokens ?? 0)),
+    completionTokens: BigInt(Number(row.output_tokens ?? 0)),
+    totalTokens: BigInt(Number(row.total_tokens ?? 0)),
+    // The per-key usage/cost breakdown shown in the list's hover tooltip is
+    // lazy-loaded per trace (getTraceUsageBreakdown) instead of being aggregated
+    // here, so the list response carries only the scalar totals above.
+    usageDetails: {},
+    costDetails: {},
     observationCount: BigInt(row.observation_count ?? 0),
-    calculatedTotalCost: row.cost_details?.total
-      ? new Decimal(row.cost_details.total)
-      : null,
-    calculatedInputCost: row.cost_details?.input
-      ? new Decimal(row.cost_details.input)
-      : null,
-    calculatedOutputCost: row.cost_details?.output
-      ? new Decimal(row.cost_details.output)
-      : null,
+    calculatedTotalCost:
+      row.total_cost != null ? new Decimal(row.total_cost) : null,
+    calculatedInputCost:
+      row.input_cost != null ? new Decimal(row.input_cost) : null,
+    calculatedOutputCost:
+      row.output_cost != null ? new Decimal(row.output_cost) : null,
     level: row.level,
     debugCount: BigInt(row.debug_count ?? 0),
     warningCount: BigInt(row.warning_count ?? 0),
@@ -244,8 +233,12 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         t.project_id as project_id,
         t.start_time as ${dq("timestamp")},
         os.latency_milliseconds / 1000 as latency,
-        os.cost_details as cost_details,
-        os.usage_details as usage_details,
+        os.total_cost as total_cost,
+        os.input_tokens as input_tokens,
+        os.output_tokens as output_tokens,
+        os.total_tokens as total_tokens,
+        os.input_cost as input_cost,
+        os.output_cost as output_cost,
         os.aggregated_level as level,
         os.error_count as error_count,
         os.warning_count as warning_count,
@@ -407,90 +400,44 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     select === "metrics" || requiresObservationsJoin
       ? `
       observations_stats AS (
+        -- Trace-level rollup of its observations. Token/cost totals come from the
+        -- precomputed per-observation scalar columns (input_tokens_calculated etc.,
+        -- see migration 0037) summed per trace — no LATERAL VIEW explode_map over
+        -- the usage_details/cost_details maps. The per-key breakdown shown in the
+        -- list's hover tooltip is lazy-loaded per trace (getTraceUsageBreakdown).
         SELECT
-          agg.trace_id,
-          agg.project_id,
-          agg.observation_count,
-          agg.total_cost,
-          agg.latency_milliseconds,
-          agg.error_count,
-          agg.warning_count,
-          agg.default_count,
-          agg.debug_count,
-          agg.aggregated_level,
-          usage_maps.usage_details,
-          cost_maps.cost_details
-        FROM (
-          SELECT
-            trace_id,
-            project_id,
-            COUNT(*) AS observation_count,
-            SUM(total_cost) AS total_cost,
-            -- Calculate millisecond diff in Doris - use CASE WHEN instead of least/greatest
-            milliseconds_diff(
-            CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
-            CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
-            ) as latency_milliseconds,
-            -- Conditional counts
-            sum(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as error_count,
-            sum(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) as warning_count,
-            sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) as default_count,
-            sum(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) as debug_count,
-            -- Level aggregation
-            CASE 
-              WHEN ARRAY_CONTAINS(collect_list(level), 'ERROR') THEN 'ERROR'
-              WHEN ARRAY_CONTAINS(collect_list(level), 'WARNING') THEN 'WARNING'
-              WHEN ARRAY_CONTAINS(collect_list(level), 'DEFAULT') THEN 'DEFAULT'
-              ELSE 'DEBUG'
-            END AS aggregated_level
-          FROM (
-            SELECT
-              trace_id,
-              project_id,
-              level,
-              start_time,
-              end_time,
-              total_cost
-            FROM events_full o
-            WHERE project_id = {projectId: String}
-            AND parent_span_id != ''
-            ${timeStampFilter ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
-            ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
-          ) obs
-          GROUP BY trace_id, project_id
-        ) agg
-        LEFT JOIN (
-          SELECT trace_id, project_id,
-            map_agg(usage_key, usage_sum) as usage_details
-          FROM (
-            SELECT o.trace_id, o.project_id, usage_key, sum(usage_value) as usage_sum
-            FROM events_full o
-            LATERAL VIEW explode_map(usage_details) usage_exploded AS usage_key, usage_value
-            WHERE o.project_id = {projectId: String}
-            AND o.parent_span_id != ''
-            ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
-            ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
-            AND usage_details IS NOT NULL
-            GROUP BY o.trace_id, o.project_id, usage_key
-          ) u
-          GROUP BY trace_id, project_id
-        ) usage_maps ON agg.trace_id = usage_maps.trace_id AND agg.project_id = usage_maps.project_id
-        LEFT JOIN (
-          SELECT trace_id, project_id,
-            map_agg(cost_key, cost_sum) as cost_details
-          FROM (
-            SELECT o.trace_id, o.project_id, cost_key, sum(cost_value) as cost_sum
-            FROM events_full o
-            LATERAL VIEW explode_map(cost_details) cost_exploded AS cost_key, cost_value
-            WHERE o.project_id = {projectId: String}
-            AND o.parent_span_id != ''
-            ${timeStampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
-            ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
-            AND cost_details IS NOT NULL
-            GROUP BY o.trace_id, o.project_id, cost_key
-          ) c
-          GROUP BY trace_id, project_id
-        ) cost_maps ON agg.trace_id = cost_maps.trace_id AND agg.project_id = cost_maps.project_id
+          trace_id,
+          project_id,
+          COUNT(*) AS observation_count,
+          SUM(total_cost) AS total_cost,
+          SUM(input_tokens_calculated) AS input_tokens,
+          SUM(output_tokens_calculated) AS output_tokens,
+          SUM(total_tokens_calculated) AS total_tokens,
+          SUM(input_cost_calculated) AS input_cost,
+          SUM(output_cost_calculated) AS output_cost,
+          -- Calculate millisecond diff in Doris - use CASE WHEN instead of least/greatest
+          milliseconds_diff(
+          CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
+          CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
+          ) as latency_milliseconds,
+          -- Conditional counts
+          sum(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as error_count,
+          sum(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) as warning_count,
+          sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) as default_count,
+          sum(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) as debug_count,
+          -- Level aggregation
+          CASE
+            WHEN ARRAY_CONTAINS(collect_list(level), 'ERROR') THEN 'ERROR'
+            WHEN ARRAY_CONTAINS(collect_list(level), 'WARNING') THEN 'WARNING'
+            WHEN ARRAY_CONTAINS(collect_list(level), 'DEFAULT') THEN 'DEFAULT'
+            ELSE 'DEBUG'
+          END AS aggregated_level
+        FROM events_full o
+        WHERE project_id = {projectId: String}
+        AND parent_span_id != ''
+        ${timeStampFilter ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+        ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
+        GROUP BY trace_id, project_id
       )`
       : "";
 
@@ -574,13 +521,11 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   // Define Doris-specific return type for metrics
   type DorisMetricsReturnType = Omit<
     TracesTableMetricsDorisReturnType,
-    "scores_avg" | "score_categories" | "usage_details" | "cost_details"
+    "scores_avg" | "score_categories"
   > & {
     // scores_avg: Array of struct objects ({col1, col2} from Doris struct), or JSON string
     scores_avg: string | Array<Record<string, unknown>>;
     score_categories: string | Array<string>; // Array<"name:value"> or JSON string
-    usage_details: string | Record<string, number> | null; // Doris MAP comes back as a JSON string; accept the parsed object too for callers that pre-parse
-    cost_details: string | Record<string, number> | null;
   };
 
   const res = await queryDoris<SelectReturnTypeMap[keyof SelectReturnTypeMap]>({
@@ -613,56 +558,6 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   if (select === "metrics") {
     const processedRes = (res as unknown as DorisMetricsReturnType[]).map(
       (row) => {
-        // Helper function to parse details fields (usage_details, cost_details)
-        const parseDetails = (
-          details: string | Record<string, number> | null,
-        ): Record<string, number> => {
-          if (!details) {
-            return {};
-          }
-
-          // If already an object, return as is
-          if (typeof details === "object" && !Array.isArray(details)) {
-            return details;
-          }
-
-          // If it's a string (typical Doris MAP output), parse it
-          if (typeof details === "string") {
-            const trimmed = details.trim();
-
-            // Handle common null/empty cases
-            if (!trimmed || trimmed === "null" || trimmed === "NULL") {
-              return {};
-            }
-
-            // Handle empty object/array cases
-            if (trimmed === "{}" || trimmed === "[]") {
-              return {};
-            }
-
-            try {
-              const parsed = JSON.parse(trimmed);
-              if (typeof parsed === "object" && !Array.isArray(parsed)) {
-                // Convert values to numbers
-                const result: Record<string, number> = {};
-                for (const [key, value] of Object.entries(parsed)) {
-                  result[key] = Number(value) || 0;
-                }
-                return result;
-              }
-              return {};
-            } catch (error) {
-              logger.warn("Failed to parse details JSON:", {
-                error,
-                rawValue: trimmed.substring(0, 100),
-              });
-              return {};
-            }
-          }
-
-          return {};
-        };
-
         // Normalize the Array<Struct(name, avg_value)> that Doris returns.
         // The mysql driver serializes struct elements as
         // {"col1": name, "col2": avg_value}; we rename to {name, avg_value}.
@@ -711,8 +606,6 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           ...row,
           scores_avg: parsedScoresAvg,
           score_categories: scoreCategoriesArray,
-          usage_details: parseDetails(row.usage_details),
-          cost_details: parseDetails(row.cost_details),
         } as TracesTableMetricsDorisReturnType;
       },
     );
