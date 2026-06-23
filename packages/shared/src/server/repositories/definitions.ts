@@ -746,6 +746,13 @@ export type EventRecordBaseType = z.infer<typeof eventRecordBaseSchema>;
 
 export const eventRecordReadSchema = eventRecordBaseSchema.extend({
   total_cost: z.number().nullish(),
+  // Precomputed UI metrics (see events_full migration 0037). Derived at ingestion
+  // from usage_details/cost_details so reads avoid explode_map/array_filter.
+  input_tokens_calculated: z.number().nullish(),
+  output_tokens_calculated: z.number().nullish(),
+  total_tokens_calculated: z.number().nullish(),
+  input_cost_calculated: z.number().nullish(),
+  output_cost_calculated: z.number().nullish(),
 
   start_time: dorisStringDateSchema,
   end_time: dorisStringDateSchema.nullish(),
@@ -758,6 +765,11 @@ export type EventRecordReadType = z.infer<typeof eventRecordReadSchema>;
 
 export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
   total_cost: z.number().nullish(),
+  input_tokens_calculated: z.number().nullish(),
+  output_tokens_calculated: z.number().nullish(),
+  total_tokens_calculated: z.number().nullish(),
+  input_cost_calculated: z.number().nullish(),
+  output_cost_calculated: z.number().nullish(),
   start_time: z.number(),
   end_time: z.number().nullish(),
   completion_start_time: z.number().nullish(),

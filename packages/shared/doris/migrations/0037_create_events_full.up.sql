@@ -16,13 +16,17 @@
 -- partial event payloads.
 
 CREATE TABLE if not exists events_full (
-    -- Key identifiers
+    -- Key identifiers (must be the leading columns, in UNIQUE KEY order:
+    -- project_id, trace_id, start_time_date, span_id)
     `project_id` varchar(64) NOT NULL,
+    -- nullable to match the ingestion schema (trace_id is nullish); a key +
+    -- distribution column may be NULL in Doris. In practice OTel spans always
+    -- carry a trace_id, so co-location holds; rare NULLs share one bucket.
+    `trace_id` varchar(64),
     `start_time_date` Date NOT NULL,
     `span_id` varchar(64) NOT NULL,
 
     -- Span relationships
-    `trace_id` varchar(64),
     `parent_span_id` String,
 
     -- Timestamps
@@ -64,6 +68,15 @@ CREATE TABLE if not exists events_full (
     `provided_cost_details` Map<String, Decimal(38, 12)>,
     `cost_details` Map<String, Decimal(38, 12)>,
     `total_cost` Decimal(38, 12),
+    -- Precomputed UI metrics, derived at ingestion from usage_details/cost_details
+    -- via reduceUsageOrCostDetails (input/output = sum of input_*/output_* keys,
+    -- incl. cache; total = the 'total' key). Read directly by the UI / aggregated
+    -- with SUM(...) by trace, replacing query-time explode_map + array_filter.
+    `input_tokens_calculated` BIGINT,
+    `output_tokens_calculated` BIGINT,
+    `total_tokens_calculated` BIGINT,
+    `input_cost_calculated` Decimal(38, 12),
+    `output_cost_calculated` Decimal(38, 12),
     `usage_pricing_tier_id` String,
     `usage_pricing_tier_name` String,
 
@@ -143,9 +156,13 @@ CREATE TABLE if not exists events_full (
     INDEX idx_input (`input`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for input content search',
     INDEX idx_output (`output`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for output content search'
 ) ENGINE=OLAP
-UNIQUE KEY(`project_id`, `start_time_date`, `span_id`)
+-- Key leads with project_id (every query filters it → tenant locality / prefix seek).
+-- trace_id is keyed + hashed so a trace's spans co-locate in one bucket (fast trace
+-- detail) and a project's data spreads across buckets (scan parallelism), unlike the
+-- old HASH(project_id) which put a whole project in one bucket.
+UNIQUE KEY(`project_id`, `trace_id`, `start_time_date`, `span_id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
-DISTRIBUTED BY HASH(`project_id`) BUCKETS 8
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1",
     "enable_unique_key_merge_on_write" = "true"

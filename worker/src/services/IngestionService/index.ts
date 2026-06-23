@@ -39,6 +39,7 @@ import {
   UsageCostType,
   findModel,
   matchPricingTier,
+  reduceUsageOrCostDetails,
   validateAndInflateScore,
   DatasetRunItemRecordInsertType,
   EventRecordInsertType,
@@ -330,6 +331,18 @@ export class IngestionService {
 
     const resolvedInput: string | null | undefined = eventData.input;
 
+    // Final usage/cost maps (after model-pricing computation, with provided/event
+    // fallbacks). Reduce them once into the precomputed UI scalars so reads can
+    // SUM(input_tokens_calculated) etc. instead of explode_map + array_filter over
+    // the maps at query time. reduceUsageOrCostDetails matches the UI semantics:
+    // input/output = sum of input_*/output_* keys (incl. cache), total = ['total'].
+    const usageDetailsForRow =
+      generationUsage?.usage_details ?? eventData.usageDetails ?? {};
+    const costDetailsForRow =
+      generationUsage?.cost_details ?? eventData.costDetails ?? {};
+    const reducedUsage = reduceUsageOrCostDetails(usageDetailsForRow);
+    const reducedCost = reduceUsageOrCostDetails(costDetailsForRow);
+
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
       id: eventData.spanId,
@@ -394,16 +407,21 @@ export class IngestionService {
 
       // Usage & Cost
       provided_usage_details: eventData.providedUsageDetails ?? {},
-      usage_details:
-        generationUsage?.usage_details ?? eventData.usageDetails ?? {},
+      usage_details: usageDetailsForRow,
       provided_cost_details: eventData.providedCostDetails ?? {},
-      cost_details:
-        generationUsage?.cost_details ?? eventData.costDetails ?? {},
+      cost_details: costDetailsForRow,
       // total_cost (denormalised from cost_details) is what dashboards
       // sum() in Doris — without this, events_full.total_cost stays 0
       // even though cost_details has the per-key breakdown, and the
       // Home/Model-Usage cost widgets show $0.
       total_cost: generationUsage?.total_cost ?? null,
+      // Precomputed UI metrics (see migration 0037). Trace-type spans carry empty
+      // usage/cost maps, so these stay null for them and SUM() ignores them.
+      input_tokens_calculated: reducedUsage.input ?? null,
+      output_tokens_calculated: reducedUsage.output ?? null,
+      total_tokens_calculated: reducedUsage.total ?? null,
+      input_cost_calculated: reducedCost.input ?? null,
+      output_cost_calculated: reducedCost.output ?? null,
 
       usage_pricing_tier_id: generationUsage?.usage_pricing_tier_id,
       usage_pricing_tier_name: generationUsage?.usage_pricing_tier_name,
