@@ -60,13 +60,15 @@ type DatasetRunItemsByDatasetIdQuery = Omit<
 type DatasetRunsMetricsTableQuery = {
   select: "rows" | "metrics" | "count";
   projectId: string;
-  datasetId: string;
+  datasetId?: string;
   filter: FilterState;
   runIds?: string[];
   orderBy?: OrderByState;
   limit?: number;
   offset?: number;
 };
+
+type DatasetRunsMetricsTableOpts = Omit<DatasetRunsMetricsTableQuery, "select">;
 
 type BaseDatasetRunItemsWithoutIOQuery = {
   projectId: string;
@@ -258,6 +260,12 @@ const getDatasetRunsTableInternal = async <T>(
   },
 ): Promise<Array<T>> => {
   const { projectId, datasetId, runIds, filter, orderBy, limit, offset } = opts;
+  const datasetWhereClause = datasetId
+    ? "AND dri.dataset_id = {datasetId: String}"
+    : "";
+  const outerDatasetWhereClause = datasetId
+    ? "AND drm.dataset_id = {datasetId: String}"
+    : "";
   let select = "";
 
   switch (opts.select) {
@@ -410,7 +418,7 @@ const getDatasetRunsTableInternal = async <T>(
           string_value
       ) s ON s.project_id = dri.project_id AND s.trace_id = dri.trace_id
       WHERE dri.project_id = {projectId: String}
-        AND dri.dataset_id = {datasetId: String}
+        ${datasetWhereClause}
       GROUP BY dri.dataset_run_id, dri.project_id
     ),
   `;
@@ -518,7 +526,7 @@ const getDatasetRunsTableInternal = async <T>(
       ${select}
     FROM dataset_run_metrics drm
     LEFT JOIN scores_aggregated sa ON drm.dataset_run_id = sa.dataset_run_id AND drm.project_id = sa.project_id
-    WHERE drm.project_id = {projectId: String} AND drm.dataset_id = {datasetId: String}
+    WHERE drm.project_id = {projectId: String} ${outerDatasetWhereClause}
     ${appliedUserFilter.query ? `AND ${appliedUserFilter.query}` : ""}
     ${orderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
@@ -527,7 +535,7 @@ const getDatasetRunsTableInternal = async <T>(
     query,
     params: {
       projectId,
-      datasetId,
+      ...(datasetId ? { datasetId } : {}),
       ...(runIds && runIds.length > 0 ? { runIds } : {}),
       ...appliedScoresFilter.params,
       ...baseFilter.params,
@@ -539,7 +547,7 @@ const getDatasetRunsTableInternal = async <T>(
       feature: "datasets",
       type: "dataset-run-items",
       projectId,
-      datasetId,
+      ...(datasetId ? { datasetId } : {}),
     },
   });
 
@@ -547,7 +555,7 @@ const getDatasetRunsTableInternal = async <T>(
 };
 
 export const getDatasetRunsTableMetricsCh = async (
-  opts: Omit<DatasetRunsMetricsTableQuery, "select">,
+  opts: DatasetRunsMetricsTableOpts,
 ): Promise<DatasetRunsMetrics[]> => {
   // First get the metrics (latency, cost, counts)
   const rows = await getDatasetRunsTableInternal<DatasetRunsMetricsRecordType>({
@@ -560,7 +568,7 @@ export const getDatasetRunsTableMetricsCh = async (
 };
 
 export const getDatasetRunsTableRowsCh = async (
-  opts: Omit<DatasetRunsMetricsTableQuery, "select">,
+  opts: DatasetRunsMetricsTableOpts,
 ): Promise<DatasetRunsRows[]> => {
   const rows = await getDatasetRunsTableInternal<DatasetRunsRowsRecordType>({
     ...opts,
@@ -572,7 +580,7 @@ export const getDatasetRunsTableRowsCh = async (
 };
 
 export const getDatasetRunsTableCountCh = async (
-  opts: Omit<DatasetRunsMetricsTableQuery, "select">,
+  opts: DatasetRunsMetricsTableOpts,
 ): Promise<number> => {
   const rows = await getDatasetRunsTableInternal<{ count: string }>({
     ...opts,
