@@ -2161,34 +2161,127 @@ export class OtelIngestionProcessor {
       if (Object.keys(result).length > 0) return result;
     }
 
+    // Generic gen_ai.usage.* / llm.token_count.* path. Ported verbatim from
+    // upstream langfuse-main: it recognizes the many cache-token spellings and
+    // normalizes them to the input_* vocabulary (and subtracts cache from base
+    // input), so cache counts as input consistently for ANY standard gen_ai
+    // sender — the fork previously stored cache keys (cache_read_input_tokens)
+    // verbatim here, which made the cell (startsWith input) and the breakdown
+    // tooltip (includes input) disagree for those sources.
+    return this.extractGenericGenAiUsageDetails(attributes);
+  }
+
+  private extractGenericGenAiUsageDetails(
+    attributes: Record<string, unknown>,
+  ): Record<string, number> {
     const usageDetails = Object.keys(attributes).filter(
       (key) =>
         (key.startsWith("gen_ai.usage.") && key !== "gen_ai.usage.cost") ||
-        key.startsWith("llm.token_count"),
+        key.startsWith("llm.token_count."),
     );
 
-    const usageDetailKeyMapping: Record<string, string> = {
-      prompt_tokens: "input",
-      completion_tokens: "output",
-      total_tokens: "total",
-      input_tokens: "input",
-      output_tokens: "output",
-      prompt: "input",
-      completion: "output",
-    };
+    if (usageDetails.length === 0) return {};
 
-    return usageDetails.reduce((acc: any, key) => {
-      const usageDetailKey = key
-        .replace("gen_ai.usage.", "")
-        .replace("llm.token_count.", "");
-      const mappedUsageDetailKey =
-        usageDetailKeyMapping[usageDetailKey] ?? usageDetailKey;
-      const value = Number(attributes[key]);
-      if (!Number.isNaN(value)) {
-        acc[mappedUsageDetailKey] = value;
-      }
-      return acc;
-    }, {});
+    const rawUsageDetails = usageDetails.reduce(
+      (acc: Record<string, number>, key) => {
+        const usageDetailKey = key
+          .replace("gen_ai.usage.", "")
+          .replace("llm.token_count.", "");
+        const value = Number(attributes[key]);
+
+        if (!Number.isNaN(value)) {
+          acc[usageDetailKey] = value;
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    const inputTokens =
+      rawUsageDetails["prompt_tokens"] ??
+      rawUsageDetails["input_tokens"] ??
+      rawUsageDetails["prompt"];
+    const outputTokens =
+      rawUsageDetails["completion_tokens"] ??
+      rawUsageDetails["output_tokens"] ??
+      rawUsageDetails["completion"];
+    const totalTokens =
+      rawUsageDetails["total_tokens"] ?? rawUsageDetails["total"];
+    const cacheReadTokens =
+      rawUsageDetails["cache_read.input_tokens"] ??
+      rawUsageDetails["cache_read_tokens"] ??
+      rawUsageDetails["details.cache_read_tokens"] ??
+      rawUsageDetails["details.cache_read_input_tokens"] ??
+      rawUsageDetails["prompt_details.cache_read"];
+    const cacheCreationTokens =
+      rawUsageDetails["cache_creation.input_tokens"] ??
+      rawUsageDetails["cache_write_tokens"] ??
+      rawUsageDetails["details.cache_write_tokens"] ??
+      rawUsageDetails["details.cache_creation_input_tokens"] ??
+      rawUsageDetails["prompt_details.cache_write"];
+
+    const normalizedUsageDetails = Object.entries(rawUsageDetails).reduce(
+      (acc: Record<string, number>, [key, value]) => {
+        if (
+          [
+            "prompt_tokens",
+            "input_tokens",
+            "prompt",
+            "completion_tokens",
+            "output_tokens",
+            "completion",
+            "total_tokens",
+            "total",
+            "cache_read.input_tokens",
+            "cache_read_tokens",
+            "details.cache_read_tokens",
+            "details.cache_read_input_tokens",
+            "prompt_details.cache_read",
+            "cache_creation.input_tokens",
+            "cache_write_tokens",
+            "details.cache_write_tokens",
+            "details.cache_creation_input_tokens",
+            "prompt_details.cache_write",
+          ].includes(key)
+        ) {
+          return acc;
+        }
+
+        const normalizedKey = key.startsWith("details.")
+          ? key.replace("details.", "")
+          : key;
+
+        acc[normalizedKey] = value;
+        return acc;
+      },
+      {},
+    );
+
+    if (inputTokens !== undefined) {
+      normalizedUsageDetails.input = Math.max(
+        inputTokens - (cacheReadTokens ?? 0) - (cacheCreationTokens ?? 0),
+        0,
+      );
+    }
+
+    if (outputTokens !== undefined) {
+      normalizedUsageDetails.output = outputTokens;
+    }
+
+    if (totalTokens !== undefined) {
+      normalizedUsageDetails.total = totalTokens;
+    }
+
+    if (cacheReadTokens !== undefined) {
+      normalizedUsageDetails.input_cached_tokens = cacheReadTokens;
+    }
+
+    if (cacheCreationTokens !== undefined) {
+      normalizedUsageDetails.input_cache_creation = cacheCreationTokens;
+    }
+
+    return normalizedUsageDetails;
   }
 
   private extractCostDetails(
