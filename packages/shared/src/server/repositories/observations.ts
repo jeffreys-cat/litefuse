@@ -378,9 +378,15 @@ export const getObservationById = async ({
     traceId,
     renderingProps,
   });
-  const mapped = records.map((record) =>
-    convertObservation(record, renderingProps),
-  );
+  const mapped = records.map((record) => ({
+    ...convertObservation(record, renderingProps),
+    // Carry the precomputed compact preview (input_trim/output_trim, migration
+    // 0037) so observations.byId can serve it for verbosity "compact" (the
+    // observations-list cell) without parsing the full Variant.
+    input_trim: (record as { input_trim?: string | null }).input_trim ?? null,
+    output_trim:
+      (record as { output_trim?: string | null }).output_trim ?? null,
+  }));
 
   mapped.forEach((observation) => {
     recordDistribution(
@@ -517,7 +523,9 @@ const getObservationByIdInternal = async ({
       tool_call_names,
       created_at,
       updated_at,
-      event_ts
+      event_ts,
+      input_trim,
+      output_trim
     FROM events_full
     WHERE span_id = {id: String}
     AND project_id = {projectId: String}
