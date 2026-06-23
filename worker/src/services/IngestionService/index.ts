@@ -6,6 +6,7 @@ import {
   ObservationLevel,
   PrismaClient,
   Prompt,
+  parseIO,
 } from "@langfuse/shared";
 import { env } from "../../env";
 import {
@@ -331,6 +332,19 @@ export class IngestionService {
 
     const resolvedInput: string | null | undefined = eventData.input;
 
+    // Precomputed compact preview of input/output for list tables. Uses the same
+    // parseIO(.., "compact") the UI applies (ChatML last-message extraction, raw
+    // fallback) then truncates to 200 chars. Truncated JSON renders fine — the UI's
+    // deepParseJson falls back to showing the raw string on parse failure.
+    const trimPreview = (io: string | null | undefined): string | null => {
+      if (io == null) return null;
+      const compact = parseIO(io, "compact");
+      const s = typeof compact === "string" ? compact : io;
+      return s.slice(0, 200);
+    };
+    const input_trim = trimPreview(resolvedInput);
+    const output_trim = trimPreview(eventData.output);
+
     // Final usage/cost maps (after model-pricing computation, with provided/event
     // fallbacks). Reduce them once into the precomputed UI scalars so reads can
     // SUM(input_tokens_calculated) etc. instead of explode_map + array_filter over
@@ -433,6 +447,8 @@ export class IngestionService {
 
       input: resolvedInput,
       output: eventData.output,
+      input_trim,
+      output_trim,
 
       // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
       // shape was a transitional fork artifact; events_full uses just the two

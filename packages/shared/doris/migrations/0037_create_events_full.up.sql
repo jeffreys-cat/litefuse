@@ -88,6 +88,13 @@ CREATE TABLE if not exists events_full (
     -- I/O (Variant: stores arbitrary JSON; queries can use variant_col['path']).
     `input` Variant,
     `output` Variant,
+    -- Precomputed compact preview of input/output for list tables (the same
+    -- parseIO(.., "compact") the UI applies — ChatML last-message extraction —
+    -- truncated to 200 chars at ingestion). Lets list queries show a preview
+    -- without lazy-loading / parsing the full Variant per row. Full I/O stays in
+    -- input/output above for the detail view.
+    `input_trim` String,
+    `output_trim` String,
 
     -- Flattened metadata (parallel arrays, matches main V4 events_full).
     -- Cross-batch deep-merge happens in IngestionService.mergeFlatMetadata

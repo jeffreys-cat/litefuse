@@ -703,6 +703,10 @@ export const eventRecordBaseSchema = z.object({
   // I/O
   input: z.string().nullish(),
   output: z.string().nullish(),
+  // Precomputed compact preview (see events_full migration 0037): parseIO(.., "compact")
+  // truncated to 200 chars, for list tables. Full I/O stays in input/output.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
 
   // Flattened metadata (parallel arrays, matches langfuse-main V4 events_full).
   // The previous fork shape — a separate `metadata` Map plus `metadata_hashes`
