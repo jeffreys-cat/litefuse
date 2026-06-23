@@ -156,6 +156,11 @@ export const traceRecordReadSchema = traceRecordBaseSchema.extend({
   // Doris Variant columns: mysql2 typeCast parses them to object/array on read
   input: z.unknown().nullish(),
   output: z.unknown().nullish(),
+  // Precomputed compact preview from the root span (input_trim/output_trim, see
+  // migration 0037). trace.byId returns these as input/output for verbosity
+  // "compact" (the traces-list cell) instead of parsing the full Variant.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
   timestamp: dorisStringDateSchema,
   created_at: dorisStringDateSchema,
   updated_at: dorisStringDateSchema,

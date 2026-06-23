@@ -45,8 +45,17 @@ export const observationsRouter = createTRPCRouter({
       }
       return {
         ...toDomainWithStringifiedMetadata(obs),
-        input: parseIO(obs.input, input.verbosity) as string,
-        output: parseIO(obs.output, input.verbosity) as string,
+        // "compact" is the observations-list cell's preview request — serve the
+        // precomputed input_trim/output_trim (migration 0037) instead of parsing
+        // the full Variant. full/truncated callers keep the full I/O.
+        input:
+          input.verbosity === "compact"
+            ? ((obs as { input_trim?: string | null }).input_trim ?? null)
+            : (parseIO(obs.input, input.verbosity) as string),
+        output:
+          input.verbosity === "compact"
+            ? ((obs as { output_trim?: string | null }).output_trim ?? null)
+            : (parseIO(obs.output, input.verbosity) as string),
         internalModel: obs?.internalModelId,
       };
     }),

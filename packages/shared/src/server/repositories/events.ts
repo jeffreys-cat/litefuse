@@ -561,9 +561,15 @@ export const getObservationByIdFromEventsTable = async ({
     type,
     traceId,
   });
-  const mapped = records.map((record) =>
-    convertObservation(record, renderingProps),
-  );
+  const mapped = records.map((record) => ({
+    ...convertObservation(record, renderingProps),
+    // Carry the precomputed compact preview (input_trim/output_trim, migration
+    // 0037) so observations.byId can serve it for verbosity "compact" (the
+    // observations-list cell) without parsing the full Variant.
+    input_trim: (record as { input_trim?: string | null }).input_trim ?? null,
+    output_trim:
+      (record as { output_trim?: string | null }).output_trim ?? null,
+  }));
 
   mapped.forEach((observation) => {
     recordDistribution(
@@ -858,6 +864,8 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.version,
       o.input,
       o.output,
+      o.input_trim,
+      o.output_trim,
       o.metadata_names,
       o.metadata_values,
       o.prompt_id,

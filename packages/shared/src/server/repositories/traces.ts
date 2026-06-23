@@ -91,6 +91,8 @@ const buildTraceAggregationQuery = (params: {
         tags,
         input,
         output,
+        input_trim,
+        output_trim,
         metadata_names,
         metadata_values
       FROM (
@@ -100,6 +102,8 @@ const buildTraceAggregationQuery = (params: {
           tags,
           input,
           output,
+          input_trim,
+          output_trim,
           metadata_names,
           metadata_values,
           ROW_NUMBER() OVER (
@@ -131,6 +135,8 @@ const buildTraceAggregationQuery = (params: {
       r.tags,
       r.input,
       r.output,
+      r.input_trim,
+      r.output_trim,
       r.metadata_names,
       r.metadata_values
     FROM trace_scalars s
@@ -609,7 +615,14 @@ export const getTraceById = async ({
     metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
   })) as TraceRecordReadType[];
 
-  const res = records.map((r) => convertDorisToDomain(r));
+  // Carry the precomputed compact preview (root span input_trim/output_trim)
+  // alongside the domain object so trace.byId can serve it for verbosity
+  // "compact" (the traces-list cell) without parsing the full Variant.
+  const res = records.map((r) => ({
+    ...convertDorisToDomain(r),
+    input_trim: r.input_trim ?? null,
+    output_trim: r.output_trim ?? null,
+  }));
 
   res.forEach((trace) => {
     recordDistribution(

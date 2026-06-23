@@ -458,8 +458,17 @@ const enforceTraceAccess = t.middleware(async (opts) => {
 
   const trace = {
     ...dorisTrace,
-    input: parseIO(dorisTrace.input, verbosity),
-    output: parseIO(dorisTrace.output, verbosity),
+    // "compact" is the traces-list cell's preview request — serve the precomputed
+    // input_trim/output_trim (root span, see migration 0037) instead of parsing
+    // the full Variant. full/truncated (detail, dataset/session views) unchanged.
+    input:
+      verbosity === "compact"
+        ? (dorisTrace.input_trim ?? null)
+        : parseIO(dorisTrace.input, verbosity),
+    output:
+      verbosity === "compact"
+        ? (dorisTrace.output_trim ?? null)
+        : parseIO(dorisTrace.output, verbosity),
   };
 
   const sessionProject = ctx.session?.user?.organizations
