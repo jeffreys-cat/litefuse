@@ -446,6 +446,9 @@ const enforceTraceAccess = t.middleware(async (opts) => {
       truncated: verbosity === "truncated",
       shouldJsonParse: false, // we do not want to parse the input/output for tRPC
     },
+    // "compact" (the traces-list cell) only needs input_trim/output_trim, so skip
+    // reading the full input/output Variant from Doris entirely.
+    excludeInputOutput: verbosity === "compact",
   });
 
   if (!dorisTrace) {

@@ -58,8 +58,18 @@ const buildTraceAggregationQuery = (params: {
   whereSql: string;
   extraOrderBy?: string;
   extraLimit?: string;
+  /** Skip reading the full input/output Variant from the root span (only
+   * input_trim/output_trim are returned). Used for verbosity "compact". */
+  excludeFullIO?: boolean;
 }): string => {
-  const { whereSql, extraOrderBy = "", extraLimit = "" } = params;
+  const {
+    whereSql,
+    extraOrderBy = "",
+    extraLimit = "",
+    excludeFullIO = false,
+  } = params;
+  const rootInput = excludeFullIO ? "CAST(NULL AS STRING)" : "input";
+  const rootOutput = excludeFullIO ? "CAST(NULL AS STRING)" : "output";
   return `
     WITH trace_scalars AS (
       SELECT
@@ -100,8 +110,8 @@ const buildTraceAggregationQuery = (params: {
           trace_id,
           project_id,
           tags,
-          input,
-          output,
+          ${rootInput} as input,
+          ${rootOutput} as output,
           input_trim,
           output_trim,
           metadata_names,
@@ -581,6 +591,9 @@ export const getTraceById = async ({
   const query = buildTraceAggregationQuery({
     whereSql,
     extraLimit: "LIMIT 1",
+    // For verbosity "compact" the caller only needs input_trim/output_trim, so
+    // skip reading the full input/output Variant from the root span entirely.
+    excludeFullIO: excludeInputOutput,
   });
 
   const rawRecords = await queryDoris<

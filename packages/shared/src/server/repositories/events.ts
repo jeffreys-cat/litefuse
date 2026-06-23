@@ -625,6 +625,8 @@ async function getObservationByIdFromEventsTableInternal({
       status_message,
       version,
       ${fetchWithInputOutput ? "input, output," : ""}
+      input_trim,
+      output_trim,
       provided_model_name,
       model_id AS internal_model_id,
       model_parameters,

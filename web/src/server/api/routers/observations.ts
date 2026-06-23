@@ -26,7 +26,9 @@ export const observationsRouter = createTRPCRouter({
       const queryOpts = {
         id: input.observationId,
         projectId: input.projectId,
-        fetchWithInputOutput: true,
+        // "compact" (the observations-list cell) only needs input_trim/
+        // output_trim, so skip reading the full input/output Variant from Doris.
+        fetchWithInputOutput: input.verbosity !== "compact",
         traceId: input.traceId,
         startTime: input.startTime ?? undefined,
         renderingProps: {
