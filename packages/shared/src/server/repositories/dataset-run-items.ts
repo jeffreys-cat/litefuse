@@ -455,9 +455,14 @@ const getDatasetRunsTableInternal = async <T>(
   const datasetRunItemsDedupedCte = `
     dataset_run_items_deduped AS (
       SELECT *
-      FROM dataset_run_items_rmt dri
-      WHERE ${baseFilter.query}
-      QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1
+      FROM (
+        SELECT
+          dri.*,
+          ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) as rn
+        FROM dataset_run_items_rmt dri
+        WHERE ${baseFilter.query}
+      ) ranked_dataset_run_items
+      WHERE rn = 1
     ),
   `;
 
@@ -876,21 +881,21 @@ const getDatasetRunItemsTableInternal = async <
     });
   }
 
-  // Inner ORDER BY runs inside the QUALIFY window function; base-table
+  // Inner ORDER BY runs inside the row-number window function; base-table
   // alias is in scope, so we emit fully-qualified refs ("dri.`created_at`").
   const innerOrderByClause = orderByToDorisSQL(
     orderByArray,
     datasetRunItemsTableUiColumnDefinitions,
     { scope: "inner" },
   );
-  // QUALIFY ROW_NUMBER() OVER(... ORDER BY <exprs>) expects the expressions
-  // without the leading "ORDER BY " keyword.
+  // ROW_NUMBER() OVER(... ORDER BY <exprs>) expects the expressions without
+  // the leading "ORDER BY " keyword.
   const orderByExprs = innerOrderByClause
     .replace(/^\s*ORDER BY\s+/i, "")
     .trim();
   // Outer ORDER BY runs on the subquery wrapper below. After Doris Nereids
-  // applies the inner QUALIFY filter, the `dri` / `sa` base-table aliases
-  // go out of scope; only the SELECT projection aliases are resolvable.
+  // applies the inner row-number filter, the `dri` / `sa` base-table aliases go
+  // out of scope; only the SELECT projection aliases are resolvable.
   // Emit "`created_at` DESC" rather than "dri.`created_at` DESC" for the
   // outer clause.
   const outerOrderByClause = orderByToDorisSQL(
@@ -949,12 +954,13 @@ const getDatasetRunItemsTableInternal = async <
     ${scoresCte}
     SELECT * FROM (
       SELECT
-        ${selectString}
+        ${selectString},
+        ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) as rn
       FROM dataset_run_items_rmt dri
       ${hasScoresFilter ? `LEFT JOIN scores_aggregated sa ON dri.dataset_run_id = sa.dataset_run_id AND dri.project_id = sa.project_id AND dri.trace_id = sa.trace_id` : ""}
       WHERE ${appliedFilter.query}
-      QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY ${orderByExprs}) = 1
     ) deduped
+    WHERE rn = 1
     ${outerOrderByClause}
     ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`
       : `
@@ -1104,12 +1110,19 @@ export const getDatasetItemIdsByTraceIdCh = async (
 
   const query = `
   SELECT
-    dri.dataset_item_id as dataset_item_id,
-    dri.observation_id as observation_id,
-    dri.dataset_id as dataset_id
-  FROM dataset_run_items_rmt dri
-  WHERE ${appliedFilter.query}
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) = 1;`;
+    dataset_item_id,
+    observation_id,
+    dataset_id
+  FROM (
+    SELECT
+      dri.dataset_item_id as dataset_item_id,
+      dri.observation_id as observation_id,
+      dri.dataset_id as dataset_id,
+      ROW_NUMBER() OVER (PARTITION BY dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id ORDER BY dri.created_at DESC) as rn
+    FROM dataset_run_items_rmt dri
+    WHERE ${appliedFilter.query}
+  ) ranked_dataset_run_items
+  WHERE rn = 1;`;
 
   const res = await queryDoris<{
     dataset_item_id: string;
