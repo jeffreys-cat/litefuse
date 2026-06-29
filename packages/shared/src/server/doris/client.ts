@@ -8,13 +8,26 @@ import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
 
-// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
-// mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
-// Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
-// mysql2 is in serverExternalPackages (next.config.mjs) so this internal require works at runtime.
+// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but stores
+// utf8mb4. mysql2 maps charset 33 to 'cesu8' (3-byte), so 4-byte chars (emoji)
+// in string columns decode to U+FFFD ('�'). The global fix —
+// require("mysql2/lib/constants/charset_encodings")[33]='utf8' — is blocked by
+// mysql2's package.json "exports" map, so instead the connection typeCast below
+// force-decodes string/blob columns with field.string("utf8"). See STRING_FIELD_TYPES.
 
-// const CharsetToEncoding = require("mysql2/lib/constants/charset_encodings");
-// CharsetToEncoding[33] = "utf8";
+// mysql2 field.type names for text/blob columns we force-decode as utf8 (Doris
+// stores utf8 text in all of these; no binary blobs in our schema).
+const STRING_FIELD_TYPES = new Set([
+  "VARCHAR",
+  "VAR_STRING",
+  "STRING",
+  "BLOB",
+  "TINY_BLOB",
+  "MEDIUM_BLOB",
+  "LONG_BLOB",
+  "ENUM",
+  "SET",
+]);
 
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
@@ -218,6 +231,12 @@ export class DorisClient {
               );
               return str;
             }
+          }
+          // Force utf8 decoding for string/blob columns. Doris advertises charset
+          // 33 (which mysql2 decodes as 3-byte cesu8 → '�' for 4-byte emoji), but
+          // its data is utf8mb4. field.string("utf8") decodes 4-byte chars correctly.
+          if (STRING_FIELD_TYPES.has(field.type)) {
+            return field.string("utf8");
           }
           return next();
         },
