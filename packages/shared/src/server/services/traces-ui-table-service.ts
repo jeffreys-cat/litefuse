@@ -212,17 +212,15 @@ const isTagsFilterColumn = (column: string): boolean =>
 const isMetadataFilterColumn = (column: string): boolean =>
   column === "metadata" || column === "Metadata";
 
-// Per-key metadata lookup over the OUTER rollup of the inner CTE's parallel
-// arrays (trace_by_day.metadata_names / metadata_values). The inner CTE produces
-// the root span's arrays per (trace, day); MAX() in the outer rolls them up to one
-// per trace (NULL from root-less day partitions is ignored). element_at(values,
-// array_position(names, key)) reads the per-key value; array_position returns 0
-// when the key is absent and element_at(_, 0) is NULL, matching base map['key'].
-const mvMetadataNamesExpr = "MAX(metadata_names)";
-const mvMetadataValuesExpr = "MAX(metadata_values)";
+// Per-key metadata lookup over the OUTER rollup of the inner CTE's native map
+// (trace_by_day.metadata). The inner CTE picks the root span's metadata map per
+// (trace, day) via any_value(IF(root, metadata, NULL)); any_value(metadata) in the
+// outer rolls it up to one per trace (any_value returns a non-null if one exists,
+// so root-less day partitions' NULLs are skipped). element_at(map, key) reads the
+// per-key value (NULL when the key is absent), matching base map['key'].
 const mvMetadataLookup = (key: string): string => {
   const escapedKey = key.replace(/'/g, "''");
-  return `element_at(${mvMetadataValuesExpr}, array_position(${mvMetadataNamesExpr}, '${escapedKey}'))`;
+  return `element_at(any_value(metadata), '${escapedKey}')`;
 };
 
 // Inner per-(trace, day) aggregate, written to match the traces_mv column
@@ -238,17 +236,16 @@ const MV_INNER_AGG_SELECT = `
       trace_id AS id,
       project_id,
       MIN(start_time) AS ts,
-      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
-      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
-      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      MAX(IF(parent_span_id = '', NULLIF(\`release\`, ''), NULL)) AS \`release\`,
-      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
-      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
-      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
-      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      any_value(IF(parent_span_id = '', tags, NULL)) AS tags,
+      any_value(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      any_value(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      any_value(IF(parent_span_id = '', NULLIF(\`release\`, ''), NULL)) AS \`release\`,
+      any_value(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
+      any_value(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
+      any_value(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
+      any_value(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
       MAX(\`public\`) AS \`public\`,
-      MAX(IF(parent_span_id = '', metadata_names, NULL)) AS metadata_names,
-      MAX(IF(parent_span_id = '', metadata_values, NULL)) AS metadata_values,
+      any_value(IF(parent_span_id = '', metadata, NULL)) AS metadata,
       SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
       SUM(total_cost) AS total_cost,
       SUM(input_tokens_calculated) AS input_tokens,
@@ -287,64 +284,65 @@ const OUTER_LEVEL =
 // so adding them keeps the transparent rewrite firing.
 // OUTER-query rollup expressions over the inner CTE (trace_by_day) aliases — the
 // list fast paths apply scalar/metric filters in the OUTER GROUP BY, so these
-// reference the inner pre-aggregates (MAX(MAX)=MAX, SUM(SUM)=SUM), NOT the base
-// events_full columns. Keep in sync with MV_INNER_AGG_SELECT / OUTER_* above.
+// reference the inner pre-aggregates and roll them up (any_value(any_value()) for
+// root-pick scalars, SUM(SUM)=SUM for metrics), NOT the base events_full columns.
+// Keep in sync with MV_INNER_AGG_SELECT / OUTER_* above.
 const tracesTableMvHavingColumns: UiColumnMappings = [
   // root-level scalars
   {
     uiTableName: "Environment",
     uiTableId: "environment",
     tableName: "traces",
-    select: "MAX(environment)",
+    select: "any_value(environment)",
     queryPrefix: "",
   },
   {
     uiTableName: "User ID",
     uiTableId: "userId",
     tableName: "traces",
-    select: "MAX(user_id)",
+    select: "any_value(user_id)",
     queryPrefix: "",
   },
   {
     uiTableName: "Session ID",
     uiTableId: "sessionId",
     tableName: "traces",
-    select: "MAX(session_id)",
+    select: "any_value(session_id)",
     queryPrefix: "",
   },
   {
     uiTableName: "Version",
     uiTableId: "version",
     tableName: "traces",
-    select: "MAX(version)",
+    select: "any_value(version)",
     queryPrefix: "",
   },
   {
     uiTableName: "Release",
     uiTableId: "release",
     tableName: "traces",
-    select: `MAX(${dq("release")})`,
+    select: `any_value(${dq("release")})`,
     queryPrefix: "",
   },
   {
     uiTableName: "Name",
     uiTableId: "name",
     tableName: "traces",
-    select: "MAX(name)",
+    select: "any_value(name)",
     queryPrefix: "",
   },
   {
     uiTableName: "Trace Name",
     uiTableId: "traceName",
     tableName: "traces",
-    select: "MAX(name)",
+    select: "any_value(name)",
     queryPrefix: "",
   },
   {
     uiTableName: "⭐️",
     uiTableId: "bookmarked",
     tableName: "traces",
-    select: "MAX(bookmarked)",
+    select: "any_value(bookmarked)",
     queryPrefix: "",
   },
   // observation-level metrics (folded into the per-trace aggregate)
@@ -526,9 +524,9 @@ const buildMvListWhereHaving = (
   }
 
   // tags: the inner CTE carries the root span's native ARRAY per (trace, day);
-  // MAX() rolls it up to one per trace in the outer. Match membership with
+  // any_value() rolls it up to one per trace in the outer. Match membership with
   // array_contains — exact element matching (no false substring hits).
-  const tagsExpr = "MAX(tags)";
+  const tagsExpr = "any_value(tags)";
   for (const f of filter) {
     if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
     const contains = (f.value as string[]).map((v) => {
@@ -593,8 +591,8 @@ const buildMvListWhereHaving = (
     params.searchLike = `%${searchQuery}%`;
     havingParts.push(
       `(id LIKE {searchLike: String}` +
-        ` OR MAX(user_id) LIKE {searchLike: String}` +
-        ` OR MAX(name) LIKE {searchLike: String})`,
+        ` OR any_value(user_id) LIKE {searchLike: String}` +
+        ` OR any_value(name) LIKE {searchLike: String})`,
     );
   }
 
@@ -639,14 +637,14 @@ const runMvRowsFastPath = async (params: {
       id,
       project_id,
       MIN(ts) AS ${dq("timestamp")},
-      MAX(tags) AS tags,
-      MAX(bookmarked) AS bookmarked,
-      MAX(name) AS name,
-      MAX(${dq("release")}) AS ${dq("release")},
-      MAX(version) AS version,
-      MAX(user_id) AS user_id,
-      MAX(environment) AS environment,
-      MAX(session_id) AS session_id,
+      any_value(tags) AS tags,
+      any_value(bookmarked) AS bookmarked,
+      any_value(name) AS name,
+      any_value(${dq("release")}) AS ${dq("release")},
+      any_value(version) AS version,
+      any_value(user_id) AS user_id,
+      any_value(environment) AS environment,
+      any_value(session_id) AS session_id,
       MAX(${dq("public")}) AS ${dq("public")}
     FROM trace_by_day
     GROUP BY project_id, id

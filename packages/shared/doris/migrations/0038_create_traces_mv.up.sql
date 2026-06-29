@@ -31,29 +31,30 @@ SELECT
   trace_id AS id,
   start_time_date AS timestamp_date,
   MIN(start_time) AS `timestamp`,
-  MAX(IF(parent_span_id='', IF(trace_name<>'',trace_name,name), NULL)) AS name,
-  MAX(IF(parent_span_id='', NULLIF(user_id,''), NULL)) AS user_id,
-  MAX(IF(parent_span_id='', NULLIF(session_id,''), NULL)) AS session_id,
-  MAX(IF(parent_span_id='', NULLIF(`release`,''), NULL)) AS `release`,
-  MAX(IF(parent_span_id='', NULLIF(version,''), NULL)) AS version,
-  MAX(IF(parent_span_id='', NULLIF(environment,''), NULL)) AS environment,
-  MAX(IF(parent_span_id='', bookmarked, NULL)) AS bookmarked,
+  -- Root-scoped fields use any_value(IF(parent_span_id='', val, NULL)):
+  --   * any_value returns a non-null value if one exists, so the non-root NULLs
+  --     are skipped and the root span's value is picked (with one root per group
+  --     it is effectively deterministic).
+  --   * any_value IS roll-up-able (any_value(any_value())) AND accepts every type
+  --     incl. ARRAY/MAP — unlike MAX (no MAP support) and max_by (not roll-up-able)
+  --     — so the coarser-grained trace-list query (rolled up across start_time_date)
+  --     transparently rewrites onto this MV. Used uniformly for all root-pick
+  --     fields (scalars, tags ARRAY, metadata MAP, I/O trim) for consistency;
+  --     metadata stays a single native MAP column (no parallel-array zip needed).
+  -- Genuine aggregates below (MIN(start_time), SUM, latency min/max, level counts,
+  -- MAX(public), MAX(event_ts)) stay MIN/MAX/SUM — they are not root-pick.
+  any_value(IF(parent_span_id='', IF(trace_name<>'',trace_name,name), NULL)) AS name,
+  any_value(IF(parent_span_id='', NULLIF(user_id,''), NULL)) AS user_id,
+  any_value(IF(parent_span_id='', NULLIF(session_id,''), NULL)) AS session_id,
+  any_value(IF(parent_span_id='', NULLIF(`release`,''), NULL)) AS `release`,
+  any_value(IF(parent_span_id='', NULLIF(version,''), NULL)) AS version,
+  any_value(IF(parent_span_id='', NULLIF(environment,''), NULL)) AS environment,
+  any_value(IF(parent_span_id='', bookmarked, NULL)) AS bookmarked,
   MAX(`public`) AS `public`,
-  -- tags as a native ARRAY<String> (Doris MAX supports array). MAX(IF(root,...))
-  -- picks the root span's tags and rolls up across start_time_date partitions
-  -- (MAX is roll-up-able), so the trace-list query transparently rewrites onto
-  -- this MV for both display AND filtering (array_contains on the rolled-up tags).
-  MAX(IF(parent_span_id='', tags, NULL)) AS tags,
-  -- Metadata as the parallel arrays, NOT a Map: Doris MAX does not support Map
-  -- (only ARRAY), and max_by(map) — which would keep the native map — is NOT
-  -- roll-up-able, so it breaks transparent rewrite for the coarser-grained list
-  -- query. Rolling up the two ARRAY<String> columns via MAX(IF(root,...)) keeps
-  -- both display (consumers zip names+values back to a map) and per-key filtering
-  -- (element_at(values, array_position(names, 'k'))) transparently rewritable.
-  MAX(IF(parent_span_id='', metadata_names, NULL)) AS metadata_names,
-  MAX(IF(parent_span_id='', metadata_values, NULL)) AS metadata_values,
-  MAX(IF(parent_span_id='', input_trim, NULL)) AS input,
-  MAX(IF(parent_span_id='', output_trim, NULL)) AS output,
+  any_value(IF(parent_span_id='', tags, NULL)) AS tags,
+  any_value(IF(parent_span_id='', metadata, NULL)) AS metadata,
+  any_value(IF(parent_span_id='', input_trim, NULL)) AS input,
+  any_value(IF(parent_span_id='', output_trim, NULL)) AS output,
   SUM(IF(parent_span_id<>'',1,0)) AS observations,
   SUM(input_tokens_calculated) AS input_tokens,
   SUM(output_tokens_calculated) AS output_tokens,

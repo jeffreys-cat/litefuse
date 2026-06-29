@@ -18,10 +18,7 @@ import {
 import { env } from "../../env";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
-import {
-  parseDorisStringArray,
-  zipDorisMetadataArrays,
-} from "../utils/dorisArrays";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 import { queryDoris, commandDoris, queryDorisStream } from "./doris";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { TraceRecordReadType } from "./definitions";
@@ -29,14 +26,14 @@ import { convertDorisToDomain } from "./traces_converters";
 
 /**
  * Per-trace query as a single-table conditional aggregate over events_full — no
- * ROW_NUMBER window, no self-JOIN, no double scan. Root-level fields use
- * MAX(IF(parent_span_id='', …)), which transparently rewrites onto traces_mv
- * (MAX rolls up across the MV's start_time_date partitions):
- *   - tags     → MAX(IF(root, tags, NULL))   (native ARRAY; MAX supports array)
- *   - metadata → MAX(IF(root, metadata_names, NULL)) + the matching values array;
- *                consumers zip them back via zipDorisMetadataArrays. (MAX does
- *                not support Map, so we roll up the parallel arrays instead.)
- *   - input/output → CAST(Variant AS STRING) (full) when not excludeFullIO
+ * ROW_NUMBER window, no self-JOIN, no double scan. Root-level fields are picked
+ * from the root span and the shape matches traces_mv so it transparently rewrites
+ * onto the MV (all aggregates roll up across the MV's start_time_date partitions):
+ *   - tags (ARRAY) / metadata (MAP) → any_value(IF(root, …, NULL)): any_value
+ *     accepts ARRAY and MAP, skips NULL (returns the root's value), and is
+ *     roll-up-able. metadata stays a native MAP (convertDorisToDomain parses it).
+ *   - string scalars → MAX(IF(root, …, NULL)) (deterministic skip-NULL).
+ *   - input/output → CAST(Variant AS STRING) (full) when not excludeFullIO.
  * With excludeFullIO (verbosity "compact") only input_trim/output_trim are
  * returned and the query transparently rewrites onto traces_mv.
  */
@@ -57,30 +54,29 @@ const buildTraceAggregationQuery = (params: {
   const fullIO = excludeFullIO
     ? ""
     : `
-      MAX(IF(parent_span_id = '', CAST(input AS STRING), NULL)) AS input,
-      MAX(IF(parent_span_id = '', CAST(output AS STRING), NULL)) AS output,`;
+      any_value(IF(parent_span_id = '', CAST(input AS STRING), NULL)) AS input,
+      any_value(IF(parent_span_id = '', CAST(output AS STRING), NULL)) AS output,`;
   return `
     SELECT
       trace_id AS id,
       project_id,
       MIN(start_time) AS \`timestamp\`,
-      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
-      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
-      MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
-      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
-      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
-      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      any_value(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      any_value(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
+      any_value(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      any_value(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
+      any_value(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
+      any_value(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
+      any_value(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
       MAX(${dq("public")}) AS ${dq("public")},
       MIN(created_at) AS created_at,
       MAX(updated_at) AS updated_at,
       MAX(event_ts) AS event_ts,
       MIN(is_deleted) AS is_deleted,
-      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
-      MAX(IF(parent_span_id = '', input_trim, NULL)) AS input_trim,
-      MAX(IF(parent_span_id = '', output_trim, NULL)) AS output_trim,${fullIO}
-      MAX(IF(parent_span_id = '', metadata_names, NULL)) AS metadata_names,
-      MAX(IF(parent_span_id = '', metadata_values, NULL)) AS metadata_values
+      any_value(IF(parent_span_id = '', tags, NULL)) AS tags,
+      any_value(IF(parent_span_id = '', input_trim, NULL)) AS input_trim,
+      any_value(IF(parent_span_id = '', output_trim, NULL)) AS output_trim,${fullIO}
+      any_value(IF(parent_span_id = '', metadata, NULL)) AS metadata
     FROM events_full
     WHERE ${whereSql}
     GROUP BY project_id, trace_id
@@ -88,25 +84,6 @@ const buildTraceAggregationQuery = (params: {
     ${extraLimit}
   `;
 };
-
-/**
- * Raw row shape returned by buildTraceAggregationQuery: metadata comes back as
- * the parallel arrays (metadata_names / metadata_values), not a metadata field.
- */
-type RawTraceAggregationRecord = Omit<TraceRecordReadType, "metadata"> & {
-  metadata_names?: unknown;
-  metadata_values?: unknown;
-};
-
-/**
- * Zip the parallel metadata arrays from buildTraceAggregationQuery back into the
- * Record<string,string> that TraceRecordReadType / convertDorisToDomain expect.
- */
-const zipTraceMetadata = (r: RawTraceAggregationRecord): TraceRecordReadType =>
-  ({
-    ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
-  }) as unknown as TraceRecordReadType;
 
 /**
  * Checks if trace exists in Doris.
@@ -242,9 +219,9 @@ export const getTracesByIds = async (
     extraOrderBy: "ORDER BY event_ts DESC",
   });
 
-  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
-  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
-  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
+  // metadata comes back as a native MAP (JSONEachRow → JS object);
+  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
+  const records = await queryDoris<TraceRecordReadType>({
     query,
     params: {
       traceIds,
@@ -259,7 +236,7 @@ export const getTracesByIds = async (
     },
   });
 
-  return rawRecords.map((r) => convertDorisToDomain(zipTraceMetadata(r)));
+  return records.map((r) => convertDorisToDomain(r));
 };
 
 /**
@@ -368,9 +345,9 @@ export const getTracesBySessionId = async (
     extraOrderBy: "ORDER BY event_ts DESC",
   });
 
-  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
-  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
-  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
+  // metadata comes back as a native MAP (JSONEachRow → JS object);
+  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
+  const records = await queryDoris<TraceRecordReadType>({
     query,
     params: {
       sessionIds,
@@ -385,9 +362,7 @@ export const getTracesBySessionId = async (
     },
   });
 
-  const traces = rawRecords.map((r) =>
-    convertDorisToDomain(zipTraceMetadata(r)),
-  );
+  const traces = records.map((r) => convertDorisToDomain(r));
 
   traces.forEach((trace) => {
     recordDistribution(
@@ -535,9 +510,9 @@ export const getTraceById = async ({
     excludeFullIO: excludeInputOutput,
   });
 
-  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
-  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
-  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
+  // metadata comes back as a native MAP (JSONEachRow → JS object);
+  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
+  const records = await queryDoris<TraceRecordReadType>({
     query,
     params: {
       traceId,
@@ -560,8 +535,8 @@ export const getTraceById = async ({
   // Carry the precomputed compact preview (root span input_trim/output_trim)
   // alongside the domain object so trace.byId can serve it for verbosity
   // "compact" (the traces-list cell) without parsing the full Variant.
-  const res = rawRecords.map((r) => ({
-    ...convertDorisToDomain(zipTraceMetadata(r)),
+  const res = records.map((r) => ({
+    ...convertDorisToDomain(r),
     input_trim: r.input_trim ?? null,
     output_trim: r.output_trim ?? null,
   }));
