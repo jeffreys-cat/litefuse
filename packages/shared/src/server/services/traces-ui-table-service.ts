@@ -236,17 +236,17 @@ const MV_INNER_AGG_SELECT = `
       trace_id AS id,
       project_id,
       MIN(start_time) AS ts,
-      any_value(IF(parent_span_id = '', tags, NULL)) AS tags,
-      any_value(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
-      any_value(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      any_value(IF(parent_span_id = '', NULLIF(\`release\`, ''), NULL)) AS \`release\`,
-      any_value(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
-      any_value(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
-      any_value(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
-      any_value(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      any_value(IF(is_root = 1, tags, NULL)) AS tags,
+      any_value(IF(is_root = 1, bookmarked, NULL)) AS bookmarked,
+      any_value(IF(is_root = 1, IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      any_value(IF(is_root = 1, NULLIF(\`release\`, ''), NULL)) AS \`release\`,
+      any_value(IF(is_root = 1, NULLIF(version, ''), NULL)) AS version,
+      any_value(IF(is_root = 1, NULLIF(user_id, ''), NULL)) AS user_id,
+      any_value(IF(is_root = 1, NULLIF(environment, ''), NULL)) AS environment,
+      any_value(IF(is_root = 1, NULLIF(session_id, ''), NULL)) AS session_id,
       MAX(\`public\`) AS \`public\`,
-      any_value(IF(parent_span_id = '', metadata, NULL)) AS metadata,
-      SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
+      any_value(IF(is_root = 1, metadata, NULL)) AS metadata,
+      SUM(IF(is_root = 0, 1, 0)) AS observation_count,
       SUM(total_cost) AS total_cost,
       SUM(input_tokens_calculated) AS input_tokens,
       SUM(output_tokens_calculated) AS output_tokens,
@@ -1078,7 +1078,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         SELECT
           trace_id,
           project_id,
-          SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
+          SUM(IF(is_root = 0, 1, 0)) AS observation_count,
           SUM(total_cost) AS total_cost,
           SUM(input_tokens_calculated) AS input_tokens,
           SUM(output_tokens_calculated) AS output_tokens,
@@ -1180,7 +1180,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.trace_id` : ""}
       ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       ${timeStampFilter ? `AND t.start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
       ${tracesFilterRes ? `AND ${tracesFilterRes.query}` : ""}
       ${search.query}

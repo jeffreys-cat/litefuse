@@ -778,7 +778,7 @@ const getObservationsTableInternal = async <T>(
   // Phase C: trace-level fields are denormalized onto every observation
   // row by createEventRecord, so in the common case `o.environment` etc
   // are already correct. The LEFT JOIN below targets the root span of
-  // the trace (parent_span_id = '') and supplies COALESCE fallbacks for
+  // the trace (is_root = 1) and supplies COALESCE fallbacks for
   // edge cases where the child obs's trace-level fields are empty (out-
   // of-order ingest, OTel child spans without `langfuse.trace.*`
   // attributes). The JOIN is a point-lookup on the inverted trace_id
@@ -837,7 +837,7 @@ const getObservationsTableInternal = async <T>(
     observationsTableUiColumnDefinitionsForDoris,
   );
 
-  // Phase C: LEFT JOIN root span of the trace (parent_span_id = '').
+  // Phase C: LEFT JOIN root span of the trace (is_root = 1).
   // Used as a COALESCE(o.x, t.x) fallback for trace-level fields when the
   // observation row itself missed denormalization (out-of-order ingest,
   // OTel child spans without `langfuse.trace.*`). trace_id is inverted-
@@ -849,7 +849,7 @@ const getObservationsTableInternal = async <T>(
                LEFT JOIN events_full t
                  ON t.project_id = o.project_id
                 AND t.trace_id = o.trace_id
-                AND t.parent_span_id = ''
+                AND t.is_root = 1
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
       WHERE ${appliedObservationsFilter.query}
                    ${search.query}
@@ -1732,7 +1732,7 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
       LEFT JOIN events_full t
         ON t.project_id = o.project_id
        AND t.trace_id = o.trace_id
-       AND t.parent_span_id = ''
+       AND t.is_root = 1
       WHERE o.project_id = {projectId: String}
       AND o.start_time >= {minTimestamp: DateTime}
       AND o.start_time <= {maxTimestamp: DateTime}

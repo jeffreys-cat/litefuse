@@ -29,10 +29,10 @@ import { convertDorisToDomain } from "./traces_converters";
  * ROW_NUMBER window, no self-JOIN, no double scan. Root-level fields are picked
  * from the root span and the shape matches traces_mv so it transparently rewrites
  * onto the MV (all aggregates roll up across the MV's start_time_date partitions):
- *   - tags (ARRAY) / metadata (MAP) → any_value(IF(root, …, NULL)): any_value
- *     accepts ARRAY and MAP, skips NULL (returns the root's value), and is
- *     roll-up-able. metadata stays a native MAP (convertDorisToDomain parses it).
- *   - string scalars → MAX(IF(root, …, NULL)) (deterministic skip-NULL).
+ *   - root-pick fields → any_value(IF(is_root = 1, …, NULL)): any_value skips NULL
+ *     (returns the root's value), is roll-up-able, and accepts every type incl.
+ *     ARRAY (tags) and MAP (metadata, stays native — convertDorisToDomain parses).
+ *     is_root is the precomputed root-span flag (see migration 0037).
  *   - input/output → CAST(Variant AS STRING) (full) when not excludeFullIO.
  * With excludeFullIO (verbosity "compact") only input_trim/output_trim are
  * returned and the query transparently rewrites onto traces_mv.
@@ -54,29 +54,29 @@ const buildTraceAggregationQuery = (params: {
   const fullIO = excludeFullIO
     ? ""
     : `
-      any_value(IF(parent_span_id = '', CAST(input AS STRING), NULL)) AS input,
-      any_value(IF(parent_span_id = '', CAST(output AS STRING), NULL)) AS output,`;
+      any_value(IF(is_root = 1, CAST(input AS STRING), NULL)) AS input,
+      any_value(IF(is_root = 1, CAST(output AS STRING), NULL)) AS output,`;
   return `
     SELECT
       trace_id AS id,
       project_id,
       MIN(start_time) AS \`timestamp\`,
-      any_value(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      any_value(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
-      any_value(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
-      any_value(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
-      any_value(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
-      any_value(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
-      any_value(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      any_value(IF(is_root = 1, IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      any_value(IF(is_root = 1, NULLIF(user_id, ''), NULL)) AS user_id,
+      any_value(IF(is_root = 1, NULLIF(session_id, ''), NULL)) AS session_id,
+      any_value(IF(is_root = 1, NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
+      any_value(IF(is_root = 1, NULLIF(version, ''), NULL)) AS version,
+      any_value(IF(is_root = 1, NULLIF(environment, ''), NULL)) AS environment,
+      any_value(IF(is_root = 1, bookmarked, NULL)) AS bookmarked,
       MAX(${dq("public")}) AS ${dq("public")},
       MIN(created_at) AS created_at,
       MAX(updated_at) AS updated_at,
       MAX(event_ts) AS event_ts,
       MIN(is_deleted) AS is_deleted,
-      any_value(IF(parent_span_id = '', tags, NULL)) AS tags,
-      any_value(IF(parent_span_id = '', input_trim, NULL)) AS input_trim,
-      any_value(IF(parent_span_id = '', output_trim, NULL)) AS output_trim,${fullIO}
-      any_value(IF(parent_span_id = '', metadata, NULL)) AS metadata
+      any_value(IF(is_root = 1, tags, NULL)) AS tags,
+      any_value(IF(is_root = 1, input_trim, NULL)) AS input_trim,
+      any_value(IF(is_root = 1, output_trim, NULL)) AS output_trim,${fullIO}
+      any_value(IF(is_root = 1, metadata, NULL)) AS metadata
     FROM events_full
     WHERE ${whereSql}
     GROUP BY project_id, trace_id
@@ -151,7 +151,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
     return adjustedDate.toISOString().replace("T", " ").replace("Z", "");
   };
 
-  // Phase C: parent_span_id = '' identifies the root span of a trace
+  // Phase C: is_root = 1 identifies the root span of a trace
   // (one row per trace). Trace-level fields are denormalized onto root
   // spans by createEventRecord, so trace identity / existence is a
   // single-row filter without aggregation.
@@ -183,7 +183,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
     ${observationFilterRes ? `INNER JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id` : ""}
     WHERE ${tracesFilterRes.query}
     AND t.project_id = '${projectId}'
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     AND t.start_time >= '${toDorisDateTime(timestamp, -172800)}'
     ${maxTimeStamp ? `AND t.start_time <= '${toDorisDateTime(maxTimeStamp)}'` : ""}
     ${!maxTimeStamp ? `AND t.start_time <= '${toDorisDateTime(timestamp, 172800)}'` : ""}
@@ -271,7 +271,7 @@ export const getTraceUsageBreakdown = async ({
       FROM events_full
       WHERE project_id = {projectId: String}
       AND trace_id = {traceId: String}
-      AND parent_span_id != ''
+      AND is_root = 0
       ${timestamp ? `AND start_time >= DATE_SUB({timestamp: DateTime}, INTERVAL 2 DAY)` : ""}
     `,
     params: {
@@ -379,7 +379,7 @@ export const hasAnyTrace = async (projectId: string) => {
     SELECT 1
     FROM events_full
     WHERE project_id = {projectId: String}
-    AND parent_span_id = ''
+    AND is_root = 1
     LIMIT 1
   `;
 
@@ -411,7 +411,7 @@ export const getTraceCountsByProjectInCreationInterval = async ({
       project_id,
       count(*) as count
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND created_at >= {start: DateTime}
     AND created_at < {end: DateTime}
     GROUP BY project_id
@@ -447,7 +447,7 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
     SELECT
       count(*) as count
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id IN ({projectIds: Array(String)})
     AND created_at >= {start: DateTime}
   `;
@@ -573,7 +573,7 @@ export const getTracesGroupedByName = async (
         count(*) as count
       from events_full t
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       AND t.name IS NOT NULL
       ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
       GROUP BY name
@@ -631,7 +631,7 @@ export const getTracesGroupedBySessionId = async (
         count(*) as count
       from events_full t
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       AND t.session_id IS NOT NULL
       AND t.session_id != ''
       ${tracesFilterRes?.query ? `AND ${tracesFilterRes.query}` : ""}
@@ -688,7 +688,7 @@ export const getTracesGroupedByUsers = async (
       count(*) as count
     from events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
@@ -742,7 +742,7 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
     from events_full t
     LATERAL VIEW explode(tags) tmp as tag
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
     LIMIT 1000;
   `;
@@ -780,7 +780,7 @@ export const getTracesIdentifierForSession = async (
       project_id,
       environment
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id = {projectId: String}
     AND session_id = {sessionId: String}
     ORDER BY start_time ASC;
@@ -846,7 +846,7 @@ export const hasAnyTraceOlderThan = async (
   const query = `
     SELECT 1
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime}
     LIMIT 1
@@ -880,7 +880,7 @@ export const deleteTracesOlderThanDays = async (
 
   const query = `
     DELETE FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime};
   `;
@@ -931,7 +931,7 @@ export const hasAnyUser = async (projectId: string) => {
   const query = `
     SELECT 1
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id = {projectId: String}
     AND user_id IS NOT NULL
     AND user_id != ''
@@ -978,7 +978,7 @@ export const getTotalUserCount = async (
   const query = `
     SELECT COUNT(DISTINCT t.user_id) AS totalCount
     FROM events_full t
-    WHERE t.parent_span_id = ''
+    WHERE t.is_root = 1
     AND ${tracesFilterRes.query}
     ${search.query}
     AND t.user_id IS NOT NULL
@@ -1035,7 +1035,7 @@ export const getUserMetrics = async (
     (f) => f.field === "start_time" && f.operator === ">=",
   ) as DorisDateTimeFilter | undefined;
 
-  // Phase C: parent_span_id = '' selects each trace's root span — one
+  // Phase C: is_root = 1 selects each trace's root span — one
   // row per trace, with user_id denormalized by createEventRecord.
   // The self-join produces (root span × all spans) groups so we can
   // pick user_id from the root while summing observation totals.
@@ -1073,7 +1073,7 @@ export const getUserMetrics = async (
                         where
                             user_id IN ({userIds: Array(String) })
                             AND project_id = {projectId: String}
-                            AND parent_span_id = ''
+                            AND is_root = 1
                             ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
                     )
             ) as o
@@ -1089,7 +1089,7 @@ export const getUserMetrics = async (
                 WHERE
                     t.user_id IN ({userIds: Array(String) })
                     AND t.project_id = {projectId: String}
-                    AND t.parent_span_id = ''
+                    AND t.is_root = 1
                     ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
             ) as t on t.trace_id = o.trace_id
             and t.project_id = o.project_id
@@ -1182,7 +1182,7 @@ export const getTracesForBlobStorageExport = function (
       input,
       output
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND project_id = {projectId: String}
     AND start_time >= {minTimestamp: DateTime}
     AND start_time <= {maxTimestamp: DateTime}
@@ -1244,7 +1244,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
     FROM events_full t
     LEFT JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     AND t.start_time >= {minTimestamp: DateTime}
     AND t.start_time <= {maxTimestamp: DateTime}
   `;
@@ -1300,7 +1300,7 @@ export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   const query = `
       SELECT trace_id AS id, project_id
       FROM events_full
-      WHERE parent_span_id = ''
+      WHERE is_root = 1
       AND trace_id IN ({traceIds: Array(String)})
       ORDER BY event_ts DESC;`;
   const records = await queryDoris<{
@@ -1331,7 +1331,7 @@ export const traceWithSessionIdExists = async (
   const query = `
     SELECT trace_id AS id, project_id
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND session_id = {sessionId: String}
     AND project_id = {projectId: String}
     LIMIT 1
@@ -1433,7 +1433,7 @@ export const getTraceCountsByProjectAndDay = async ({
       project_id,
       DATE(start_time) as date
     FROM events_full
-    WHERE parent_span_id = ''
+    WHERE is_root = 1
     AND start_time >= {startDate: DateTime}
     AND start_time < {endDate: DateTime}
     GROUP BY project_id, DATE(start_time)

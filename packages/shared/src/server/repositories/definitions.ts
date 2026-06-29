@@ -659,6 +659,8 @@ export const eventRecordBaseSchema = z.object({
   // We mainly use the id for compatibility with old events that always had a `id` column.
   id: z.string(), // same as span_id. Needs to be set manually.
   parent_span_id: z.string().nullish(),
+  // Root-span flag (1 when parent_span_id is empty), precomputed at ingestion.
+  is_root: z.number().nullish(),
 
   // Core properties
   name: z.string(),

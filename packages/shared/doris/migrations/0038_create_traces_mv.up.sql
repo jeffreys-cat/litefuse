@@ -6,8 +6,8 @@
 --     window, so Doris can partition-track it and TRANSPARENTLY REWRITE the
 --     app's list query (which queries events_full in the same aggregate shape)
 --     onto this MV; stale/unrefreshed partitions auto-read base for correctness.
---   * root-level fields via MAX(IF(parent_span_id='', ...)) (root span is unique
---     per group under MoW UNIQUE KEY).
+--   * root-level fields via any_value(IF(is_root=1, ...)) (root span is unique
+--     per group under MoW UNIQUE KEY; is_root is the precomputed root flag).
 --   * Composite metrics (latency, level) are NOT baked as single scalars — that
 --     breaks rewrite ("roll up fail"). Instead expose RAW rollup components
 --     (MIN/MAX of start/end; per-level SUM(CASE) counts) and let the query
@@ -31,7 +31,7 @@ SELECT
   trace_id AS id,
   start_time_date AS timestamp_date,
   MIN(start_time) AS `timestamp`,
-  -- Root-scoped fields use any_value(IF(parent_span_id='', val, NULL)):
+  -- Root-scoped fields use any_value(IF(is_root=1, val, NULL)):
   --   * any_value returns a non-null value if one exists, so the non-root NULLs
   --     are skipped and the root span's value is picked (with one root per group
   --     it is effectively deterministic).
@@ -43,19 +43,19 @@ SELECT
   --     metadata stays a single native MAP column (no parallel-array zip needed).
   -- Genuine aggregates below (MIN(start_time), SUM, latency min/max, level counts,
   -- MAX(public), MAX(event_ts)) stay MIN/MAX/SUM — they are not root-pick.
-  any_value(IF(parent_span_id='', IF(trace_name<>'',trace_name,name), NULL)) AS name,
-  any_value(IF(parent_span_id='', NULLIF(user_id,''), NULL)) AS user_id,
-  any_value(IF(parent_span_id='', NULLIF(session_id,''), NULL)) AS session_id,
-  any_value(IF(parent_span_id='', NULLIF(`release`,''), NULL)) AS `release`,
-  any_value(IF(parent_span_id='', NULLIF(version,''), NULL)) AS version,
-  any_value(IF(parent_span_id='', NULLIF(environment,''), NULL)) AS environment,
-  any_value(IF(parent_span_id='', bookmarked, NULL)) AS bookmarked,
+  any_value(IF(is_root=1, IF(trace_name<>'',trace_name,name), NULL)) AS name,
+  any_value(IF(is_root=1, NULLIF(user_id,''), NULL)) AS user_id,
+  any_value(IF(is_root=1, NULLIF(session_id,''), NULL)) AS session_id,
+  any_value(IF(is_root=1, NULLIF(`release`,''), NULL)) AS `release`,
+  any_value(IF(is_root=1, NULLIF(version,''), NULL)) AS version,
+  any_value(IF(is_root=1, NULLIF(environment,''), NULL)) AS environment,
+  any_value(IF(is_root=1, bookmarked, NULL)) AS bookmarked,
   MAX(`public`) AS `public`,
-  any_value(IF(parent_span_id='', tags, NULL)) AS tags,
-  any_value(IF(parent_span_id='', metadata, NULL)) AS metadata,
-  any_value(IF(parent_span_id='', input_trim, NULL)) AS input,
-  any_value(IF(parent_span_id='', output_trim, NULL)) AS output,
-  SUM(IF(parent_span_id<>'',1,0)) AS observations,
+  any_value(IF(is_root=1, tags, NULL)) AS tags,
+  any_value(IF(is_root=1, metadata, NULL)) AS metadata,
+  any_value(IF(is_root=1, input_trim, NULL)) AS input,
+  any_value(IF(is_root=1, output_trim, NULL)) AS output,
+  SUM(IF(is_root=0,1,0)) AS observations,
   SUM(input_tokens_calculated) AS input_tokens,
   SUM(output_tokens_calculated) AS output_tokens,
   SUM(total_tokens_calculated) AS total_tokens,

@@ -152,7 +152,7 @@ export const generateTracesForPublicApi = async ({
       LEFT JOIN observation_stats o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
       LEFT JOIN score_stats s ON t.trace_id = s.trace_id AND t.project_id = s.project_id
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
       ${dorisOrderBy}
       ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
@@ -233,7 +233,7 @@ export const getTracesCountForPublicApi = async ({
       SELECT count(*) as count
       FROM events_full t
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       ${dorisFilter.length() > 0 ? `AND ${appliedDorisFilter.query}` : ""}
     `;
 

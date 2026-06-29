@@ -711,7 +711,7 @@ export const getTraceByIdFromEventsTable = async ({
     FROM events_full t
     WHERE t.project_id = {projectId: String}
     AND t.trace_id = {traceId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${timestamp ? `AND DATE(t.start_time) = DATE({timestamp: DateTime})` : ""}
     ORDER BY t.start_time DESC
     LIMIT 1
@@ -883,7 +883,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.updated_at,
       o.event_ts
     FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -1026,7 +1026,7 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
   const query = `
     SELECT count(*) as count
     FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -1153,7 +1153,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
       SELECT count(*) as count
       FROM events_full t
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
     `;
 
     const result = await queryDoris<{ count: string }[]>({
@@ -1188,7 +1188,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
       CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath
     FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${orderByClause}
     LIMIT {limit: Int32}
     OFFSET {offset: Int32}
@@ -2062,10 +2062,10 @@ export const getEventsGroupedByHasParentObservation = async (
   const appliedFilter = observationsFilter.apply();
 
   const query = `
-    SELECT (o.parent_span_id != '') as hasParentObservation, count(*) as count
+    SELECT (o.is_root = 0) as hasParentObservation, count(*) as count
     FROM events_full o
     WHERE ${appliedFilter.query}
-    GROUP BY (o.parent_span_id != '')
+    GROUP BY (o.is_root = 0)
     ORDER BY hasParentObservation ASC
     LIMIT 2
   `;
@@ -2824,7 +2824,7 @@ export const hasAnySessionFromEventsTable = async (
     SELECT 1
     FROM events_full
     WHERE project_id = {projectId: String}
-    AND parent_span_id = ''
+    AND is_root = 1
     AND session_id IS NOT NULL
     AND length(session_id) > 0
     LIMIT 1
@@ -2862,7 +2862,7 @@ export const getTraceMetadataByIdsFromEvents = async (props: {
       t.tags
     FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     AND t.trace_id IN ({traceIds: Array(String)})
   `;
 

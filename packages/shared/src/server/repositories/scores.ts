@@ -1034,7 +1034,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${limitSQL}
         ) sm
         LEFT JOIN events_full t
-            ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id AND t.parent_span_id = ''
+            ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id AND t.is_root = 1
         ${traceWhere}
         ORDER BY sm.timestamp DESC
       `;
@@ -1067,7 +1067,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${hasMetadataSQL}
             ${traceSelect}
         FROM scores s
-        ${performTracesJoin ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''" : ""}
+        ${performTracesJoin ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.is_root = 1" : ""}
         ${flatWhere}
         ${orderBySQL}
         ${limitSQL}
@@ -1375,7 +1375,7 @@ export const getNumericScoreHistogram = async (
   const query = `
       SELECT s.value
       FROM scores s
-      ${traceFilter ? `LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''` : ""}
+      ${traceFilter ? `LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.is_root = 1` : ""}
       WHERE s.project_id = {projectId: String}
       ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
       ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
@@ -1628,7 +1628,7 @@ export const getScoresForAnalyticsIntegrations = async function* (
         t.tags as trace_tags,
         element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id')) as posthog_session_id
       FROM scores s
-      LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.parent_span_id = ''
+      LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.is_root = 1
       WHERE s.project_id = {projectId: String}
       AND t.project_id = {projectId: String}
       AND s.timestamp >= {minTimestamp: DateTime}

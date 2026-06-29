@@ -379,6 +379,10 @@ export class IngestionService {
       // wire-level invariant holds — same shape upstream langfuse-main
       // uses against ClickHouse's non-nullable String column.
       parent_span_id: eventData.parentSpanId ?? "",
+      // Root-span flag (1 when this is the trace root). Precomputed at ingestion
+      // so read queries can use is_root=1 / any_value(IF(is_root=1, …)) instead of
+      // the empty-string parent_span_id convention. See migration 0037.
+      is_root: (eventData.parentSpanId ?? "") === "" ? 1 : 0,
 
       // Core properties with defaults
       name: eventData.name ?? "",

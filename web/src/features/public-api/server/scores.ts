@@ -117,7 +117,7 @@ export const _handleGenerateScoresForPublicApi = async ({
             s.session_id as session_id,
             s.dataset_run_id as dataset_run_id
         FROM scores s
-        LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.parent_span_id = ''
+        LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.is_root = 1
         WHERE
             s.project_id = {projectId: String}
             ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}
@@ -196,7 +196,7 @@ export const _handleGetScoresCountForPublicApi = async ({
           count(*) as count
         FROM
           scores s
-            ${tracesFilter.length() > 0 ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.parent_span_id = ''" : ""}
+            ${tracesFilter.length() > 0 ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.is_root = 1" : ""}
         WHERE
           s.project_id = {projectId: String}
         ${scoreScope === "traces_only" ? "AND s.session_id IS NULL AND s.dataset_run_id IS NULL" : ""}

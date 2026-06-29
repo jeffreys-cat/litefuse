@@ -49,7 +49,7 @@ export const getSessionTracesFromEvents = async (props: {
   projectId: string;
   sessionId: string;
 }) => {
-  // Reads synthetic trace spans (parent_span_id = '') from events_full.
+  // Reads synthetic trace spans (is_root = 1) from events_full.
   const query = `
     SELECT
       trace_id AS id,
@@ -60,7 +60,7 @@ export const getSessionTracesFromEvents = async (props: {
     FROM events_full t
     WHERE t.session_id = {sessionId: String}
       AND t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       AND t.is_deleted = 0
     ORDER BY start_time ASC
   `;
@@ -217,7 +217,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
     SELECT ${sqlSelect}
     FROM events_full t
     WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       AND t.session_id IS NOT NULL
       ${traceTimestampFilterClause}
       ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}

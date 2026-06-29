@@ -66,7 +66,7 @@ export const getScoreAggregate = async (
         s.source,
         s.data_type
       FROM scores s
-      ${hasTraceFilter ? `JOIN events_full t ON t.trace_id = s.trace_id AND t.project_id = s.project_id AND t.parent_span_id = ''` : ""}
+      ${hasTraceFilter ? `JOIN events_full t ON t.trace_id = s.trace_id AND t.project_id = s.project_id AND t.is_root = 1` : ""}
       WHERE s.project_id = {projectId: String}
       ${dorisFilterApplied.query ? `AND ${dorisFilterApplied.query}` : ""}
       ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -149,7 +149,7 @@ export const getObservationCostByTypeByTime = async (
           FROM events_full o
           LATERAL VIEW posexplode(map_keys(cost_details)) keys_exploded AS key_pos, cost_key
           LATERAL VIEW posexplode(map_values(cost_details)) values_exploded AS value_pos, cost_value
-          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''` : ""}
+          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.is_root = 1` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -280,7 +280,7 @@ export const getObservationUsageByTypeByTime = async (
           FROM events_full o
           LATERAL VIEW posexplode(map_keys(usage_details)) keys_exploded AS key_pos, usage_key
           LATERAL VIEW posexplode(map_values(usage_details)) values_exploded AS value_pos, usage_value
-          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''` : ""}
+          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.is_root = 1` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}

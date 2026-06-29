@@ -2,7 +2,7 @@ import { type ViewDeclarationType } from "./types";
 
 // Single-table events_full model (Phase B alignment with upstream).
 // Every row is an OTel span (one OTel span = one row in events_full).
-// Root spans have parent_span_id = '' (empty string; coerced from null
+// Root spans have is_root = 1 (empty string; coerced from null
 // at write time to match the upstream ClickHouse non-nullable String
 // convention). Child spans have parent_span_id pointing at the parent
 // span_id.
@@ -470,7 +470,7 @@ export const observationsViewDoris: ViewDeclarationType = {
     traces: {
       name: "events_full",
       joinConditionSql:
-        "ON observations.trace_id = traces.trace_id AND observations.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON observations.trace_id = traces.trace_id AND observations.project_id = traces.project_id AND traces.is_root = 1",
       timeDimension: "start_time",
     },
     scores: {
@@ -482,7 +482,7 @@ export const observationsViewDoris: ViewDeclarationType = {
   },
   // Phase B alignment with upstream: every events_full row is an
   // observation now (no more synthetic `t-<trace_id>` rows). The previous
-  // segment `parent_span_id != ''` filtered those out; with the synth
+  // segment `is_root = 0` filtered those out; with the synth
   // rows gone it would instead exclude root observations, which is
   // wrong. No segment is needed.
   segments: [],
@@ -634,7 +634,7 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
     traces: {
       name: "events_full",
       joinConditionSql:
-        "ON scores_numeric.trace_id = traces.trace_id AND scores_numeric.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON scores_numeric.trace_id = traces.trace_id AND scores_numeric.project_id = traces.project_id AND traces.is_root = 1",
       timeDimension: "start_time",
     },
     observations: {
@@ -683,7 +683,7 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
     traces: {
       name: "events_full",
       joinConditionSql:
-        "ON scores_categorical.trace_id = traces.trace_id AND scores_categorical.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON scores_categorical.trace_id = traces.trace_id AND scores_categorical.project_id = traces.project_id AND traces.is_root = 1",
       timeDimension: "start_time",
     },
     observations: {

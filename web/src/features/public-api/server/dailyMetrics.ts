@@ -62,7 +62,7 @@ export const generateDailyMetrics = async (props: QueryType) => {
       COALESCE(sum(o.total_tokens_calculated), 0) AS totalUsage,
       COALESCE(sum(coalesce(o.total_cost, 0)), 0) AS totalCost
     FROM events_full o
-    ${hasNonTimestampsFilter ? "LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''" : ""}
+    ${hasNonTimestampsFilter ? "LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.is_root = 1" : ""}
     WHERE o.project_id = {projectId: String}
     ${hasNonTimestampsFilter ? `AND ${appliedFilter.query}` : ""}
     ${timeFilter ? `AND o.start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
@@ -76,7 +76,7 @@ export const generateDailyMetrics = async (props: QueryType) => {
       count(t.trace_id) AS countTraces
     FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${hasTracesFilter ? `AND ${appliedTracesFilter.query}` : ""}
     GROUP BY date
   `;
@@ -198,7 +198,7 @@ export const getDailyMetricsCount = async (props: QueryType) => {
     SELECT count(distinct DATE(t.start_time)) as count
     FROM events_full t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
   `;
 

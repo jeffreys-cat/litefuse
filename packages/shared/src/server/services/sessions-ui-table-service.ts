@@ -280,7 +280,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           FROM events_full t
           WHERE t.session_id IS NOT NULL
             AND t.project_id = {projectId: String}
-            AND t.parent_span_id = ''
+            AND t.is_root = 1
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
         ${
@@ -289,7 +289,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             SELECT span_id AS id, trace_id, project_id, start_time, end_time, input_tokens_calculated, output_tokens_calculated, total_tokens_calculated, input_cost_calculated, output_cost_calculated, total_cost, event_ts
             FROM events_full o
             WHERE o.project_id = {projectId: String}
-            AND o.parent_span_id != ''
+            AND o.is_root = 0
             ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
             AND o.trace_id IN (
               SELECT id

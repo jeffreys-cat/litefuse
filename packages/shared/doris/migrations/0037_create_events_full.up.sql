@@ -28,6 +28,11 @@ CREATE TABLE if not exists events_full (
 
     -- Span relationships
     `parent_span_id` String,
+    -- Root-span flag, set at ingestion (1 when the span is the trace root, i.e.
+    -- parent_span_id = ''). Lets root-pick aggregates use any_value(IF(is_root=1,
+    -- …)) and root-only scans use WHERE is_root=1 — an integer/indexed predicate
+    -- instead of the empty-string `parent_span_id = ''` convention.
+    `is_root` TINYINT DEFAULT '0',
 
     -- Timestamps
     `start_time` DateTime(3),
@@ -145,6 +150,7 @@ CREATE TABLE if not exists events_full (
     INDEX idx_span_id (`span_id`) USING INVERTED COMMENT 'inverted index for span_id',
     INDEX idx_trace_id (`trace_id`) USING INVERTED COMMENT 'inverted index for trace_id',
     INDEX idx_parent_span_id (`parent_span_id`) USING INVERTED COMMENT 'inverted index for parent_span_id',
+    INDEX idx_is_root (`is_root`) USING INVERTED COMMENT 'inverted index for is_root (root-span flag, WHERE is_root=1)',
     INDEX idx_project_id (`project_id`) USING INVERTED COMMENT 'inverted index for project_id',
     INDEX idx_user_id (`user_id`) USING INVERTED COMMENT 'inverted index for user_id',
     INDEX idx_session_id (`session_id`) USING INVERTED COMMENT 'inverted index for session_id',

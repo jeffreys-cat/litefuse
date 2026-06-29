@@ -16,9 +16,9 @@
 // SQL sources (post-OTel-only migration):
 //   * getDatasetRunItemsSinceLastRun: dataset_run_items_rmt + LEFT ANTI
 //     JOIN events_full (was `events` placeholder, now real).
-//   * getRelevantTraces: events_full root spans (parent_span_id = '').
+//   * getRelevantTraces: events_full root spans (is_root = 1).
 //   * getRelevantObservations: events_full non-root spans
-//     (parent_span_id != '').
+//     (is_root = 0).
 //
 // Path-1 ingestion-time inline (SDK `experiment.run()`) is still
 // authoritative — it sets experiment_* fields at write time via
@@ -294,7 +294,7 @@ export async function getRelevantObservations(
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.parent_span_id != ''
+        AND o.is_root = 0
         AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
     ) ranked
     WHERE rn = 1
@@ -338,7 +338,7 @@ export async function getRelevantTraces(
   }
 
   // Trace identity comes from events_full's OTel root span
-  // (parent_span_id = ''). Latest event_ts wins within the project / trace
+  // (is_root = 1). Latest event_ts wins within the project / trace
   // pair, mirroring buildTraceAggregationQuery's "trace_root" CTE choice.
   // events_full carries trace-level fields denormalised on the root span,
   // so we don't need a separate CTE for them — read them straight off o.
@@ -391,7 +391,7 @@ export async function getRelevantTraces(
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.parent_span_id = ''
+        AND o.is_root = 1
         AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
     ) ranked
     WHERE rn = 1
@@ -921,7 +921,7 @@ async function processExperimentBackfill(
     // Build a map of trace_id -> {userId, sessionId} for efficient lookup
     const tracePropertiesMap = new Map<string, TraceProperties>();
     // OTel-only events_full: the trace's "root span" is the actual OTel root
-    // span (parent_span_id = ''), not a synthetic `t-<trace_id>` row. Build
+    // span (is_root = 1), not a synthetic `t-<trace_id>` row. Build
     // a trace_id -> rootSpanId lookup so DRIs that point at the trace (no
     // observation_id) can find the real root span by its actual span_id.
     const traceRootSpanIdMap = new Map<string, string>();
