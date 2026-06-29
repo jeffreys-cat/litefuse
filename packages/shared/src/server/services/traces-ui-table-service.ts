@@ -212,83 +212,139 @@ const isTagsFilterColumn = (column: string): boolean =>
 const isMetadataFilterColumn = (column: string): boolean =>
   column === "metadata" || column === "Metadata";
 
-// Per-key metadata lookup over the rolled-up parallel arrays, matching the MV's
-// metadata_names / metadata_values columns: element_at(values, position-of-key
-// in names). MAX(IF(root,...)) on each ARRAY rolls up across start_time_date, so
-// metadata filters transparently rewrite onto traces_mv. array_position returns
-// 0 when the key is absent and element_at(_, 0) is NULL → key-missing rows drop
-// out of an equality/contains filter, matching the base map['key'] semantics.
-const mvMetadataNamesExpr =
-  "MAX(IF(parent_span_id = '', metadata_names, NULL))";
-const mvMetadataValuesExpr =
-  "MAX(IF(parent_span_id = '', metadata_values, NULL))";
+// Per-key metadata lookup over the OUTER rollup of the inner CTE's parallel
+// arrays (trace_by_day.metadata_names / metadata_values). The inner CTE produces
+// the root span's arrays per (trace, day); MAX() in the outer rolls them up to one
+// per trace (NULL from root-less day partitions is ignored). element_at(values,
+// array_position(names, key)) reads the per-key value; array_position returns 0
+// when the key is absent and element_at(_, 0) is NULL, matching base map['key'].
+const mvMetadataNamesExpr = "MAX(metadata_names)";
+const mvMetadataValuesExpr = "MAX(metadata_values)";
 const mvMetadataLookup = (key: string): string => {
   const escapedKey = key.replace(/'/g, "''");
   return `element_at(${mvMetadataValuesExpr}, array_position(${mvMetadataNamesExpr}, '${escapedKey}'))`;
 };
 
+// Inner per-(trace, day) aggregate, written to match the traces_mv column
+// definitions so Doris transparently rewrites it onto traces_mv. The list fast
+// paths nest this as a CTE and roll it up to one row per trace in an OUTER GROUP
+// BY. Critically, the inner KEEPS start_time_date in its GROUP BY (= the MV
+// partition column): when recent partitions are stale, Doris can union-compensate
+// (fresh partitions from the MV + the stale partition read from base). A
+// single-layer GROUP BY that drops start_time_date cannot be union-compensated
+// (the rollup loses the partition column) and falls fully back to base on any
+// live ingestion. See docs/trace-list-materialized-view.md.
+const MV_INNER_AGG_SELECT = `
+      trace_id AS id,
+      project_id,
+      MIN(start_time) AS ts,
+      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
+      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      MAX(IF(parent_span_id = '', NULLIF(\`release\`, ''), NULL)) AS \`release\`,
+      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
+      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
+      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
+      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      MAX(\`public\`) AS \`public\`,
+      MAX(IF(parent_span_id = '', metadata_names, NULL)) AS metadata_names,
+      MAX(IF(parent_span_id = '', metadata_values, NULL)) AS metadata_values,
+      SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
+      SUM(total_cost) AS total_cost,
+      SUM(input_tokens_calculated) AS input_tokens,
+      SUM(output_tokens_calculated) AS output_tokens,
+      SUM(total_tokens_calculated) AS total_tokens,
+      SUM(input_cost_calculated) AS input_cost,
+      SUM(output_cost_calculated) AS output_cost,
+      MAX(start_time) AS start_time_max,
+      MIN(end_time) AS end_time_min,
+      MAX(end_time) AS end_time_max,
+      SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
+      SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
+      SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS default_count,
+      SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) AS debug_count,
+      MAX(event_ts) AS event_ts`;
+
+const buildMvInnerCte = (whereParts: string[]): string => `
+    trace_by_day AS (
+      SELECT ${MV_INNER_AGG_SELECT}
+      FROM events_full
+      WHERE ${whereParts.join(" AND ")}
+      GROUP BY project_id, trace_id, start_time_date
+    )`;
+
+// OUTER rollup of the inner CTE to one row per trace. Components combine as
+// MIN(MIN)=MIN, MAX(MAX)=MAX, SUM(SUM)=SUM, so latency / level recompute
+// correctly from the per-day pre-aggregates.
+const OUTER_LATENCY =
+  "milliseconds_diff(CASE WHEN MAX(start_time_max) > MAX(end_time_max) THEN MAX(start_time_max) ELSE MAX(end_time_max) END, CASE WHEN MIN(ts) < MIN(end_time_min) THEN MIN(ts) ELSE MIN(end_time_min) END) / 1000";
+const OUTER_LEVEL =
+  "CASE WHEN SUM(error_count) > 0 THEN 'ERROR' WHEN SUM(warning_count) > 0 THEN 'WARNING' WHEN SUM(default_count) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END";
+
 // UI column → per-trace aggregate expression, used to route scalar / metric
 // filters into the fast path's HAVING (a post-aggregation filter on the trace
 // row). Expressions match the fast-path SELECTs and the MV column definitions,
 // so adding them keeps the transparent rewrite firing.
+// OUTER-query rollup expressions over the inner CTE (trace_by_day) aliases — the
+// list fast paths apply scalar/metric filters in the OUTER GROUP BY, so these
+// reference the inner pre-aggregates (MAX(MAX)=MAX, SUM(SUM)=SUM), NOT the base
+// events_full columns. Keep in sync with MV_INNER_AGG_SELECT / OUTER_* above.
 const tracesTableMvHavingColumns: UiColumnMappings = [
   // root-level scalars
   {
     uiTableName: "Environment",
     uiTableId: "environment",
     tableName: "traces",
-    select: "MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL))",
+    select: "MAX(environment)",
     queryPrefix: "",
   },
   {
     uiTableName: "User ID",
     uiTableId: "userId",
     tableName: "traces",
-    select: "MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL))",
+    select: "MAX(user_id)",
     queryPrefix: "",
   },
   {
     uiTableName: "Session ID",
     uiTableId: "sessionId",
     tableName: "traces",
-    select: "MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL))",
+    select: "MAX(session_id)",
     queryPrefix: "",
   },
   {
     uiTableName: "Version",
     uiTableId: "version",
     tableName: "traces",
-    select: "MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL))",
+    select: "MAX(version)",
     queryPrefix: "",
   },
   {
     uiTableName: "Release",
     uiTableId: "release",
     tableName: "traces",
-    select: `MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL))`,
+    select: `MAX(${dq("release")})`,
     queryPrefix: "",
   },
   {
     uiTableName: "Name",
     uiTableId: "name",
     tableName: "traces",
-    select:
-      "MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL))",
+    select: "MAX(name)",
     queryPrefix: "",
   },
   {
     uiTableName: "Trace Name",
     uiTableId: "traceName",
     tableName: "traces",
-    select:
-      "MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL))",
+    select: "MAX(name)",
     queryPrefix: "",
   },
   {
     uiTableName: "⭐️",
     uiTableId: "bookmarked",
     tableName: "traces",
-    select: "MAX(IF(parent_span_id = '', bookmarked, NULL))",
+    select: "MAX(bookmarked)",
     queryPrefix: "",
   },
   // observation-level metrics (folded into the per-trace aggregate)
@@ -303,86 +359,84 @@ const tracesTableMvHavingColumns: UiColumnMappings = [
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     tableName: "observations",
-    select: "SUM(input_cost_calculated)",
+    select: "SUM(input_cost)",
     queryPrefix: "",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     tableName: "observations",
-    select: "SUM(output_cost_calculated)",
+    select: "SUM(output_cost)",
     queryPrefix: "",
   },
   {
     uiTableName: "Input Tokens",
     uiTableId: "inputTokens",
     tableName: "observations",
-    select: "SUM(input_tokens_calculated)",
+    select: "SUM(input_tokens)",
     queryPrefix: "",
   },
   {
     uiTableName: "Output Tokens",
     uiTableId: "outputTokens",
     tableName: "observations",
-    select: "SUM(output_tokens_calculated)",
+    select: "SUM(output_tokens)",
     queryPrefix: "",
   },
   {
     uiTableName: "Total Tokens",
     uiTableId: "totalTokens",
     tableName: "observations",
-    select: "SUM(total_tokens_calculated)",
+    select: "SUM(total_tokens)",
     queryPrefix: "",
   },
   {
     uiTableName: "Tokens",
     uiTableId: "tokens",
     tableName: "observations",
-    select: "SUM(total_tokens_calculated)",
+    select: "SUM(total_tokens)",
     queryPrefix: "",
   },
   {
     uiTableName: "Latency (s)",
     uiTableId: "latency",
     tableName: "observations",
-    select:
-      "milliseconds_diff(CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END, CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END) / 1000",
+    select: OUTER_LATENCY,
     queryPrefix: "",
   },
   {
     uiTableName: "Error Level Count",
     uiTableId: "errorCount",
     tableName: "observations",
-    select: "SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END)",
+    select: "SUM(error_count)",
     queryPrefix: "",
   },
   {
     uiTableName: "Warning Level Count",
     uiTableId: "warningCount",
     tableName: "observations",
-    select: "SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END)",
+    select: "SUM(warning_count)",
     queryPrefix: "",
   },
   {
     uiTableName: "Default Level Count",
     uiTableId: "defaultCount",
     tableName: "observations",
-    select: "SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END)",
+    select: "SUM(default_count)",
     queryPrefix: "",
   },
   {
     uiTableName: "Debug Level Count",
     uiTableId: "debugCount",
     tableName: "observations",
-    select: "SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END)",
+    select: "SUM(debug_count)",
     queryPrefix: "",
   },
   {
     uiTableName: "Level",
     uiTableId: "level",
     tableName: "observations",
-    select:
-      "CASE WHEN SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) > 0 THEN 'ERROR' WHEN SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) > 0 THEN 'WARNING' WHEN SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END",
+    select: OUTER_LEVEL,
     queryPrefix: "",
   },
 ];
@@ -423,11 +477,11 @@ const canUseMvListFastPath = (params: {
   );
 };
 
-// Shared WHERE/HAVING fragments for the MV list fast paths: project_id, the
-// timestamp range (partition prune in WHERE + precise MIN(start_time) in
-// HAVING), an optional trace_id list (WHERE), tags (HAVING LIKE on the
-// stringified array), and scalar/metric column filters (HAVING via the aggregate
-// expressions). Each fast path keeps its own SELECT/GROUP BY for readability.
+// Shared WHERE/HAVING fragments for the MV list fast paths. WHERE applies to the
+// inner CTE (project_id, partition prune on start_time_date, optional trace_id
+// list); HAVING applies to the OUTER rollup over trace_by_day (precise MIN(ts)
+// bounds, tags array_contains, per-key metadata, and scalar/metric column filters
+// via the OUTER aggregate expressions in tracesTableMvHavingColumns).
 const buildMvListWhereHaving = (
   filter: FilterState,
   searchQuery?: string,
@@ -450,13 +504,11 @@ const buildMvListWhereHaving = (
   if (fromFilter) {
     params.fromTs = convertDateToAnalyticsDateTime(fromFilter.value as Date);
     whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
-    havingParts.push(
-      `MIN(start_time) ${fromFilter.operator} {fromTs: DateTime}`,
-    );
+    havingParts.push(`MIN(ts) ${fromFilter.operator} {fromTs: DateTime}`);
   }
   if (toFilter) {
     params.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
-    havingParts.push(`MIN(start_time) ${toFilter.operator} {toTs: DateTime}`);
+    havingParts.push(`MIN(ts) ${toFilter.operator} {toTs: DateTime}`);
   }
 
   const idFilter = filter.find(
@@ -473,10 +525,10 @@ const buildMvListWhereHaving = (
     whereParts.push("trace_id IN ({traceIds: Array(String)})");
   }
 
-  // tags: MV carries tags as a native ARRAY (MAX(IF(root,...)) rolls up), so
-  // match membership with array_contains — exact element matching (no false
-  // substring hits, unlike LIKE on a stringified array).
-  const tagsExpr = "MAX(IF(parent_span_id = '', tags, NULL))";
+  // tags: the inner CTE carries the root span's native ARRAY per (trace, day);
+  // MAX() rolls it up to one per trace in the outer. Match membership with
+  // array_contains — exact element matching (no false substring hits).
+  const tagsExpr = "MAX(tags)";
   for (const f of filter) {
     if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
     const contains = (f.value as string[]).map((v) => {
@@ -534,15 +586,15 @@ const buildMvListWhereHaving = (
     if (res.query) havingParts.push(res.query);
   }
 
-  // ID search (searchType ["id"]): trace_id (grouping key) + root user_id / name
-  // via the aggregate expressions, OR-ed, in HAVING. Content search is gated out
-  // upstream (needs full I/O). searchQuery is interpolated as a parameter.
+  // ID search (searchType ["id"]): trace_id (grouping key, exposed as id) + root
+  // user_id / name via the outer rollup, OR-ed, in HAVING. Content search is gated
+  // out upstream (needs full I/O). searchQuery is interpolated as a parameter.
   if (searchQuery) {
     params.searchLike = `%${searchQuery}%`;
     havingParts.push(
-      `(trace_id LIKE {searchLike: String}` +
-        ` OR MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) LIKE {searchLike: String}` +
-        ` OR MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) LIKE {searchLike: String})`,
+      `(id LIKE {searchLike: String}` +
+        ` OR MAX(user_id) LIKE {searchLike: String}` +
+        ` OR MAX(name) LIKE {searchLike: String})`,
     );
   }
 
@@ -578,28 +630,28 @@ const runMvRowsFastPath = async (params: {
     queryParams.offset = (limit ?? 0) * (page ?? 0);
   }
 
-  // GROUP BY (project_id, trace_id) — rolled up across start_time_date so each
-  // trace is a single row; root-level fields use MAX(IF(parent_span_id='', …))
-  // to match the MV's column definitions.
+  // Nested two-level aggregate: inner = per (trace, day) at MV granularity (so it
+  // transparently rewrites onto traces_mv + union-compensates stale partitions);
+  // outer rolls up to one row per trace. See buildMvInnerCte.
   const query = `
+    WITH ${buildMvInnerCte(whereParts)}
     SELECT
-      trace_id AS id,
-      project_id AS project_id,
-      MIN(start_time) AS ${dq("timestamp")},
-      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
-      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
-      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
-      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
-      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
-      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
-      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      id,
+      project_id,
+      MIN(ts) AS ${dq("timestamp")},
+      MAX(tags) AS tags,
+      MAX(bookmarked) AS bookmarked,
+      MAX(name) AS name,
+      MAX(${dq("release")}) AS ${dq("release")},
+      MAX(version) AS version,
+      MAX(user_id) AS user_id,
+      MAX(environment) AS environment,
+      MAX(session_id) AS session_id,
       MAX(${dq("public")}) AS ${dq("public")}
-    FROM events_full
-    WHERE ${whereParts.join(" AND ")}
-    GROUP BY project_id, trace_id
+    FROM trace_by_day
+    GROUP BY project_id, id
     ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
+    ORDER BY DATE(MIN(ts)) ${order}, MIN(ts) ${order}, MAX(event_ts) DESC
     ${pagination}
   `;
 
@@ -615,9 +667,10 @@ const runMvRowsFastPath = async (params: {
   });
 };
 
-// Count of traces = count of (project_id, trace_id) groups. The inner grouped
-// query transparently rewrites onto traces_mv; the outer count(*) counts MV
-// rows. Same eligibility as the rows fast path (canUseMvListFastPath).
+// Count of traces = count of (project_id, trace_id) groups. Nested two-level
+// aggregate (inner per (trace, day) rewrites onto traces_mv + union-compensates
+// stale partitions; outer rolls up to one row per trace), wrapped in count(*).
+// Same eligibility as the rows fast path (canUseMvListFastPath).
 const runMvCountFastPath = async (params: {
   projectId: string;
   filter: FilterState;
@@ -634,11 +687,11 @@ const runMvCountFastPath = async (params: {
   const queryParams: Record<string, unknown> = { projectId, ...filterParams };
 
   const query = `
+    WITH ${buildMvInnerCte(whereParts)}
     SELECT count(*) AS count FROM (
-      SELECT trace_id
-      FROM events_full
-      WHERE ${whereParts.join(" AND ")}
-      GROUP BY project_id, trace_id
+      SELECT id
+      FROM trace_by_day
+      GROUP BY project_id, id
       ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
     ) t
   `;
@@ -690,41 +743,35 @@ const runMvMetricsFastPath = async (params: {
     queryParams.offset = (limit ?? 0) * (page ?? 0);
   }
 
-  // latency from raw min/max components; level priority + counts from SUM(CASE);
-  // token/cost rollups from the precomputed scalar columns. All-spans semantics
-  // (root carries no cost/tokens; latency is the full-trace span).
+  // Nested two-level aggregate (see buildMvInnerCte): inner per (trace, day) at MV
+  // granularity → rewrites onto traces_mv + union-compensates stale partitions;
+  // outer rolls up to one row per trace. latency from the rolled min/max
+  // components; level + counts from SUM of the per-day counts. scores are NOT
+  // here — the tRPC layer fetches them separately (getScoresForTraces).
   const query = `
+    WITH ${buildMvInnerCte(whereParts)}
     SELECT
-      trace_id AS id,
-      project_id AS project_id,
-      MIN(start_time) AS ${dq("timestamp")},
-      milliseconds_diff(
-        CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
-        CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
-      ) / 1000 AS latency,
+      id,
+      project_id,
+      MIN(ts) AS ${dq("timestamp")},
+      ${OUTER_LATENCY} AS latency,
       SUM(total_cost) AS total_cost,
-      SUM(input_tokens_calculated) AS input_tokens,
-      SUM(output_tokens_calculated) AS output_tokens,
-      SUM(total_tokens_calculated) AS total_tokens,
-      SUM(input_cost_calculated) AS input_cost,
-      SUM(output_cost_calculated) AS output_cost,
-      CASE
-        WHEN SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) > 0 THEN 'ERROR'
-        WHEN SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) > 0 THEN 'WARNING'
-        WHEN SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT'
-        ELSE 'DEBUG'
-      END AS level,
-      SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
-      SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
-      SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS default_count,
-      SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) AS debug_count,
-      SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
+      SUM(input_tokens) AS input_tokens,
+      SUM(output_tokens) AS output_tokens,
+      SUM(total_tokens) AS total_tokens,
+      SUM(input_cost) AS input_cost,
+      SUM(output_cost) AS output_cost,
+      ${OUTER_LEVEL} AS level,
+      SUM(error_count) AS error_count,
+      SUM(warning_count) AS warning_count,
+      SUM(default_count) AS default_count,
+      SUM(debug_count) AS debug_count,
+      SUM(observation_count) AS observation_count,
       MAX(${dq("public")}) AS ${dq("public")}
-    FROM events_full
-    WHERE ${whereParts.join(" AND ")}
-    GROUP BY project_id, trace_id
+    FROM trace_by_day
+    GROUP BY project_id, id
     ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
+    ORDER BY DATE(MIN(ts)) ${order}, MIN(ts) ${order}, MAX(event_ts) DESC
     ${pagination}
   `;
 
