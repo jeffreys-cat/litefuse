@@ -719,6 +719,14 @@ export const eventRecordBaseSchema = z.object({
   // has since dropped. Doris events_full only carries the two parallel arrays.
   metadata_names: z.array(z.string()).default([]),
   metadata_values: z.array(z.string().nullish()).default([]),
+  // Map mirror of the parallel arrays above. Carried so (a) trace-list metadata
+  // filtering uses native map access `metadata['key'] <op> value` — the only
+  // representation that supports the per-key value operators (=, contains,
+  // starts/ends with) correctly — and (b) the trace-list MV can expose
+  // MAX(IF(parent_span_id='', CAST(metadata AS STRING), NULL)) as a single
+  // rewrite-friendly column for the list preview. Arrays stay for byId detail /
+  // existing readers.
+  metadata: z.record(z.string(), z.string()).nullish(),
 
   // Experiment properties
   experiment_id: z.string().nullish(),

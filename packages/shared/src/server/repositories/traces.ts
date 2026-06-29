@@ -28,38 +28,24 @@ import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
 
 /**
- * Build a Doris CTE that aggregates events_full rows into one row per
- * trace. Mirrors upstream langfuse-main's `eventsTracesAggregation`
- * (ClickHouse `argMaxIf` idiom) but adapted to Doris constraints:
- *
- *   - Doris `MAX_BY(val, sort_key)` does NOT support `Array<>` or
- *     `Variant` column types as `val` (Doris throws
- *     `Illegal type Array(...) of argument of aggregate function
- *     min/max_by`). So we split the aggregation into two CTEs that
- *     get JOINed:
- *       * `trace_scalars`: MAX_BY for scalar trace-level fields and
- *         MIN/MAX/SUM for time/cost aggregates. One row per trace.
- *       * `trace_root`: LIMIT 1 over `parent_span_id = ''` rows per
- *         trace to lift array (tags, metadata_*) and Variant (input,
- *         output) columns from the root span. One row per trace.
- *     The final SELECT joins them on (trace_id, project_id).
- *
- *   - MAX_BY ignores NULLs, so `MAX_BY(IF(cond, val, NULL), event_ts)`
- *     implements upstream's `argMaxIf(val, event_ts, cond)` exactly.
- *
- * `whereSql` is injected into both inner SELECTs; it must scope rows
- * to the desired trace_id(s) and project_id and never reference
- * aliased columns (the CTEs do not alias the inner table).
- *
- * Column contract matches `TraceRecordReadType` so downstream
- * (zipDorisMetadataArrays + convertDorisToDomain) keeps working.
+ * Per-trace query as a single-table conditional aggregate over events_full — no
+ * ROW_NUMBER window, no self-JOIN, no double scan. Root-level fields use
+ * MAX(IF(parent_span_id='', …)), which transparently rewrites onto traces_mv
+ * (MAX rolls up across the MV's start_time_date partitions):
+ *   - tags     → MAX(IF(root, tags, NULL))   (native ARRAY; MAX supports array)
+ *   - metadata → MAX(IF(root, metadata_names, NULL)) + the matching values array;
+ *                consumers zip them back via zipDorisMetadataArrays. (MAX does
+ *                not support Map, so we roll up the parallel arrays instead.)
+ *   - input/output → CAST(Variant AS STRING) (full) when not excludeFullIO
+ * With excludeFullIO (verbosity "compact") only input_trim/output_trim are
+ * returned and the query transparently rewrites onto traces_mv.
  */
 const buildTraceAggregationQuery = (params: {
   whereSql: string;
   extraOrderBy?: string;
   extraLimit?: string;
-  /** Skip reading the full input/output Variant from the root span (only
-   * input_trim/output_trim are returned). Used for verbosity "compact". */
+  /** Skip the full input/output Variant; only input_trim/output_trim are
+   * returned. Used for verbosity "compact". */
   excludeFullIO?: boolean;
 }): string => {
   const {
@@ -68,94 +54,59 @@ const buildTraceAggregationQuery = (params: {
     extraLimit = "",
     excludeFullIO = false,
   } = params;
-  const rootInput = excludeFullIO ? "CAST(NULL AS STRING)" : "input";
-  const rootOutput = excludeFullIO ? "CAST(NULL AS STRING)" : "output";
+  const fullIO = excludeFullIO
+    ? ""
+    : `
+      MAX(IF(parent_span_id = '', CAST(input AS STRING), NULL)) AS input,
+      MAX(IF(parent_span_id = '', CAST(output AS STRING), NULL)) AS output,`;
   return `
-    WITH trace_scalars AS (
-      SELECT
-        trace_id,
-        project_id,
-        MIN(start_time) AS \`timestamp\`,
-        MAX_BY(IF(trace_name <> '', trace_name, NULL), event_ts) AS name,
-        MAX_BY(IF(user_id <> '', user_id, NULL), event_ts) AS user_id,
-        MAX_BY(IF(session_id <> '', session_id, NULL), event_ts) AS session_id,
-        MAX_BY(IF(${dq("release")} <> '', ${dq("release")}, NULL), event_ts) AS ${dq("release")},
-        MAX_BY(IF(version <> '', version, NULL), event_ts) AS version,
-        MAX_BY(IF(environment <> '', environment, NULL), event_ts) AS environment,
-        MAX_BY(IF(parent_span_id = '', bookmarked, NULL), event_ts) AS bookmarked,
-        MAX(${dq("public")}) AS ${dq("public")},
-        MIN(created_at) AS created_at,
-        MAX(updated_at) AS updated_at,
-        MAX(event_ts) AS event_ts,
-        MIN(is_deleted) AS is_deleted
-      FROM events_full
-      WHERE ${whereSql}
-      GROUP BY trace_id, project_id
-    ),
-    trace_root AS (
-      -- Pick array / Variant columns from the root span per trace.
-      -- ROW_NUMBER over event_ts DESC + filter rn=1 gives "latest root span".
-      SELECT
-        trace_id,
-        project_id,
-        tags,
-        input,
-        output,
-        input_trim,
-        output_trim,
-        metadata_names,
-        metadata_values
-      FROM (
-        SELECT
-          trace_id,
-          project_id,
-          tags,
-          ${rootInput} as input,
-          ${rootOutput} as output,
-          input_trim,
-          output_trim,
-          metadata_names,
-          metadata_values,
-          ROW_NUMBER() OVER (
-            PARTITION BY trace_id, project_id
-            ORDER BY event_ts DESC
-          ) AS rn
-        FROM events_full
-        WHERE ${whereSql}
-          AND parent_span_id = ''
-      ) ranked
-      WHERE rn = 1
-    )
     SELECT
-      s.trace_id AS id,
-      s.project_id,
-      s.\`timestamp\`,
-      s.name,
-      s.user_id,
-      s.session_id,
-      s.${dq("release")},
-      s.version,
-      s.environment,
-      s.bookmarked,
-      s.${dq("public")},
-      s.created_at,
-      s.updated_at,
-      s.event_ts,
-      s.is_deleted,
-      r.tags,
-      r.input,
-      r.output,
-      r.input_trim,
-      r.output_trim,
-      r.metadata_names,
-      r.metadata_values
-    FROM trace_scalars s
-    LEFT JOIN trace_root r
-      ON r.trace_id = s.trace_id AND r.project_id = s.project_id
+      trace_id AS id,
+      project_id,
+      MIN(start_time) AS \`timestamp\`,
+      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
+      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
+      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
+      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
+      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      MAX(${dq("public")}) AS ${dq("public")},
+      MIN(created_at) AS created_at,
+      MAX(updated_at) AS updated_at,
+      MAX(event_ts) AS event_ts,
+      MIN(is_deleted) AS is_deleted,
+      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
+      MAX(IF(parent_span_id = '', input_trim, NULL)) AS input_trim,
+      MAX(IF(parent_span_id = '', output_trim, NULL)) AS output_trim,${fullIO}
+      MAX(IF(parent_span_id = '', metadata_names, NULL)) AS metadata_names,
+      MAX(IF(parent_span_id = '', metadata_values, NULL)) AS metadata_values
+    FROM events_full
+    WHERE ${whereSql}
+    GROUP BY project_id, trace_id
     ${extraOrderBy}
     ${extraLimit}
   `;
 };
+
+/**
+ * Raw row shape returned by buildTraceAggregationQuery: metadata comes back as
+ * the parallel arrays (metadata_names / metadata_values), not a metadata field.
+ */
+type RawTraceAggregationRecord = Omit<TraceRecordReadType, "metadata"> & {
+  metadata_names?: unknown;
+  metadata_values?: unknown;
+};
+
+/**
+ * Zip the parallel metadata arrays from buildTraceAggregationQuery back into the
+ * Record<string,string> that TraceRecordReadType / convertDorisToDomain expect.
+ */
+const zipTraceMetadata = (r: RawTraceAggregationRecord): TraceRecordReadType =>
+  ({
+    ...r,
+    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+  }) as unknown as TraceRecordReadType;
 
 /**
  * Checks if trace exists in Doris.
@@ -291,12 +242,9 @@ export const getTracesByIds = async (
     extraOrderBy: "ORDER BY event_ts DESC",
   });
 
-  const rawRecords = await queryDoris<
-    Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names?: unknown;
-      metadata_values?: unknown;
-    }
-  >({
+  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
+  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
+  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
     query,
     params: {
       traceIds,
@@ -311,12 +259,7 @@ export const getTracesByIds = async (
     },
   });
 
-  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
-    ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
-  })) as TraceRecordReadType[];
-
-  return records.map((r) => convertDorisToDomain(r));
+  return rawRecords.map((r) => convertDorisToDomain(zipTraceMetadata(r)));
 };
 
 /**
@@ -425,12 +368,9 @@ export const getTracesBySessionId = async (
     extraOrderBy: "ORDER BY event_ts DESC",
   });
 
-  const rawRecords = await queryDoris<
-    Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names?: unknown;
-      metadata_values?: unknown;
-    }
-  >({
+  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
+  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
+  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
     query,
     params: {
       sessionIds,
@@ -445,12 +385,9 @@ export const getTracesBySessionId = async (
     },
   });
 
-  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
-    ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
-  })) as TraceRecordReadType[];
-
-  const traces = records.map((r) => convertDorisToDomain(r));
+  const traces = rawRecords.map((r) =>
+    convertDorisToDomain(zipTraceMetadata(r)),
+  );
 
   traces.forEach((trace) => {
     recordDistribution(
@@ -585,23 +522,22 @@ export const getTraceById = async ({
   const whereSql = `
     trace_id = {traceId: String}
     AND project_id = {projectId: String}
-    ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
+    ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
     ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
+  // "compact" (the traces-list cell preview) only needs the trim preview, so
+  // skip the full input/output Variant — the single-table aggregate then
+  // transparently rewrites onto traces_mv. full/truncated need the full
+  // input/output Variant, which the MV does not carry → stay on base.
   const query = buildTraceAggregationQuery({
     whereSql,
     extraLimit: "LIMIT 1",
-    // For verbosity "compact" the caller only needs input_trim/output_trim, so
-    // skip reading the full input/output Variant from the root span entirely.
     excludeFullIO: excludeInputOutput,
   });
 
-  const rawRecords = await queryDoris<
-    Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names?: unknown;
-      metadata_values?: unknown;
-    }
-  >({
+  // metadata comes back as the parallel arrays (metadata_names/metadata_values);
+  // zipTraceMetadata reassembles the Record convertDorisToDomain expects.
+  const rawRecords = await queryDoris<RawTraceAggregationRecord>({
     query,
     params: {
       traceId,
@@ -621,18 +557,11 @@ export const getTraceById = async ({
     },
   });
 
-  // Zip parallel metadata arrays back into the Record<string, string>
-  // shape that the rest of the read path expects.
-  const records: TraceRecordReadType[] = rawRecords.map((r) => ({
-    ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
-  })) as TraceRecordReadType[];
-
   // Carry the precomputed compact preview (root span input_trim/output_trim)
   // alongside the domain object so trace.byId can serve it for verbosity
   // "compact" (the traces-list cell) without parsing the full Variant.
-  const res = records.map((r) => ({
-    ...convertDorisToDomain(r),
+  const res = rawRecords.map((r) => ({
+    ...convertDorisToDomain(zipTraceMetadata(r)),
     input_trim: r.input_trim ?? null,
     output_trim: r.output_trim ?? null,
   }));

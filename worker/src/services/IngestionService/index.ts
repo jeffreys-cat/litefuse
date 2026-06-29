@@ -329,6 +329,13 @@ export class IngestionService {
     // Defensive: coerce null/undefined to empty string for Array(String) Doris column.
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
+    // Map mirror of the parallel arrays (see events_full migration 0037): drives
+    // native map-access metadata filtering and the trace-list MV's metadata
+    // column. formatDataForDoris/normalizeMetadataForDoris handle the Map column.
+    const metadataMap: Record<string, string> = {};
+    metadataNames.forEach((n, i) => {
+      metadataMap[n] = metadataValues[i] ?? "";
+    });
 
     const resolvedInput: string | null | undefined = eventData.input;
 
@@ -456,6 +463,7 @@ export class IngestionService {
       // happen here (OTel-only ingestion has no create/update split).
       metadata_names: metadataNames,
       metadata_values: metadataValues,
+      metadata: metadataMap,
 
       // Source/instrumentation metadata
       source: eventData.source,

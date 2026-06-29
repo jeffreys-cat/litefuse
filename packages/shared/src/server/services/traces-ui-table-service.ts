@@ -1,6 +1,8 @@
 import { OrderByState } from "../../interfaces/orderBy";
 import { tracesTableUiColumnDefinitionsForDoris } from "../tableMappings";
+import { UiColumnMappings } from "../../tableDefinitions";
 import { FilterState } from "../../types";
+import { FilterList } from "../queries";
 
 import { TraceRecordReadType } from "../repositories/definitions";
 import Decimal from "decimal.js";
@@ -88,11 +90,27 @@ export const convertToUiTableRows = (
       ? (timestampValue as Date)
       : parseDorisUTCDateTimeFormat(row.timestamp as string);
 
+  // tags is a native ARRAY column on both paths, but Doris transmits ARRAY over
+  // the MySQL protocol as a JSON array string (mysql2 does not auto-parse it), so
+  // it can arrive as either a JS array or a JSON string. Accept both.
+  const rawTags = row.tags as unknown;
+  let tags: string[] = [];
+  if (Array.isArray(rawTags)) {
+    tags = rawTags;
+  } else if (typeof rawTags === "string" && rawTags.length > 0) {
+    try {
+      const parsed = JSON.parse(rawTags);
+      if (Array.isArray(parsed)) tags = parsed;
+    } catch {
+      tags = [];
+    }
+  }
+
   return {
     id: row.id,
     projectId: row.project_id,
     timestamp: timestamp,
-    tags: row.tags ?? [],
+    tags,
     bookmarked: Boolean(row.bookmarked),
     name: row.name ?? null,
     release: row.release ?? null,
@@ -170,6 +188,558 @@ export type FetchTracesTableProps = {
   tags?: Record<string, string>;
 };
 
+// --- MV fast path for the default rows view -------------------------------
+// The common trace-list view (no column filters, no search, timestamp ordering)
+// is served as a pure single-table aggregate over events_full that Doris
+// TRANSPARENTLY REWRITES onto traces_mv (rolled up across start_time_date so a
+// trace is one row even if it spans midnight; stale partitions auto-read base).
+// Anything needing WHERE/HAVING routing we haven't migrated yet (column / tag /
+// metadata / score / metric filters, non-timestamp ordering, search) falls
+// through to the base builder — same results, just not MV-accelerated.
+
+const isTimestampFilterColumn = (column: string): boolean =>
+  column === "timestamp" || column === "Timestamp";
+
+const isIdFilterColumn = (column: string): boolean =>
+  column === "id" ||
+  column === "ID" ||
+  column === "traceId" ||
+  column === "Trace ID";
+
+const isTagsFilterColumn = (column: string): boolean =>
+  column === "tags" || column === "Tags";
+
+const isMetadataFilterColumn = (column: string): boolean =>
+  column === "metadata" || column === "Metadata";
+
+// Per-key metadata lookup over the rolled-up parallel arrays, matching the MV's
+// metadata_names / metadata_values columns: element_at(values, position-of-key
+// in names). MAX(IF(root,...)) on each ARRAY rolls up across start_time_date, so
+// metadata filters transparently rewrite onto traces_mv. array_position returns
+// 0 when the key is absent and element_at(_, 0) is NULL → key-missing rows drop
+// out of an equality/contains filter, matching the base map['key'] semantics.
+const mvMetadataNamesExpr =
+  "MAX(IF(parent_span_id = '', metadata_names, NULL))";
+const mvMetadataValuesExpr =
+  "MAX(IF(parent_span_id = '', metadata_values, NULL))";
+const mvMetadataLookup = (key: string): string => {
+  const escapedKey = key.replace(/'/g, "''");
+  return `element_at(${mvMetadataValuesExpr}, array_position(${mvMetadataNamesExpr}, '${escapedKey}'))`;
+};
+
+// UI column → per-trace aggregate expression, used to route scalar / metric
+// filters into the fast path's HAVING (a post-aggregation filter on the trace
+// row). Expressions match the fast-path SELECTs and the MV column definitions,
+// so adding them keeps the transparent rewrite firing.
+const tracesTableMvHavingColumns: UiColumnMappings = [
+  // root-level scalars
+  {
+    uiTableName: "Environment",
+    uiTableId: "environment",
+    tableName: "traces",
+    select: "MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "User ID",
+    uiTableId: "userId",
+    tableName: "traces",
+    select: "MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Session ID",
+    uiTableId: "sessionId",
+    tableName: "traces",
+    select: "MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Version",
+    uiTableId: "version",
+    tableName: "traces",
+    select: "MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Release",
+    uiTableId: "release",
+    tableName: "traces",
+    select: `MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL))`,
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Name",
+    uiTableId: "name",
+    tableName: "traces",
+    select:
+      "MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Trace Name",
+    uiTableId: "traceName",
+    tableName: "traces",
+    select:
+      "MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL))",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "⭐️",
+    uiTableId: "bookmarked",
+    tableName: "traces",
+    select: "MAX(IF(parent_span_id = '', bookmarked, NULL))",
+    queryPrefix: "",
+  },
+  // observation-level metrics (folded into the per-trace aggregate)
+  {
+    uiTableName: "Total Cost ($)",
+    uiTableId: "totalCost",
+    tableName: "observations",
+    select: "SUM(total_cost)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Input Cost ($)",
+    uiTableId: "inputCost",
+    tableName: "observations",
+    select: "SUM(input_cost_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Output Cost ($)",
+    uiTableId: "outputCost",
+    tableName: "observations",
+    select: "SUM(output_cost_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Input Tokens",
+    uiTableId: "inputTokens",
+    tableName: "observations",
+    select: "SUM(input_tokens_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Output Tokens",
+    uiTableId: "outputTokens",
+    tableName: "observations",
+    select: "SUM(output_tokens_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Total Tokens",
+    uiTableId: "totalTokens",
+    tableName: "observations",
+    select: "SUM(total_tokens_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Tokens",
+    uiTableId: "tokens",
+    tableName: "observations",
+    select: "SUM(total_tokens_calculated)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Latency (s)",
+    uiTableId: "latency",
+    tableName: "observations",
+    select:
+      "milliseconds_diff(CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END, CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END) / 1000",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Error Level Count",
+    uiTableId: "errorCount",
+    tableName: "observations",
+    select: "SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Warning Level Count",
+    uiTableId: "warningCount",
+    tableName: "observations",
+    select: "SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Default Level Count",
+    uiTableId: "defaultCount",
+    tableName: "observations",
+    select: "SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Debug Level Count",
+    uiTableId: "debugCount",
+    tableName: "observations",
+    select: "SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END)",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Level",
+    uiTableId: "level",
+    tableName: "observations",
+    select:
+      "CASE WHEN SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) > 0 THEN 'ERROR' WHEN SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) > 0 THEN 'WARNING' WHEN SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END",
+    queryPrefix: "",
+  },
+];
+
+const mvHavingColumnTokens = new Set(
+  tracesTableMvHavingColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
+);
+
+// A filter is MV-fast-path-routable when it maps to the aggregate: the timestamp
+// range (partition prune + MIN(start_time)), a trace_id list, tags (array_contains
+// on the rolled-up native array), per-key metadata (element_at over the rolled-up
+// parallel arrays), or any scalar/metric column with an aggregate expression
+// (HAVING). NOT routable: scores (separate table) or content search — those fall
+// back to the base builder.
+const canUseMvListFastPath = (params: {
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
+}): boolean => {
+  const { filter, orderBy, searchQuery, searchType } = params;
+  // ID search (trace_id / user_id / name) maps to the aggregate, so it can run
+  // on the fast path. CONTENT search needs the full input/output (FTS index),
+  // which the MV doesn't carry (only the 200-char trim) — fall back to base.
+  if (searchQuery && (!searchType || searchType.some((t) => t !== "id")))
+    return false;
+  // The fast paths order by the trace timestamp; non-timestamp ordering falls
+  // back to the base builder (which maps order columns to the JOIN aliases).
+  if (orderBy && orderBy.column !== "timestamp") return false;
+  return filter.every(
+    (f) =>
+      (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
+      ((f.type === "stringOptions" || f.type === "string") &&
+        isIdFilterColumn(f.column)) ||
+      (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
+      (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
+      mvHavingColumnTokens.has(f.column),
+  );
+};
+
+// Shared WHERE/HAVING fragments for the MV list fast paths: project_id, the
+// timestamp range (partition prune in WHERE + precise MIN(start_time) in
+// HAVING), an optional trace_id list (WHERE), tags (HAVING LIKE on the
+// stringified array), and scalar/metric column filters (HAVING via the aggregate
+// expressions). Each fast path keeps its own SELECT/GROUP BY for readability.
+const buildMvListWhereHaving = (
+  filter: FilterState,
+  searchQuery?: string,
+): {
+  whereParts: string[];
+  havingParts: string[];
+  params: Record<string, unknown>;
+} => {
+  const whereParts: string[] = ["project_id = {projectId: String}"];
+  const havingParts: string[] = [];
+  const params: Record<string, unknown> = {};
+
+  const tsFilters = filter.filter((f) => f.type === "datetime");
+  const fromFilter = tsFilters.find(
+    (f) => f.operator === ">=" || f.operator === ">",
+  );
+  const toFilter = tsFilters.find(
+    (f) => f.operator === "<=" || f.operator === "<",
+  );
+  if (fromFilter) {
+    params.fromTs = convertDateToAnalyticsDateTime(fromFilter.value as Date);
+    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
+    havingParts.push(
+      `MIN(start_time) ${fromFilter.operator} {fromTs: DateTime}`,
+    );
+  }
+  if (toFilter) {
+    params.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
+    havingParts.push(`MIN(start_time) ${toFilter.operator} {toTs: DateTime}`);
+  }
+
+  const idFilter = filter.find(
+    (f) =>
+      isIdFilterColumn(f.column) &&
+      (f.type === "stringOptions" || f.type === "string"),
+  );
+  if (idFilter) {
+    const ids =
+      idFilter.type === "stringOptions"
+        ? (idFilter.value as string[])
+        : [idFilter.value as string];
+    params.traceIds = ids;
+    whereParts.push("trace_id IN ({traceIds: Array(String)})");
+  }
+
+  // tags: MV carries tags as a native ARRAY (MAX(IF(root,...)) rolls up), so
+  // match membership with array_contains — exact element matching (no false
+  // substring hits, unlike LIKE on a stringified array).
+  const tagsExpr = "MAX(IF(parent_span_id = '', tags, NULL))";
+  for (const f of filter) {
+    if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
+    const contains = (f.value as string[]).map((v) => {
+      const escaped = v.replace(/'/g, "''");
+      return `array_contains(${tagsExpr}, '${escaped}')`;
+    });
+    if (contains.length === 0) continue;
+    if (f.operator === "all of")
+      havingParts.push(`(${contains.join(" AND ")})`);
+    else if (f.operator === "none of")
+      havingParts.push(`NOT (${contains.join(" OR ")})`);
+    else havingParts.push(`(${contains.join(" OR ")})`); // "any of"
+  }
+
+  // metadata: per-key filter over the rolled-up parallel arrays (mvMetadataLookup),
+  // mirroring the base StringObjectFilter operators on map['key']. Transparently
+  // rewrites onto traces_mv (metadata_names/metadata_values columns).
+  for (const f of filter) {
+    if (f.type !== "stringObject" || !isMetadataFilterColumn(f.column))
+      continue;
+    const lookup = mvMetadataLookup(f.key);
+    const escapedValue = f.value.replace(/'/g, "''");
+    switch (f.operator) {
+      case "=":
+        havingParts.push(`${lookup} = '${escapedValue}'`);
+        break;
+      case "contains":
+        havingParts.push(`INSTR(${lookup}, '${escapedValue}') > 0`);
+        break;
+      case "does not contain":
+        havingParts.push(`INSTR(${lookup}, '${escapedValue}') = 0`);
+        break;
+      case "starts with":
+        havingParts.push(`STARTS_WITH(${lookup}, '${escapedValue}')`);
+        break;
+      case "ends with":
+        havingParts.push(`ENDS_WITH(${lookup}, '${escapedValue}')`);
+        break;
+    }
+  }
+
+  // scalar / metric column filters → HAVING via the aggregate expressions. The
+  // Doris filter classes emit inline-escaped values (no bind params), so the
+  // produced SQL is self-contained.
+  const havingColumnFilters = filter.filter((f) =>
+    mvHavingColumnTokens.has(f.column),
+  );
+  if (havingColumnFilters.length > 0) {
+    const res = new FilterList(
+      createDorisFilterFromFilterState(
+        havingColumnFilters,
+        tracesTableMvHavingColumns,
+      ),
+    ).apply();
+    if (res.query) havingParts.push(res.query);
+  }
+
+  // ID search (searchType ["id"]): trace_id (grouping key) + root user_id / name
+  // via the aggregate expressions, OR-ed, in HAVING. Content search is gated out
+  // upstream (needs full I/O). searchQuery is interpolated as a parameter.
+  if (searchQuery) {
+    params.searchLike = `%${searchQuery}%`;
+    havingParts.push(
+      `(trace_id LIKE {searchLike: String}` +
+        ` OR MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) LIKE {searchLike: String}` +
+        ` OR MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) LIKE {searchLike: String})`,
+    );
+  }
+
+  return { whereParts, havingParts, params };
+};
+
+const runMvRowsFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderByDesc: boolean;
+  searchQuery?: string;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<TracesTableReturnType[]> => {
+  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
+    params;
+
+  const {
+    whereParts,
+    havingParts,
+    params: filterParams,
+  } = buildMvListWhereHaving(filter, searchQuery);
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  const order = orderByDesc ? "DESC" : "ASC";
+  const pagination =
+    limit !== undefined && page !== undefined
+      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
+      : "";
+  if (pagination) {
+    queryParams.limit = limit;
+    queryParams.offset = (limit ?? 0) * (page ?? 0);
+  }
+
+  // GROUP BY (project_id, trace_id) — rolled up across start_time_date so each
+  // trace is a single row; root-level fields use MAX(IF(parent_span_id='', …))
+  // to match the MV's column definitions.
+  const query = `
+    SELECT
+      trace_id AS id,
+      project_id AS project_id,
+      MIN(start_time) AS ${dq("timestamp")},
+      MAX(IF(parent_span_id = '', tags, NULL)) AS tags,
+      MAX(IF(parent_span_id = '', bookmarked, NULL)) AS bookmarked,
+      MAX(IF(parent_span_id = '', IF(trace_name <> '', trace_name, name), NULL)) AS name,
+      MAX(IF(parent_span_id = '', NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
+      MAX(IF(parent_span_id = '', NULLIF(version, ''), NULL)) AS version,
+      MAX(IF(parent_span_id = '', NULLIF(user_id, ''), NULL)) AS user_id,
+      MAX(IF(parent_span_id = '', NULLIF(environment, ''), NULL)) AS environment,
+      MAX(IF(parent_span_id = '', NULLIF(session_id, ''), NULL)) AS session_id,
+      MAX(${dq("public")}) AS ${dq("public")}
+    FROM events_full
+    WHERE ${whereParts.join(" AND ")}
+    GROUP BY project_id, trace_id
+    ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
+    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
+    ${pagination}
+  `;
+
+  return await queryDoris<TracesTableReturnType>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table",
+      projectId,
+    },
+  });
+};
+
+// Count of traces = count of (project_id, trace_id) groups. The inner grouped
+// query transparently rewrites onto traces_mv; the outer count(*) counts MV
+// rows. Same eligibility as the rows fast path (canUseMvListFastPath).
+const runMvCountFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  searchQuery?: string;
+  tags?: Record<string, string>;
+}): Promise<Array<{ count: string }>> => {
+  const { projectId, filter, tags, searchQuery } = params;
+
+  const {
+    whereParts,
+    havingParts,
+    params: filterParams,
+  } = buildMvListWhereHaving(filter, searchQuery);
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  const query = `
+    SELECT count(*) AS count FROM (
+      SELECT trace_id
+      FROM events_full
+      WHERE ${whereParts.join(" AND ")}
+      GROUP BY project_id, trace_id
+      ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
+    ) t
+  `;
+
+  return await queryDoris<{ count: string }>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table-count",
+      projectId,
+    },
+  });
+};
+
+// Metrics fast path: a single-table aggregate over events_full (no t self-JOIN,
+// no observations_stats CTE, no scores JOIN) that transparently rewrites onto
+// traces_mv. scores are NOT part of this query — the tRPC layer fetches them
+// separately (getScoresForTraces) and merges by trace_id, and the metrics SELECT
+// of scores_avg was already discarded by convertToUITableMetrics. Only eligible
+// when not ordering/filtering by scores or observation columns (canUseMvListFastPath).
+const runMvMetricsFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderByDesc: boolean;
+  searchQuery?: string;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<TracesTableMetricsDorisReturnType[]> => {
+  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
+    params;
+
+  const {
+    whereParts,
+    havingParts,
+    params: filterParams,
+  } = buildMvListWhereHaving(filter, searchQuery);
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  const order = orderByDesc ? "DESC" : "ASC";
+  const pagination =
+    limit !== undefined && page !== undefined
+      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
+      : "";
+  if (pagination) {
+    queryParams.limit = limit;
+    queryParams.offset = (limit ?? 0) * (page ?? 0);
+  }
+
+  // latency from raw min/max components; level priority + counts from SUM(CASE);
+  // token/cost rollups from the precomputed scalar columns. All-spans semantics
+  // (root carries no cost/tokens; latency is the full-trace span).
+  const query = `
+    SELECT
+      trace_id AS id,
+      project_id AS project_id,
+      MIN(start_time) AS ${dq("timestamp")},
+      milliseconds_diff(
+        CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
+        CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
+      ) / 1000 AS latency,
+      SUM(total_cost) AS total_cost,
+      SUM(input_tokens_calculated) AS input_tokens,
+      SUM(output_tokens_calculated) AS output_tokens,
+      SUM(total_tokens_calculated) AS total_tokens,
+      SUM(input_cost_calculated) AS input_cost,
+      SUM(output_cost_calculated) AS output_cost,
+      CASE
+        WHEN SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) > 0 THEN 'ERROR'
+        WHEN SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) > 0 THEN 'WARNING'
+        WHEN SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT'
+        ELSE 'DEBUG'
+      END AS level,
+      SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
+      SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
+      SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS default_count,
+      SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) AS debug_count,
+      SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
+      MAX(${dq("public")}) AS ${dq("public")}
+    FROM events_full
+    WHERE ${whereParts.join(" AND ")}
+    GROUP BY project_id, trace_id
+    ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
+    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
+    ${pagination}
+  `;
+
+  return await queryDoris<TracesTableMetricsDorisReturnType>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table",
+      projectId,
+    },
+  });
+};
+
 // Define return type mapping for better type safety
 type SelectReturnTypeMap = {
   count: { count: string };
@@ -220,6 +790,53 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     searchQuery,
     searchType,
   } = props;
+
+  // MV fast paths (see helpers above): rows / metrics / count are served as a
+  // single-table aggregate over events_full that transparently rewrites onto
+  // traces_mv. Eligible only when filters / search / ordering are MV-routable
+  // (timestamp range + trace_id list); otherwise fall through to the base builder
+  // below — same results, just not MV-accelerated.
+  const mvEligible = canUseMvListFastPath({
+    filter,
+    orderBy,
+    searchQuery,
+    searchType,
+  });
+  const orderByDesc =
+    orderBy?.column === "timestamp" ? orderBy.order !== "ASC" : true;
+
+  if (select === "rows" && mvEligible) {
+    return (await runMvRowsFastPath({
+      projectId,
+      filter,
+      orderByDesc,
+      limit,
+      page,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
+  if (select === "metrics" && mvEligible) {
+    return (await runMvMetricsFastPath({
+      projectId,
+      filter,
+      orderByDesc,
+      limit,
+      page,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
+  if (select === "count" && mvEligible) {
+    return (await runMvCountFastPath({
+      projectId,
+      filter,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
 
   // Shared SELECT statement generation logic (used by Doris path)
   let sqlSelect: string;
@@ -400,15 +1017,23 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     select === "metrics" || requiresObservationsJoin
       ? `
       observations_stats AS (
-        -- Trace-level rollup of its observations. Token/cost totals come from the
-        -- precomputed per-observation scalar columns (input_tokens_calculated etc.,
-        -- see migration 0037) summed per trace — no LATERAL VIEW explode_map over
-        -- the usage_details/cost_details maps. The per-key breakdown shown in the
-        -- list's hover tooltip is lazy-loaded per trace (getTraceUsageBreakdown).
+        -- Trace-level rollup of its observations. Written in the MV-aligned
+        -- aggregate shape (single-table, no parent_span_id predicate, level via
+        -- SUM(CASE) counts, latency from raw min/max components, partition prune
+        -- on start_time_date) so Doris TRANSPARENTLY REWRITES this CTE onto
+        -- traces_mv (rolled up across start_time_date) — see migration 0038 and
+        -- docs/trace-list-materialized-view.md. Stale/unrefreshed partitions
+        -- auto-read base, so results stay correct. Aggregates are all-spans:
+        -- the synthetic root span carries no cost/tokens, so those totals are
+        -- unchanged; latency becomes the full-trace span and level counts include
+        -- the root span. observation_count stays children-only via SUM(IF(...)).
+        -- An observation-level filter (rare) adds a non-grouping predicate that
+        -- the rewrite can't compensate, so such queries fall back to base — still
+        -- correct, just not MV-accelerated.
         SELECT
           trace_id,
           project_id,
-          COUNT(*) AS observation_count,
+          SUM(IF(parent_span_id <> '', 1, 0)) AS observation_count,
           SUM(total_cost) AS total_cost,
           SUM(input_tokens_calculated) AS input_tokens,
           SUM(output_tokens_calculated) AS output_tokens,
@@ -425,17 +1050,17 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           sum(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) as warning_count,
           sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) as default_count,
           sum(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) as debug_count,
-          -- Level aggregation
+          -- Level priority derived from the counts above (collect_list does not
+          -- transparently rewrite; CASE over SUM(CASE) does).
           CASE
-            WHEN ARRAY_CONTAINS(collect_list(level), 'ERROR') THEN 'ERROR'
-            WHEN ARRAY_CONTAINS(collect_list(level), 'WARNING') THEN 'WARNING'
-            WHEN ARRAY_CONTAINS(collect_list(level), 'DEFAULT') THEN 'DEFAULT'
+            WHEN sum(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) > 0 THEN 'ERROR'
+            WHEN sum(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) > 0 THEN 'WARNING'
+            WHEN sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT'
             ELSE 'DEBUG'
           END AS aggregated_level
         FROM events_full o
         WHERE project_id = {projectId: String}
-        AND parent_span_id != ''
-        ${timeStampFilter ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY)` : ""}
+        ${timeStampFilter ? `AND start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
         ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
         GROUP BY trace_id, project_id
       )`

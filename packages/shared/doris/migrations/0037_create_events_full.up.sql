@@ -101,6 +101,13 @@ CREATE TABLE if not exists events_full (
     -- on top of the full-row pre-read (set-union by key, new wins on conflict).
     `metadata_names` ARRAY<String>,
     `metadata_values` ARRAY<String>,
+    -- Map mirror of the parallel arrays, built at ingestion. Used for (a) trace
+    -- list metadata filtering via native map access `metadata['key'] <op> value`
+    -- (the per-key value operators =, contains, starts/ends with only work on a
+    -- map, not on the flat arrays), and (b) the trace-list MV's single
+    -- rewrite-friendly metadata column MAX(IF(parent_span_id='', CAST(metadata AS
+    -- STRING), NULL)). Arrays above stay for byId detail / existing readers.
+    `metadata` Map<String, String>,
 
     -- Experiment fields (populated by an async backfill job from dataset_run_items_rmt)
     `experiment_id` String,
