@@ -2,7 +2,11 @@ import { z } from "zod/v4";
 import { auditLog } from "@/src/features/audit-logs/auditLog";
 import { throwIfNoProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
 import { aggregateScores } from "@/src/features/scores/lib/aggregateScores";
-import { applyCommentFilters } from "@langfuse/shared/src/server";
+import {
+  applyCommentFilters,
+  applyScoreFilters,
+  isScoreFilterColumn,
+} from "@langfuse/shared/src/server";
 import {
   createTRPCRouter,
   protectedGetTraceProcedure,
@@ -132,9 +136,22 @@ export const traceRouter = createTRPCRouter({
         return { traces: [] };
       }
 
+      // Pre-resolve score filters into a trace_id list so the list query stays on
+      // the traces_mv fast path (scores live in their own table — a JOIN would
+      // pull it off the MV). See applyScoreFilters.
+      const { filterState: scoredFilterState, hasNoMatches: noScoreMatches } =
+        await applyScoreFilters({
+          filterState,
+          projectId: ctx.session.projectId,
+        });
+
+      if (noScoreMatches) {
+        return { traces: [] };
+      }
+
       const traces = await getTracesTable({
         projectId: ctx.session.projectId,
-        filter: filterState,
+        filter: scoredFilterState,
         searchQuery: input.searchQuery ?? undefined,
         searchType: input.searchType ?? ["id"],
         orderBy: normalizeOrderByForTable({
@@ -160,9 +177,19 @@ export const traceRouter = createTRPCRouter({
         return { totalCount: 0 };
       }
 
+      const { filterState: scoredFilterState, hasNoMatches: noScoreMatches } =
+        await applyScoreFilters({
+          filterState,
+          projectId: ctx.session.projectId,
+        });
+
+      if (noScoreMatches) {
+        return { totalCount: 0 };
+      }
+
       const count = await getTracesTableCount({
         projectId: ctx.session.projectId,
-        filter: filterState,
+        filter: scoredFilterState,
         searchType: input.searchType,
         searchQuery: input.searchQuery ?? undefined,
         limit: 1,
@@ -208,14 +235,17 @@ export const traceRouter = createTRPCRouter({
         }
       }
 
-      // Remove the comment filter's ID injection and use filteredTraceIds instead
+      // Remove the comment filter's ID injection and use filteredTraceIds instead.
+      // Also drop score filters: the page's traceIds were already score-filtered in
+      // traces.all, so re-applying them here would only add a redundant scores JOIN
+      // (pulling metrics off the traces_mv fast path).
       const filterWithoutCommentIds = filterState.filter(
         (f) =>
           !(
             f.type === "stringOptions" &&
             f.column === "id" &&
             f.operator === "any of"
-          ),
+          ) && !isScoreFilterColumn(f.column),
       );
 
       const res = await getTracesTableMetrics({

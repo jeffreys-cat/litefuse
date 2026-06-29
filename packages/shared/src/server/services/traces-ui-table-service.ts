@@ -907,8 +907,13 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         os.default_count as default_count,
         os.debug_count as debug_count,
         os.observation_count as observation_count,
-        s.scores_avg as scores_avg,
-        s.score_categories as score_categories,
+        -- scores for the list are fetched separately (getScoresForTraces) and
+        -- merged by trace_id in the tRPC layer; convertToUITableMetrics discards
+        -- these, so emit NULL instead of computing a dead scores_avg aggregate.
+        -- The scores_avg CTE/JOIN is built ONLY when filtering/ordering by score
+        -- (requiresScoresJoin), where it feeds the WHERE/ORDER, not this SELECT.
+        NULL as scores_avg,
+        NULL as score_categories,
         t.${dq("public")} as ${dq("public")}`;
       break;
     case "rows":
@@ -1111,9 +1116,12 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       )`
       : "";
 
-  const scores_avg_cte =
-    select === "metrics" || requiresScoresJoin
-      ? `
+  // Only build the scores aggregate when actually filtering/ordering by a score
+  // (requiresScoresJoin). The metrics SELECT no longer reads scores_avg — list
+  // scores come from the separate getScoresForTraces query — so building it for
+  // every metrics query was dead computation.
+  const scores_avg_cte = requiresScoresJoin
+    ? `
       scores_avg AS (
         SELECT
           project_id,
@@ -1159,7 +1167,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         ) tmp
         GROUP BY project_id, trace_id
       )`
-      : "";
+    : "";
 
   const withClause = [observations_stats_cte, scores_avg_cte]
     .filter(Boolean)
@@ -1178,7 +1186,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       SELECT ${dorisHint} ${sqlSelect}
       FROM events_full t
       ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.trace_id` : ""}
-      ${select === "metrics" || requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
+      ${requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
       WHERE t.project_id = {projectId: String}
       AND t.is_root = 1
       ${timeStampFilter ? `AND t.start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
