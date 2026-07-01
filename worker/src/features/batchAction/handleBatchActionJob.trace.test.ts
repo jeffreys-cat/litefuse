@@ -42,7 +42,7 @@ vi.mock("@langfuse/shared/src/server", async () => {
     },
     CreateEvalQueue: {
       getInstance: vi.fn(),
-    })),
+    },
     getCurrentSpan: vi.fn(() => null),
     logger: {
       info: vi.fn(),
@@ -54,34 +54,25 @@ vi.mock("@langfuse/shared/src/server", async () => {
   };
 });
 
-vi.mock(
-  "@/src/server/background/features/database-read-stream/getDatabaseReadStream",
-  () => ({
-    getDatabaseReadStreamPaginated: vi.fn(),
-    getTraceIdentifierStream: vi.fn(async function* () {
-      yield {
-        id: "trace-1",
-        projectId: "project-1",
-        timestamp: new Date("2026-06-23T00:00:00.000Z"),
-      };
-    }),
+vi.mock("../database-read-stream/getDatabaseReadStream", () => ({
+  getDatabaseReadStreamPaginated: vi.fn(),
+  getTraceIdentifierStream: vi.fn(async function* () {
+    yield {
+      id: "trace-1",
+      projectId: "project-1",
+      timestamp: new Date("2026-06-23T00:00:00.000Z"),
+    };
   }),
-);
+}));
 
-vi.mock(
-  "@/src/server/background/features/database-read-stream/observation-stream",
-  () => ({
-    getObservationStream: vi.fn(),
-  }),
-);
+vi.mock("../database-read-stream/observation-stream", () => ({
+  getObservationStream: vi.fn(),
+}));
 
-vi.mock(
-  "@/src/server/background/features/database-read-stream/event-stream",
-  () => ({
-    getEventsStreamForEval: vi.fn(),
-    getEventsStreamForDataset: vi.fn(),
-  }),
-);
+vi.mock("../database-read-stream/event-stream", () => ({
+  getEventsStreamForEval: vi.fn(),
+  getEventsStreamForDataset: vi.fn(),
+}));
 
 import { prisma } from "@langfuse/shared/src/db";
 import {
@@ -89,7 +80,7 @@ import {
   QueueJobs,
   QueueName,
 } from "@langfuse/shared/src/server";
-import { handleBatchActionJob } from "@/src/server/background/features/batchAction/handleBatchActionJob";
+import { handleBatchActionJob } from "./handleBatchActionJob";
 
 describe("handleBatchActionJob trace batch evaluation", () => {
   beforeEach(() => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import managedEvaluators from "@/src/server/background/constants/managed-evaluators.json";
+import managedEvaluators from "../../constants/managed-evaluators.json";
 
 describe("managed evaluators", () => {
   it("includes the three historical evaluator library templates from langfuse ck", () => {
