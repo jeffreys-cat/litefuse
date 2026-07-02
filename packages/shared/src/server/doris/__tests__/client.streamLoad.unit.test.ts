@@ -140,6 +140,10 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
 
     expect(fe.requests).toHaveLength(1);
     expect(be.requests).toHaveLength(1);
+    // The EPIPE fix: the FE leg is an empty-body probe — no data bytes ever
+    // flow to FE (which would 307-close the socket mid-body → write EPIPE).
+    // Only the BE leg carries the actual payload.
+    expect(fe.requests[0].body).toBe("");
     expect(be.requests[0].body).toBe('[{"id":"1","name":"t1"}]');
     expect(be.requests[0].label).toMatch(/^langfuse_traces_/);
   });
@@ -285,9 +289,9 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
       maxSockets: 8,
     });
 
-    await expect(client.insert("traces", [{ id: "x" }])).rejects.toThrowError(
-      /Stream load failed after 3 attempts/,
-    );
+    await expect(
+      client.insert("traces", JSON.stringify([{ id: "x" }]), 1),
+    ).rejects.toThrowError(/Stream load failed after 3 attempts/);
     expect(beHits).toBe(3);
   });
 });

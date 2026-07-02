@@ -102,7 +102,8 @@ describe("DorisWriter", () => {
     writer.addToQueue(TableName.Traces, traceData);
 
     expect(writer["queue"][TableName.Traces]).toHaveLength(1);
-    expect(writer["queue"][TableName.Traces][0].data).toEqual(traceData);
+    // Rows are stored as their serialized JSON line, not the source object.
+    expect(JSON.parse(writer["queue"][TableName.Traces][0].line).id).toBe("1");
   });
 
   it("should flush when queue reaches batch size", async () => {
@@ -448,7 +449,7 @@ describe("DorisWriter", () => {
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(writer["queue"][TableName.Traces]).toHaveLength(1);
-    expect(writer["queue"][TableName.Traces][0].data.id).toBe("2");
+    expect(JSON.parse(writer["queue"][TableName.Traces][0].line).id).toBe("2");
   });
 
   it("should handle concurrent writes during high load", async () => {
@@ -587,13 +588,16 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
+    // insert(table, body, recordCount, options): body is the joined JSONL
+    // string and recordCount matches the flushed rows.
     expect(mockInsert).toHaveBeenCalledWith(
       "traces",
-      expect.arrayContaining(
-        new Array(partialQueueSize).fill(expect.any(Object)),
-      ),
+      expect.any(String),
+      partialQueueSize,
       expect.any(Object),
     );
+    const body = (mockInsert.mock.calls[0] as any[])[1] as string;
+    expect(body.split("\n")).toHaveLength(partialQueueSize);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
 

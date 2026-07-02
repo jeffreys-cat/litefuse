@@ -492,7 +492,7 @@ export class DorisClient {
    */
   private async streamLoadPut(
     urlOrPath: string,
-    jsonData: string,
+    jsonData: string | undefined,
     authHeaders: Record<string, string>,
   ) {
     const isAbsolute = /^https?:\/\//i.test(urlOrPath);
@@ -510,7 +510,11 @@ export class DorisClient {
   }
 
   /**
-   * Stream Load data into Doris table using HTTP API
+   * Stream Load data into Doris table using HTTP API. Object convenience
+   * wrapper — serializes `data` once and delegates to streamLoadBody. Prefer
+   * streamLoadBody / insert(body, recordCount) on the hot ingestion path where
+   * the caller already holds a pre-serialized body (avoids a second full
+   * JSON.stringify of the batch).
    * @param table Target table name
    * @param data Array of records to insert
    * @param options Stream load options
@@ -522,6 +526,29 @@ export class DorisClient {
     options: DorisStreamLoadOptions = {},
   ): Promise<void> {
     if (!data || data.length === 0) {
+      logger.warn("No data provided for stream load", { table });
+      return;
+    }
+    return this.streamLoadBody(
+      table,
+      JSON.stringify(data),
+      data.length,
+      options,
+    );
+  }
+
+  /**
+   * Stream Load a pre-serialized body. `body` is the exact bytes sent to Doris
+   * (a JSON array when strip_outer_array=true, or newline-delimited objects
+   * when read_json_by_line=true). `recordCount` is used only for logging.
+   */
+  async streamLoadBody(
+    table: string,
+    body: string,
+    recordCount: number,
+    options: DorisStreamLoadOptions = {},
+  ): Promise<void> {
+    if (!body) {
       logger.warn("No data provided for stream load", { table });
       return;
     }
@@ -549,8 +576,7 @@ export class DorisClient {
       timezone: "UTC",
     };
 
-    // Convert data to JSON string
-    const jsonData = JSON.stringify(data);
+    const jsonData = body;
 
     const url = `/api/${this.config.database}/${table}/_stream_load`;
 
@@ -564,38 +590,65 @@ export class DorisClient {
         Authorization: `Basic ${authString}`,
       };
 
-      // First attempt: try the FE endpoint
-      logger.debug("DorisClient: Sending PUT request to FE", {
-        url,
-        headers: authHeaders,
+      // Two-stage PUT.
+      //
+      // Doris Stream Load always goes through an FE→307→BE redirect. FE
+      // doesn't ingest the body itself; it picks a BE per request
+      // (load-balancing + failover) and tells the client where to push.
+      // The naive "PUT the full body to FE and follow the redirect in one
+      // shot" is broken on Node.js: axios + Expect:100-continue still
+      // pre-fills one TCP send buffer (~64KB) before it sees the 307, and
+      // FE closes the connection right after sending the redirect — which
+      // surfaces as `write EPIPE` on the client whenever bodyBytes > ~64KB.
+      // Under load with multi-MB batches that's nearly every request.
+      //
+      // The fix: send an *empty-body* PUT to FE first (Content-Length: 0).
+      // FE only needs the headers to make its BE selection, so an empty PUT
+      // round-trips in a few ms and yields the same 307 with a Location
+      // header — but no body bytes ever flow to FE, so EPIPE is
+      // mechanically impossible. The actual data body is then PUT straight
+      // to the redirected BE URL (still via streamLoadPut so it reuses the
+      // keep-alive agent and doesn't open one TCP per stream load).
+      // Pass `undefined` (not "") as the body so axios' JSON transform emits
+      // no bytes at all — JSON.stringify("") would send a 2-byte `""`. axios
+      // then sets Content-Length: 0 for us. (Don't set Content-Length
+      // manually too; a duplicate header makes the peer reject with 400.)
+      logger.debug("DorisClient: Sending empty-body probe PUT to FE", { url });
+      const probe = await this.streamLoadPut(url, undefined, authHeaders);
+
+      if (probe.status !== 307 || !probe.headers?.location) {
+        // FE accepted the request but didn't redirect — this is how it
+        // reports header / auth errors (missing 100-continue, bad
+        // credentials, unknown table). Surface the FE-side message
+        // verbatim so the outer catch can log it.
+        const data = probe.data;
+        const detail =
+          (typeof data === "object" && data !== null
+            ? data.Message || data.msg || JSON.stringify(data)
+            : String(data)) ||
+          `FE returned status ${probe.status} without Location header`;
+        throw new Error(`Stream load FE probe failed: ${detail}`);
+      }
+
+      // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
+      // in the Location header). Supports both http:// and https://.
+      const redirectUrl = probe.headers.location.replace(
+        /^(https?:\/\/)[^@/]+@/,
+        "$1",
+      );
+
+      logger.debug("DorisClient: Sending body PUT to BE (redirect)", {
+        redirectUrl,
+        bodyBytes: Buffer.byteLength(jsonData, "utf8"),
       });
 
-      // Manual 307 handling — Doris FE always redirects stream loads to a BE.
-      let response = await this.streamLoadPut(url, jsonData, authHeaders);
-
-      // Handle redirect manually if we get a 307 (this is normal behavior for Doris FE)
-      if (response.status === 307 && response.headers?.location) {
-        logger.debug("Handling manual redirect for Stream Load", {
-          originalUrl: url,
-          redirectUrl: response.headers.location,
-        });
-
-        // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
-        // in the Location header). Supports both http:// and https://.
-        const redirectUrl = response.headers.location.replace(
-          /^(https?:\/\/)[^@/]+@/,
-          "$1",
-        );
-
-        logger.debug("DorisClient: Sending PUT request to BE (redirect)", {
-          redirectUrl,
-        });
-
-        // Make the request to the redirect URL with proper auth, reusing the
-        // same keep-alive agents as the FE call so we don't open one TCP per
-        // stream load.
-        response = await this.streamLoadPut(redirectUrl, jsonData, authHeaders);
-      }
+      // Body goes straight to the redirected BE, reusing the same keep-alive
+      // agent as the FE probe so we don't open one TCP per stream load.
+      const response = await this.streamLoadPut(
+        redirectUrl,
+        jsonData,
+        authHeaders,
+      );
 
       // Check load result
       const result = response.data;
@@ -641,7 +694,7 @@ export class DorisClient {
       } else {
         logger.debug("Stream load completed", {
           table,
-          recordCount: data.length,
+          recordCount,
           dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
           loadLabel,
           response: result,
@@ -687,15 +740,13 @@ export class DorisClient {
       // default text log format (which drops the metadata object). Without
       // this, "[E-217]json body size ... exceed BE's conf
       // streaming_load_json_max_mb ..." and similar BE-side rejections are
-      // invisible until operators flip LITEFUSE_LOG_FORMAT=json.
-      const dataSizeKB = (
-        data.reduce(
-          (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
-          0,
-        ) / 1024
-      ).toFixed(2);
+      // invisible until operators flip LITEFUSE_LOG_FORMAT=json. Size comes
+      // from the already-serialized body (no per-item re-stringify).
+      const dataSizeKB = (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(
+        2,
+      );
       logger.error(
-        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${data.length}, dataSizeKB=${dataSizeKB}): ${errorMessage}`,
+        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}): ${errorMessage}`,
       );
 
       throw new Error(errorMessage);
@@ -703,22 +754,27 @@ export class DorisClient {
   }
 
   /**
-   * Batch insert with automatic retry mechanism
+   * Batch insert (with retry) of a pre-serialized Stream Load body. The
+   * ingestion writer serializes each row exactly once at enqueue time and
+   * hands the joined body here, so retries re-send the same immutable string
+   * without ever re-serializing.
    * @param table Target table name
-   * @param data Array of records to insert
+   * @param body Pre-serialized Stream Load body (JSONL or JSON array)
+   * @param recordCount Number of rows in `body` (logging only)
    * @param options Stream load options
    * @returns Promise<void>
    */
-  async insert<T = any>(
+  async insert(
     table: string,
-    data: T[],
+    body: string,
+    recordCount: number,
     options: DorisStreamLoadOptions = {},
   ): Promise<void> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
       try {
-        await this.streamLoad(table, data, options);
+        await this.streamLoadBody(table, body, recordCount, options);
         return; // Success, exit retry loop
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -733,15 +789,10 @@ export class DorisClient {
       }
     }
 
-    // All retries failed
-    // Safely calculate size by iterating instead of JSON.stringify (avoids ~374MB temp alloc for 2000×96KB)
-    const dataSizeKB =
-      data.reduce(
-        (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
-        0,
-      ) / 1024;
+    // All retries failed. Size comes from the already-serialized body.
+    const dataSizeKB = (Buffer.byteLength(body, "utf8") / 1024).toFixed(2);
     throw new Error(
-      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message} | table=${table}, recordCount=${data.length}, dataSizeKB=${dataSizeKB.toFixed(2)}`,
+      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message} | table=${table}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}`,
     );
   }
 
@@ -1023,39 +1074,46 @@ const normalizeMetadataForDoris = (
  * Elegant utility function to format data for Doris insertion
  * Handles data type conversion, null values, and date field generation
  */
+/**
+ * Normalize + date-derive a single record for Doris. Hot path: the ingestion
+ * writer calls this once per row at enqueue time (so the row is serialized
+ * exactly once and never re-formatted on flush/retry), rather than
+ * re-formatting the whole batch on every Stream Load attempt.
+ */
+export const formatRecordForDoris = <T extends Record<string, any>>(
+  record: T,
+  tableName?: string,
+): T => {
+  // Step 1: Normalize all field values
+  const formatted = Object.entries(record).reduce((acc, [key, value]) => {
+    (acc as any)[key] = normalizeValue(key, value);
+    return acc;
+  }, {} as T);
+
+  // Step 1.5: Normalize metadata to avoid Doris MAP parsing issues with
+  // escaped quotes in JSON string values.
+  if ("metadata" in formatted && formatted.metadata) {
+    (formatted as any).metadata = normalizeMetadataForDoris(formatted.metadata);
+  }
+
+  // Step 2: Generate date fields based on table type
+  const mapping = tableName
+    ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS]
+    : null;
+
+  if (mapping) {
+    // Table-specific date field generation
+    generateDateField(formatted, mapping.sourceField, mapping.dateField);
+  } else {
+    // Fallback: generate both possible date fields
+    generateDateField(formatted, "timestamp", "timestamp_date");
+    generateDateField(formatted, "start_time", "start_time_date");
+  }
+
+  return formatted;
+};
+
 export const formatDataForDoris = <T extends Record<string, any>>(
   data: T[],
   tableName?: string,
-): T[] => {
-  return data.map((record) => {
-    // Step 1: Normalize all field values
-    const formatted = Object.entries(record).reduce((acc, [key, value]) => {
-      (acc as any)[key] = normalizeValue(key, value);
-      return acc;
-    }, {} as T);
-
-    // Step 1.5: Normalize metadata to avoid Doris MAP parsing issues with
-    // escaped quotes in JSON string values.
-    if ("metadata" in formatted && formatted.metadata) {
-      (formatted as any).metadata = normalizeMetadataForDoris(
-        formatted.metadata,
-      );
-    }
-
-    // Step 2: Generate date fields based on table type
-    const mapping = tableName
-      ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS]
-      : null;
-
-    if (mapping) {
-      // Table-specific date field generation
-      generateDateField(formatted, mapping.sourceField, mapping.dateField);
-    } else {
-      // Fallback: generate both possible date fields
-      generateDateField(formatted, "timestamp", "timestamp_date");
-      generateDateField(formatted, "start_time", "start_time_date");
-    }
-
-    return formatted;
-  });
-};
+): T[] => data.map((record) => formatRecordForDoris(record, tableName));

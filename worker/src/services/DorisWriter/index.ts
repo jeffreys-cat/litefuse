@@ -1,7 +1,7 @@
 import {
   dorisClient,
   DorisClientType,
-  formatDataForDoris,
+  formatRecordForDoris,
   BlobStorageFileLogInsertType,
   EventRecordInsertType,
   getCurrentSpan,
@@ -201,9 +201,12 @@ export class DorisWriter {
     try {
       const processingStartTime = Date.now();
 
+      // Newline-delimited JSON body: the rows are already serialized, so this
+      // is a single join with no per-row work and no second full serialization.
       await this.writeToDoris({
         table: tableName,
-        records: queueItems.map((item) => item.data),
+        body: queueItems.map((item) => item.line).join("\n"),
+        recordCount: queueItems.length,
       });
 
       // Log processing time
@@ -247,7 +250,7 @@ export class DorisWriter {
           recordIncrement("langfuse.queue.doris_writer.error");
           logger.error(
             `Max attempts reached for ${tableName} record. Dropping record.`,
-            { item: item.data },
+            { line: item.line.slice(0, 500) },
           );
         }
       });
@@ -259,11 +262,16 @@ export class DorisWriter {
     data: RecordInsertType<T>,
   ) {
     const entityQueue = this.queue[tableName];
-    const estimatedSizeBytes = Buffer.byteLength(JSON.stringify(data), "utf8");
+    // Format + serialize exactly once, here at enqueue. The flush path just
+    // concatenates these strings, so a row is never re-formatted or
+    // re-serialized (not on flush, not on retry). estimatedSizeBytes is now
+    // the exact byte length of what we send, not an approximation.
+    const line = JSON.stringify(formatRecordForDoris(data, tableName));
+    const estimatedSizeBytes = Buffer.byteLength(line, "utf8");
     entityQueue.push({
       createdAt: Date.now(),
       attempts: 1,
-      data,
+      line,
       estimatedSizeBytes,
     });
 
@@ -300,20 +308,21 @@ export class DorisWriter {
     }
   }
 
-  private async writeToDoris<T extends TableName>(params: {
-    table: T;
-    records: RecordInsertType<T>[];
+  private async writeToDoris(params: {
+    table: TableName;
+    body: string;
+    recordCount: number;
   }): Promise<void> {
     const startTime = Date.now();
 
-    // Format data for Doris compatibility
-    const formattedRecords = formatDataForDoris(params.records, params.table);
-
+    // Rows are pre-formatted + pre-serialized at enqueue; send them as
+    // newline-delimited JSON (read_json_by_line) so no array wrapping or
+    // re-serialization is needed here.
     await (DorisWriter.client ?? dorisClient())
-      .insert(params.table, formattedRecords, {
+      .insert(params.table, params.body, params.recordCount, {
         format: "json",
-        strip_outer_array: true,
-        read_json_by_line: false,
+        strip_outer_array: false,
+        read_json_by_line: true,
         timeout: 600, // 10 minutes
       })
       .catch((err: any) => {
@@ -323,7 +332,7 @@ export class DorisWriter {
 
     logger.debug(`DorisWriter.writeToDoris: ${Date.now() - startTime} ms`);
 
-    recordGauge("ingestion_doris_insert", params.records.length);
+    recordGauge("ingestion_doris_insert", params.recordCount);
   }
 
   /**
@@ -358,12 +367,16 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
             : never;
 
 type DorisQueue = {
-  [T in TableName]: DorisWriterQueueItem<T>[];
+  [T in TableName]: DorisWriterQueueItem[];
 };
 
-type DorisWriterQueueItem<T extends TableName> = {
+// Each queued row is stored as its final, already-formatted JSON string (one
+// row per line, newline-delimited on flush). We keep only the string — not the
+// source object — so the queue holds a compact representation and retries never
+// re-format or re-serialize.
+type DorisWriterQueueItem = {
   createdAt: number;
   attempts: number;
-  data: RecordInsertType<T>;
+  line: string;
   estimatedSizeBytes: number;
 };
