@@ -808,4 +808,27 @@ describe("DorisWriter", () => {
     await blocked;
     expect(released).toBe(true);
   });
+
+  it("pickReadyTable round-robins so no table (e.g. events_full) is starved", () => {
+    // Seed two tables (Traces = first in enum, EventsFull = last) each with a
+    // ready sealed batch, bypassing addToQueue so nothing drains.
+    const seed = (t: TableName) =>
+      (writer as any).queue[t].sealed.push({
+        rows: [{ createdAt: 0, attempts: 1, line: "{}", estimatedSizeBytes: 2 }],
+        bytes: 2,
+        readyAt: 0,
+      });
+    seed(TableName.Traces);
+    seed(TableName.EventsFull);
+
+    const pick = () => (writer as any).pickReadyTable();
+    const first = pick();
+    const second = pick();
+
+    // Fixed-order scan would return Traces twice; round-robin returns both.
+    expect(first).not.toBe(second);
+    expect(new Set([first, second])).toEqual(
+      new Set([TableName.Traces, TableName.EventsFull]),
+    );
+  });
 });

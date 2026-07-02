@@ -780,7 +780,15 @@ export class DorisClient {
         lastError = error instanceof Error ? error : new Error(String(error));
 
         if (attempt < this.config.maxRetries) {
-          const delay = this.config.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          // Exponential backoff, capped at 30s. The cap matters: with a high
+          // maxRetries an uncapped 2^attempt delay grows to hours/days, so a
+          // write against a down BE would never retry again — holding the
+          // caller's slot ~forever and failing to notice when the BE recovers.
+          // Capping keeps it probing at least every 30s → prompt recovery.
+          const delay = Math.min(
+            this.config.retryDelay * Math.pow(2, attempt - 1),
+            30_000,
+          );
           logger.warn(
             `Stream load attempt ${attempt} failed for ${table}, retrying in ${delay}ms: ${lastError.message}`,
           );

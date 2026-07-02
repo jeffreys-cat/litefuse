@@ -53,6 +53,8 @@ export class DorisWriter {
 
   // Worker-pool state. At most maxConcurrentLoads drain workers run at once.
   private activeWorkers = 0;
+  // Rotating start index for pickReadyTable's round-robin scan (anti-starvation).
+  private drainCursor = 0;
   private running = false;
   private stalenessTimer: NodeJS.Timeout | null = null;
   gaugeIntervalId: NodeJS.Timeout | null = null;
@@ -74,8 +76,12 @@ export class DorisWriter {
     this.writeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
     this.gaugeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
     this.maxAttempts = sharedEnv.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
-    this.maxConcurrentLoads =
-      workerEnv.LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS;
+    // Guard against a 0 that would deadlock the drain pool (env is .positive(),
+    // so this only defends against a bad programmatic/test override).
+    this.maxConcurrentLoads = Math.max(
+      1,
+      workerEnv.LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS,
+    );
 
     this.queue = {
       [TableName.Traces]: emptyBuffer(),
@@ -244,11 +250,21 @@ export class DorisWriter {
     }
   }
 
-  /** A table with a batch eligible to write right now, or null. */
+  /**
+   * A table with a batch eligible to write right now, or null. Scans round-robin
+   * from a rotating cursor so no table can be starved by an
+   * earlier-in-enum-order table under sustained load (events_full is last in the
+   * enum, so a fixed-order scan could starve it while e.g. scores keep flowing).
+   */
   private pickReadyTable(): TableName | null {
     const now = Date.now();
-    for (const t of Object.values(TableName)) {
-      if (this.hasReadyBatch(t, now)) return t;
+    const tables = Object.values(TableName);
+    for (let i = 0; i < tables.length; i++) {
+      const pos = (this.drainCursor + i) % tables.length;
+      if (this.hasReadyBatch(tables[pos], now)) {
+        this.drainCursor = (pos + 1) % tables.length;
+        return tables[pos];
+      }
     }
     return null;
   }
@@ -406,22 +422,27 @@ export class DorisWriter {
 
   /**
    * Flush everything currently queued right now (seal open batches and write
-   * every sealed batch regardless of readyAt), bounded by maxConcurrentLoads.
-   * Used on shutdown and by tests.
+   * every sealed batch regardless of readyAt). Used on shutdown and by tests.
+   * Runs a few passes so rows re-queued by a failed write (which land back in
+   * `sealed` after this pass drained it) get another attempt instead of being
+   * silently dropped — bounded so a persistently-down BE can't hang shutdown.
    */
-  private async flushRemaining(): Promise<void> {
-    const tasks: Promise<void>[] = [];
-    for (const t of Object.values(TableName)) {
-      const buf = this.queue[t];
-      if (buf.open.length > 0) this.sealOpen(t, 0);
-      while (buf.sealed.length > 0) {
-        const batch = buf.sealed.shift() as SealedBatch;
-        buf.bufferedBytes -= batch.bytes;
-        tasks.push(this.processBatch(t, batch.rows));
+  private async flushRemaining(maxPasses = 3): Promise<void> {
+    for (let pass = 0; pass < maxPasses; pass++) {
+      const tasks: Promise<void>[] = [];
+      for (const t of Object.values(TableName)) {
+        const buf = this.queue[t];
+        if (buf.open.length > 0) this.sealOpen(t, 0);
+        while (buf.sealed.length > 0) {
+          const batch = buf.sealed.shift() as SealedBatch;
+          buf.bufferedBytes -= batch.bytes;
+          tasks.push(this.processBatch(t, batch.rows));
+        }
       }
+      this.notifyBufferDrained();
+      if (tasks.length === 0) return;
+      await Promise.allSettled(tasks);
     }
-    this.notifyBufferDrained();
-    await Promise.allSettled(tasks);
   }
 
   /**
