@@ -588,8 +588,8 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    // insert(table, body, recordCount, options): body is the joined JSONL
-    // string and recordCount matches the flushed rows.
+    // insert(table, body, recordCount, options): body is a JSON array string
+    // and recordCount matches the flushed rows.
     expect(mockInsert).toHaveBeenCalledWith(
       "traces",
       expect.any(String),
@@ -597,7 +597,7 @@ describe("DorisWriter", () => {
       expect.any(Object),
     );
     const body = (mockInsert.mock.calls[0] as any[])[1] as string;
-    expect(body.split("\n")).toHaveLength(partialQueueSize);
+    expect(JSON.parse(body)).toHaveLength(partialQueueSize);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
 

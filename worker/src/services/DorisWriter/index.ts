@@ -201,11 +201,13 @@ export class DorisWriter {
     try {
       const processingStartTime = Date.now();
 
-      // Newline-delimited JSON body: the rows are already serialized, so this
-      // is a single join with no per-row work and no second full serialization.
+      // Rows are already serialized; wrap them in a JSON array by joining with
+      // commas. This is byte-identical to JSON.stringify(records) — the format
+      // Doris Stream Load accepts with strip_outer_array=true — so we keep that
+      // proven wire format while still serializing each row only once.
       await this.writeToDoris({
         table: tableName,
-        body: queueItems.map((item) => item.line).join("\n"),
+        body: `[${queueItems.map((item) => item.line).join(",")}]`,
         recordCount: queueItems.length,
       });
 
@@ -315,14 +317,15 @@ export class DorisWriter {
   }): Promise<void> {
     const startTime = Date.now();
 
-    // Rows are pre-formatted + pre-serialized at enqueue; send them as
-    // newline-delimited JSON (read_json_by_line) so no array wrapping or
-    // re-serialization is needed here.
+    // Rows are pre-formatted + pre-serialized at enqueue; the body is already a
+    // JSON array string, so we load it with strip_outer_array (the format this
+    // Doris version accepts for our wide rows — read_json_by_line rejects them
+    // as "Not an json object or json array").
     await (DorisWriter.client ?? dorisClient())
       .insert(params.table, params.body, params.recordCount, {
         format: "json",
-        strip_outer_array: false,
-        read_json_by_line: true,
+        strip_outer_array: true,
+        read_json_by_line: false,
         timeout: 600, // 10 minutes
       })
       .catch((err: any) => {
