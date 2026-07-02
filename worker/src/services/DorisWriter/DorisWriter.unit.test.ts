@@ -30,6 +30,9 @@ vi.mock("../../env", async (importOriginal) => {
       LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE: 100,
       LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: 5000,
       LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: 3,
+      LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: 8,
+      LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: 100 * 1024 * 1024,
+      LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS: 10000,
     },
   };
 });
@@ -255,7 +258,7 @@ describe("DorisWriter", () => {
     await writer.shutdown();
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["intervalId"]).toBeNull();
+    expect(writer["stalenessTimer"]).toBeNull();
     expect(logger.info).toHaveBeenCalledWith("DorisWriter shutdown complete.");
   });
 
@@ -324,13 +327,12 @@ describe("DorisWriter", () => {
     expect(writer["queue"][TableName.Observations]).toHaveLength(0);
   });
 
-  it("should not flush when isIntervalFlushInProgress is true", async () => {
+  it("does not flush a partial (< batchSize) batch until it is stale", async () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
 
-    writer["isIntervalFlushInProgress"] = true;
-    writer.addToQueue(TableName.Traces, {
+    await writer.addToQueue(TableName.Traces, {
       id: "1",
       name: "test",
       metadata: {},
@@ -345,11 +347,16 @@ describe("DorisWriter", () => {
       updated_at: Date.now(),
       event_ts: Date.now(),
     } as any);
+    await Promise.resolve();
 
-    await vi.advanceTimersByTimeAsync(writer.writeInterval);
-
+    // 1 item is below batchSize and fresh → not "ready", so not flushed yet.
     expect(mockInsert).not.toHaveBeenCalled();
     expect(writer["queue"][TableName.Traces]).toHaveLength(1);
+
+    // After writeInterval it becomes stale → the staleness tick flushes it.
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
 
   it("should set up interval correctly in start method", () => {
@@ -362,7 +369,7 @@ describe("DorisWriter", () => {
     );
   });
 
-  it("should flush all queues when flushAll is called directly", async () => {
+  it("should flush all queues when forceFlushAll is called directly", async () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockResolvedValue(undefined);
@@ -400,7 +407,7 @@ describe("DorisWriter", () => {
       trace_id: "trace1",
     } as any);
 
-    await writer["flushAll"](true);
+    await writer.forceFlushAll();
 
     expect(mockInsert).toHaveBeenCalledTimes(2);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
@@ -727,7 +734,7 @@ describe("DorisWriter", () => {
       event_ts: Date.now(),
     } as any);
 
-    await writer.forceFlushAll(true);
+    await writer.forceFlushAll();
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
@@ -768,14 +775,14 @@ describe("DorisWriter", () => {
     expect(writer["queue"][TableName.Traces].length).toBe(writer.batchSize);
   });
 
-  it("applies backpressure: addToQueue blocks over maxQueueSizeBytes, releases when drained", async () => {
-    vi.spyOn(dorisClientMock, "insert").mockImplementation(
-      () => new Promise<void>(() => {}),
-    );
-    writer.maxConcurrentLoads = 0; // no flush can drain the queue
+  it("applies backpressure: addToQueue blocks over maxQueueSizeBytes, releases once drained", async () => {
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockImplementation(() => new Promise<void>(() => {})); // hang → no drain
+    writer.maxConcurrentLoads = 0; // no drain worker can run
     writer.maxQueueSizeBytes = 1; // over cap after the first row
 
-    await writer.addToQueue(TableName.Traces, mkTrace("0")); // queue was empty → pushes
+    await writer.addToQueue(TableName.Traces, mkTrace("0")); // queue empty → pushes
 
     let released = false;
     const blocked = writer
@@ -783,12 +790,14 @@ describe("DorisWriter", () => {
       .then(() => {
         released = true;
       });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(2 * writer.writeInterval);
     expect(released).toBe(false); // still blocked = backpressure active
 
-    // Lift the cap → next poll exits the wait loop and the push completes.
-    writer.maxQueueSizeBytes = Number.MAX_SAFE_INTEGER;
-    await vi.advanceTimersByTimeAsync(100);
+    // Let a drain run and succeed → it removes the queued row, drops buffered
+    // bytes below the cap, and wakes the backpressured producer.
+    mockInsert.mockResolvedValue(undefined);
+    writer.maxConcurrentLoads = 1;
+    await vi.advanceTimersByTimeAsync(writer.writeInterval); // staleness tick → drain
     await blocked;
     expect(released).toBe(true);
   });
