@@ -54,6 +54,10 @@ const dorisClientMock = {
 describe("DorisWriter", () => {
   let writer: DorisWriter;
 
+  // Flattened view of a table's buffered rows (chunk-queue internals), so the
+  // assertions below can treat the queue as a simple row list.
+  const q = (t: TableName): any[] => (writer as any).queuedRows(t);
+
   beforeEach(() => {
     vi.useFakeTimers();
     writer = DorisWriter.getInstance(dorisClientMock);
@@ -104,9 +108,9 @@ describe("DorisWriter", () => {
 
     writer.addToQueue(TableName.Traces, traceData);
 
-    expect(writer["queue"][TableName.Traces]).toHaveLength(1);
+    expect(q(TableName.Traces)).toHaveLength(1);
     // Rows are stored as their serialized JSON line, not the source object.
-    expect(JSON.parse(writer["queue"][TableName.Traces][0].line).id).toBe("1");
+    expect(JSON.parse(q(TableName.Traces)[0].line).id).toBe("1");
   });
 
   it("should flush when queue reaches batch size", async () => {
@@ -135,7 +139,7 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should flush at regular intervals", async () => {
@@ -190,12 +194,12 @@ describe("DorisWriter", () => {
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalled();
-    expect(writer["queue"][TableName.Traces]).toHaveLength(1);
-    expect(writer["queue"][TableName.Traces][0].attempts).toBe(2);
+    expect(q(TableName.Traces)).toHaveLength(1);
+    expect(q(TableName.Traces)[0].attempts).toBe(2);
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
     expect(mockInsert).toHaveBeenCalledTimes(2);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should drop records after max attempts", async () => {
@@ -231,7 +235,7 @@ describe("DorisWriter", () => {
         call[0].includes("Max attempts reached"),
       ),
     ).toBe(true);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should shutdown gracefully", async () => {
@@ -322,9 +326,9 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(3);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
-    expect(writer["queue"][TableName.Scores]).toHaveLength(0);
-    expect(writer["queue"][TableName.Observations]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
+    expect(q(TableName.Scores)).toHaveLength(0);
+    expect(q(TableName.Observations)).toHaveLength(0);
   });
 
   it("does not flush a partial (< batchSize) batch until it is stale", async () => {
@@ -351,12 +355,12 @@ describe("DorisWriter", () => {
 
     // 1 item is below batchSize and fresh → not "ready", so not flushed yet.
     expect(mockInsert).not.toHaveBeenCalled();
-    expect(writer["queue"][TableName.Traces]).toHaveLength(1);
+    expect(q(TableName.Traces)).toHaveLength(1);
 
     // After writeInterval it becomes stale → the staleness tick flushes it.
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should set up interval correctly in start method", () => {
@@ -410,8 +414,8 @@ describe("DorisWriter", () => {
     await writer.forceFlushAll();
 
     expect(mockInsert).toHaveBeenCalledTimes(2);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
-    expect(writer["queue"][TableName.Scores]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
+    expect(q(TableName.Scores)).toHaveLength(0);
   });
 
   it("should handle adding items to queue while flush is in progress", async () => {
@@ -455,8 +459,8 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(1);
-    expect(JSON.parse(writer["queue"][TableName.Traces][0].line).id).toBe("2");
+    expect(q(TableName.Traces)).toHaveLength(1);
+    expect(JSON.parse(q(TableName.Traces)[0].line).id).toBe("2");
   });
 
   it("should handle concurrent writes during high load", async () => {
@@ -489,7 +493,7 @@ describe("DorisWriter", () => {
     expect(mockInsert).toHaveBeenCalledTimes(
       Math.ceil(concurrentWrites / writer.batchSize),
     );
-    expect(writer["queue"][TableName.Traces].length).toBeLessThan(
+    expect(q(TableName.Traces).length).toBeLessThan(
       writer.batchSize,
     );
   });
@@ -565,7 +569,7 @@ describe("DorisWriter", () => {
     );
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should handle partial queue flush correctly", async () => {
@@ -605,7 +609,7 @@ describe("DorisWriter", () => {
     );
     const body = (mockInsert.mock.calls[0] as any[])[1] as string;
     expect(JSON.parse(body)).toHaveLength(partialQueueSize);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should continue functioning after encountering an error", async () => {
@@ -648,8 +652,11 @@ describe("DorisWriter", () => {
     } as any);
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
-    expect(mockInsert).toHaveBeenCalledTimes(2);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    // 3 writes: item "1" (fails), item "1" retry (succeeds), item "2" (succeeds).
+    // The re-queued batch and the newly-arrived row are written as separate
+    // batches (the chunk queue doesn't merge them), and both drain here.
+    expect(mockInsert).toHaveBeenCalledTimes(3);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   it("should handle BlobStorageFileLog table", async () => {
@@ -671,7 +678,7 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["queue"][TableName.BlobStorageFileLog]).toHaveLength(0);
+    expect(q(TableName.BlobStorageFileLog)).toHaveLength(0);
   });
 
   it("should record correct metrics", async () => {
@@ -737,7 +744,7 @@ describe("DorisWriter", () => {
     await writer.forceFlushAll();
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(writer["queue"][TableName.Traces]).toHaveLength(0);
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 
   const mkTrace = (id: string) =>
@@ -772,7 +779,7 @@ describe("DorisWriter", () => {
 
     expect(mockInsert).toHaveBeenCalledTimes(2);
     // The 3rd batch stays queued (gated), not spliced into a load.
-    expect(writer["queue"][TableName.Traces].length).toBe(writer.batchSize);
+    expect(q(TableName.Traces).length).toBe(writer.batchSize);
   });
 
   it("applies backpressure: addToQueue blocks over maxQueueSizeBytes, releases once drained", async () => {

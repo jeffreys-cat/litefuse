@@ -21,18 +21,24 @@ import { instrumentAsync } from "@langfuse/shared/src/server";
 import { SpanKind } from "@opentelemetry/api";
 
 /**
- * Buffers rows per table and writes them to Doris via Stream Load using a
- * bounded worker pool:
+ * Buffers rows per table and writes them to Doris via Stream Load.
  *
- *  - Producers call addToQueue(); each row is formatted + serialized once and
- *    pushed to its table's in-memory queue.
- *  - A drain pool of at most maxConcurrentLoads workers pulls "ready" batches
- *    (>= batchSize, or older than writeInterval) and writes them. Bounding the
- *    workers bounds how many batches are held in memory in flight.
- *  - Backpressure: when a table's buffered bytes reach maxQueueSizeBytes,
- *    addToQueue awaits until a drain frees space. This caps total worker memory
- *    (~maxQueueSizeBytes queued + maxConcurrentLoads * batch in flight) and
- *    pushes the backlog up to the ingestion job / BullMQ instead of RAM.
+ * Data structure — chunk queue (produce per row, consume per batch):
+ *   - Each table has one "open" batch being filled and a FIFO of "sealed"
+ *     batches ready to write. push() appends a serialized row to the open
+ *     batch; when it reaches batchSize (or ages past writeInterval — staleness)
+ *     it is sealed and moved to the sealed list. Consumers pull whole sealed
+ *     batches. This makes enqueue O(1) and dequeue O(#batches), avoiding the
+ *     O(#rows) front-splice a flat row array would need, while covering both
+ *     high volume (full batches) and low volume (staleness flush).
+ *
+ * Concurrency + memory:
+ *   - A drain pool of at most maxConcurrentLoads workers pulls ready batches
+ *     and writes them, bounding in-flight batches.
+ *   - Backpressure: addToQueue awaits when a table's buffered bytes reach
+ *     maxQueueSizeBytes, released when a drain frees space. Total worker memory
+ *     is bounded by ~maxQueueSizeBytes (buffered) + maxConcurrentLoads * batch
+ *     (in flight); the rest of the backlog stays in BullMQ/Redis.
  */
 export class DorisWriter {
   private static instance: DorisWriter | null = null;
@@ -44,7 +50,6 @@ export class DorisWriter {
   maxAttempts: number;
   maxConcurrentLoads: number;
   queue: DorisQueue;
-  queueSizeBytes: Map<TableName, number>;
 
   // Worker-pool state. At most maxConcurrentLoads drain workers run at once.
   private activeWorkers = 0;
@@ -73,15 +78,13 @@ export class DorisWriter {
       workerEnv.LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS;
 
     this.queue = {
-      [TableName.Traces]: [],
-      [TableName.Scores]: [],
-      [TableName.Observations]: [],
-      [TableName.BlobStorageFileLog]: [],
-      [TableName.DatasetRunItems]: [],
-      [TableName.EventsFull]: [],
+      [TableName.Traces]: emptyBuffer(),
+      [TableName.Scores]: emptyBuffer(),
+      [TableName.Observations]: emptyBuffer(),
+      [TableName.BlobStorageFileLog]: emptyBuffer(),
+      [TableName.DatasetRunItems]: emptyBuffer(),
+      [TableName.EventsFull]: emptyBuffer(),
     };
-
-    this.queueSizeBytes = new Map();
 
     this.start();
   }
@@ -108,10 +111,9 @@ export class DorisWriter {
     );
     this.running = true;
 
-    // Staleness tick: nudge the drain pool every writeInterval so partial
-    // batches (< batchSize) that have been waiting get flushed even if no new
-    // rows arrive. Steady-state batch-size flushes happen immediately via
-    // scheduleDrain() on enqueue.
+    // Staleness tick: nudge the drain pool every writeInterval so a partial
+    // open batch (< batchSize) that has been waiting gets sealed and flushed
+    // even if no new rows arrive — this is what covers low-volume tables.
     this.stalenessTimer = setInterval(
       () => this.scheduleDrain(),
       this.writeInterval,
@@ -119,12 +121,11 @@ export class DorisWriter {
 
     // Periodic queue gauge — one log line per table per window, but
     // skip tables that are completely silent (q=0 and no add/flush in
-    // the window) so an idle system stays quiet instead of emitting
-    // 6 zero rows every tick. Format: `q=<depth> +<added> -<flushed>`.
+    // the window). Format: `q=<rows> +<added> -<flushed>`.
     const gaugeWindowSec = Math.round(this.gaugeInterval / 1000);
     this.gaugeIntervalId = setInterval(() => {
       for (const t of Object.values(TableName)) {
-        const len = this.queue[t]?.length ?? 0;
+        const len = this.rowCount(t);
         const added = this.addCounters.get(t) ?? 0;
         const flushed = this.flushCounters.get(t) ?? 0;
         this.addCounters.set(t, 0);
@@ -159,13 +160,13 @@ export class DorisWriter {
     tableName: T,
     data: RecordInsertType<T>,
   ): Promise<void> {
+    const buf = this.queue[tableName];
+
     // Backpressure: block while this table's buffered bytes are at the hard
     // cap. Released by notifyBufferDrained() when a drain reduces the bytes.
     // Awaiting (not busy-polling) yields the event loop, so BullMQ job locks
     // keep renewing while intake is throttled and the backlog stays in Redis.
-    while (
-      (this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes
-    ) {
+    while (buf.bufferedBytes >= this.maxQueueSizeBytes) {
       await new Promise<void>((resolve) => this.bufferWaiters.push(resolve));
     }
 
@@ -175,29 +176,40 @@ export class DorisWriter {
     // exact byte length of what we send.
     const line = JSON.stringify(formatRecordForDoris(data, tableName));
     const estimatedSizeBytes = Buffer.byteLength(line, "utf8");
-    this.queue[tableName].push({
+    buf.open.push({
       createdAt: Date.now(),
       attempts: 1,
       line,
       estimatedSizeBytes,
     });
-    this.queueSizeBytes.set(
-      tableName,
-      (this.queueSizeBytes.get(tableName) ?? 0) + estimatedSizeBytes,
-    );
+    buf.openBytes += estimatedSizeBytes;
+    buf.bufferedBytes += estimatedSizeBytes;
     this.addCounters.set(tableName, (this.addCounters.get(tableName) ?? 0) + 1);
 
+    // Seal a full batch immediately so it's available to a drain worker.
+    if (buf.open.length >= this.batchSize) {
+      this.sealOpen(tableName, Date.now());
+    }
+
     logger.debug(
-      `[DorisWriter.addToQueue] ${tableName} length=${this.queue[tableName].length}`,
+      `[DorisWriter.addToQueue] ${tableName} rows=${this.rowCount(tableName)}`,
     );
 
     this.scheduleDrain();
   }
 
+  /** Move the open batch into the sealed FIFO with the given eligibility time. */
+  private sealOpen(table: TableName, readyAt: number): void {
+    const buf = this.queue[table];
+    if (buf.open.length === 0) return;
+    buf.sealed.push({ rows: buf.open, bytes: buf.openBytes, readyAt });
+    buf.open = [];
+    buf.openBytes = 0;
+  }
+
   /**
    * Launch drain workers (up to maxConcurrentLoads) while there is ready work.
-   * Each worker pulls ready batches until none remain, then exits. Idempotent
-   * and cheap to call often (enqueue, staleness tick, after a batch completes).
+   * Each worker pulls ready batches until none remain, then exits.
    */
   private scheduleDrain(): void {
     while (
@@ -217,52 +229,60 @@ export class DorisWriter {
     for (;;) {
       const table = this.pickReadyTable();
       if (!table) return;
-      const items = this.queue[table].splice(0, this.batchSize);
-      if (items.length === 0) return;
-      this.accountSplice(table, items);
-      await this.processBatch(table, items);
+      const batch = this.takeReadyBatch(table);
+      if (!batch) return;
+
+      const now = Date.now();
+      for (const row of batch.rows) {
+        recordHistogram(
+          "langfuse.queue.doris_writer.wait_time",
+          now - row.createdAt,
+          { unit: "milliseconds" },
+        );
+      }
+      await this.processBatch(table, batch.rows);
     }
+  }
+
+  /** A table with a batch eligible to write right now, or null. */
+  private pickReadyTable(): TableName | null {
+    const now = Date.now();
+    for (const t of Object.values(TableName)) {
+      if (this.hasReadyBatch(t, now)) return t;
+    }
+    return null;
+  }
+
+  private hasReadyBatch(table: TableName, now: number): boolean {
+    const buf = this.queue[table];
+    if (buf.sealed.some((b) => b.readyAt <= now)) return true;
+    // A partial open batch becomes ready once its oldest row is stale.
+    return (
+      buf.open.length > 0 && now - buf.open[0].createdAt >= this.writeInterval
+    );
   }
 
   /**
-   * The readiest table to flush, or null. A table is ready when it holds a full
-   * batch or its oldest row has waited longer than writeInterval (staleness).
+   * Remove and return the next eligible batch for a table (sealing a stale open
+   * batch if needed), or null. Updates buffered bytes and wakes producers.
    */
-  private pickReadyTable(): TableName | null {
-    let best: TableName | null = null;
-    let bestLen = 0;
+  private takeReadyBatch(table: TableName): SealedBatch | null {
+    const buf = this.queue[table];
     const now = Date.now();
-    for (const t of Object.values(TableName)) {
-      const q = this.queue[t];
-      if (q.length === 0) continue;
-      const ready =
-        q.length >= this.batchSize ||
-        now - q[0].createdAt >= this.writeInterval;
-      if (ready && q.length > bestLen) {
-        best = t;
-        bestLen = q.length;
-      }
-    }
-    return best;
-  }
 
-  /** Bookkeeping when a batch is spliced out of the queue for writing. */
-  private accountSplice(table: TableName, items: DorisWriterQueueItem[]): void {
-    const flushedBytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
-    this.queueSizeBytes.set(
-      table,
-      (this.queueSizeBytes.get(table) ?? 0) - flushedBytes,
-    );
+    if (
+      buf.open.length > 0 &&
+      now - buf.open[0].createdAt >= this.writeInterval
+    ) {
+      this.sealOpen(table, now);
+    }
+
+    const idx = buf.sealed.findIndex((b) => b.readyAt <= now);
+    if (idx === -1) return null;
+    const [batch] = buf.sealed.splice(idx, 1);
+    buf.bufferedBytes -= batch.bytes;
     this.notifyBufferDrained();
-
-    const now = Date.now();
-    for (const item of items) {
-      recordHistogram(
-        "langfuse.queue.doris_writer.wait_time",
-        now - item.createdAt,
-        { unit: "milliseconds" },
-      );
-    }
+    return batch;
   }
 
   /** Wake all backpressured producers; each re-checks its table's cap. */
@@ -276,7 +296,7 @@ export class DorisWriter {
   /** Write one batch; on failure re-queue rows (attempts+1) up to maxAttempts. */
   private async processBatch(
     table: TableName,
-    items: DorisWriterQueueItem[],
+    rows: QueuedRow[],
   ): Promise<void> {
     return instrumentAsync(
       { name: "write-to-doris", spanKind: SpanKind.CONSUMER },
@@ -284,7 +304,7 @@ export class DorisWriter {
         recordIncrement("langfuse.queue.doris_writer.request");
         const currentSpan = getCurrentSpan();
         if (currentSpan) {
-          currentSpan.setAttributes({ [`${table}-length`]: items.length });
+          currentSpan.setAttributes({ [`${table}-length`]: rows.length });
         }
 
         try {
@@ -295,8 +315,8 @@ export class DorisWriter {
           // accepts with strip_outer_array=true.
           await this.writeToDoris({
             table,
-            body: `[${items.map((item) => item.line).join(",")}]`,
-            recordCount: items.length,
+            body: `[${rows.map((r) => r.line).join(",")}]`,
+            recordCount: rows.length,
           });
 
           recordHistogram(
@@ -306,45 +326,48 @@ export class DorisWriter {
           );
 
           logger.info(
-            `[DorisWriter] Flushed ${items.length} records to Doris ${table}. Queue length: ${this.queue[table].length}`,
+            `[DorisWriter] Flushed ${rows.length} records to Doris ${table}. Rows queued: ${this.rowCount(table)}`,
           );
 
           this.flushCounters.set(
             table,
-            (this.flushCounters.get(table) ?? 0) + items.length,
+            (this.flushCounters.get(table) ?? 0) + rows.length,
           );
 
           recordGauge(
             "ingestion_doris_insert_queue_length",
-            this.queue[table].length,
+            this.rowCount(table),
             { unit: "records", entityType: table },
           );
         } catch (err) {
           logger.error(`DorisWriter.processBatch ${table}`, err);
 
-          for (const item of items) {
-            if (item.attempts < this.maxAttempts) {
-              // Reset createdAt so the re-queued batch isn't immediately
-              // "stale/ready" again — this spaces DorisWriter-level retries by
-              // ~writeInterval (via the staleness tick) instead of letting a
-              // drain worker hot-loop on a fast-failing batch.
-              this.queue[table].push({
-                ...item,
-                attempts: item.attempts + 1,
-                createdAt: Date.now(),
-              });
-              this.queueSizeBytes.set(
-                table,
-                (this.queueSizeBytes.get(table) ?? 0) + item.estimatedSizeBytes,
-              );
+          const survivors: QueuedRow[] = [];
+          let bytes = 0;
+          for (const row of rows) {
+            if (row.attempts < this.maxAttempts) {
+              survivors.push({ ...row, attempts: row.attempts + 1 });
+              bytes += row.estimatedSizeBytes;
             } else {
               // TODO - Add to a dead letter queue in Redis rather than dropping
               recordIncrement("langfuse.queue.doris_writer.error");
               logger.error(
                 `Max attempts reached for ${table} record. Dropping record.`,
-                { line: item.line.slice(0, 500) },
+                { line: row.line.slice(0, 500) },
               );
             }
+          }
+          if (survivors.length > 0) {
+            // Re-queue as a sealed batch with a delayed readyAt so the retry is
+            // spaced by ~writeInterval instead of a drain worker hot-looping on
+            // a fast-failing batch.
+            const buf = this.queue[table];
+            buf.sealed.push({
+              rows: survivors,
+              bytes,
+              readyAt: Date.now() + this.writeInterval,
+            });
+            buf.bufferedBytes += bytes;
           }
         }
       },
@@ -382,19 +405,22 @@ export class DorisWriter {
   }
 
   /**
-   * Flush everything currently queued right now (one write per non-empty table
-   * for whatever it holds, ignoring batch-size/staleness readiness). Used on
-   * shutdown and by tests.
+   * Flush everything currently queued right now (seal open batches and write
+   * every sealed batch regardless of readyAt), bounded by maxConcurrentLoads.
+   * Used on shutdown and by tests.
    */
   private async flushRemaining(): Promise<void> {
     const tasks: Promise<void>[] = [];
     for (const t of Object.values(TableName)) {
-      const q = this.queue[t];
-      if (q.length === 0) continue;
-      const items = q.splice(0, q.length);
-      this.accountSplice(t, items);
-      tasks.push(this.processBatch(t, items));
+      const buf = this.queue[t];
+      if (buf.open.length > 0) this.sealOpen(t, 0);
+      while (buf.sealed.length > 0) {
+        const batch = buf.sealed.shift() as SealedBatch;
+        buf.bufferedBytes -= batch.bytes;
+        tasks.push(this.processBatch(t, batch.rows));
+      }
     }
+    this.notifyBufferDrained();
     await Promise.allSettled(tasks);
   }
 
@@ -403,6 +429,26 @@ export class DorisWriter {
    */
   public async forceFlushAll(): Promise<void> {
     await this.flushRemaining();
+  }
+
+  /** Total buffered rows for a table (open + sealed). */
+  private rowCount(table: TableName): number {
+    const buf = this.queue[table];
+    let n = buf.open.length;
+    for (const b of buf.sealed) n += b.rows.length;
+    return n;
+  }
+
+  /**
+   * Flattened view of all buffered rows for a table (sealed batches oldest
+   * first, then the open batch). Used by tests to inspect queue state.
+   */
+  private queuedRows(table: TableName): QueuedRow[] {
+    const buf = this.queue[table];
+    const rows: QueuedRow[] = [];
+    for (const b of buf.sealed) rows.push(...b.rows);
+    rows.push(...buf.open);
+    return rows;
   }
 }
 
@@ -429,16 +475,39 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
             ? EventRecordInsertType
             : never;
 
-type DorisQueue = {
-  [T in TableName]: DorisWriterQueueItem[];
-};
-
-// Each queued row is stored as its final, already-formatted JSON string. We
-// keep only the string — not the source object — so the queue holds a compact
-// representation and retries never re-format or re-serialize.
-type DorisWriterQueueItem = {
+// A queued row: its final, already-formatted JSON string plus bookkeeping. We
+// keep only the string — not the source object — so the queue stays compact and
+// retries never re-format or re-serialize.
+type QueuedRow = {
   createdAt: number;
   attempts: number;
   line: string;
   estimatedSizeBytes: number;
+};
+
+// A sealed (full or staleness-sealed) batch ready to write once readyAt passes.
+type SealedBatch = {
+  rows: QueuedRow[];
+  bytes: number;
+  readyAt: number;
+};
+
+// Per-table chunk buffer: one open batch being filled + a FIFO of sealed
+// batches. bufferedBytes = open bytes + all sealed bytes (drives backpressure).
+type TableBuffer = {
+  open: QueuedRow[];
+  openBytes: number;
+  sealed: SealedBatch[];
+  bufferedBytes: number;
+};
+
+const emptyBuffer = (): TableBuffer => ({
+  open: [],
+  openBytes: 0,
+  sealed: [],
+  bufferedBytes: 0,
+});
+
+type DorisQueue = {
+  [T in TableName]: TableBuffer;
 };
