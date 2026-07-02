@@ -317,10 +317,12 @@ export class DorisWriter {
   }): Promise<void> {
     const startTime = Date.now();
 
-    // Rows are pre-formatted + pre-serialized at enqueue; the body is already a
-    // JSON array string, so we load it with strip_outer_array (the format this
-    // Doris version accepts for our wide rows — read_json_by_line rejects them
-    // as "Not an json object or json array").
+    // Rows are pre-formatted + pre-serialized at enqueue and the body is a JSON
+    // array string, so it must be loaded with strip_outer_array=true. The body
+    // format and these flags have to agree: read_json_by_line=true expects a
+    // newline-delimited body instead, and mixing them makes Doris try to parse
+    // the whole array/lines as a single JSON value ("Not an json object or json
+    // array").
     await (DorisWriter.client ?? dorisClient())
       .insert(params.table, params.body, params.recordCount, {
         format: "json",
