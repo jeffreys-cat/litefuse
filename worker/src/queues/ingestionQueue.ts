@@ -87,7 +87,7 @@ export const ingestionQueueProcessorBuilder = (
         };
 
         // Write to Doris
-        dorisWriter.addToQueue(
+        await dorisWriter.addToQueue(
           DorisTableName.BlobStorageFileLog,
           blobStorageRecord,
         );

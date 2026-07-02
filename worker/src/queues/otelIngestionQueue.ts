@@ -512,7 +512,9 @@ export const otelIngestionQueueProcessor: Processor = async (
         // Step 3: Write to events table (independent of eval scheduling)
         if (shouldWriteToEventsTable) {
           try {
-            ingestionService.writeEventRecord(eventRecord);
+            // await so DorisWriter backpressure throttles this batch's intake
+            // (the map runs inside Promise.all) instead of ballooning memory.
+            await ingestionService.writeEventRecord(eventRecord);
           } catch (error) {
             traceException(error);
             logger.error(

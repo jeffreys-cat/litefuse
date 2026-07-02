@@ -679,7 +679,7 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
       eventInput,
       "",
     ); // Empty fileKey since we're not storing raw events
-    ingestionService.writeEventRecord(eventRecord);
+    await ingestionService.writeEventRecord(eventRecord);
   }
 
   logger.info(

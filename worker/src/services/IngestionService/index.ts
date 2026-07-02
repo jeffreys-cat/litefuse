@@ -520,14 +520,18 @@ export class IngestionService {
    *
    * @param eventRecord - The event record to write
    */
-  public writeEventRecord(eventRecord: EventRecordInsertType): void {
+  public async writeEventRecord(
+    eventRecord: EventRecordInsertType,
+  ): Promise<void> {
     if (!this.dorisWriter) {
       logger.debug(
         "writeEventRecord called but DorisWriter is not initialized, skipping",
       );
       return;
     }
-    this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
+    // await so DorisWriter backpressure (buffer-full) propagates up to the
+    // ingestion job and throttles intake instead of growing worker memory.
+    await this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
     logger.debug(
       `[writeEventRecord] queued events_full row for span ${eventRecord.span_id} (trace ${eventRecord.trace_id})`,
     );
@@ -635,7 +639,7 @@ export class IngestionService {
       );
       const writer = DorisWriter.getInstance();
       for (const record of finalDatasetRunItemRecords) {
-        writer.addToQueue(TableName.DatasetRunItems, record);
+        await writer.addToQueue(TableName.DatasetRunItems, record);
       }
     }
   }
@@ -742,7 +746,7 @@ export class IngestionService {
 
     // Write to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
+      await this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
     }
   }
 
@@ -825,7 +829,7 @@ export class IngestionService {
 
     // Write to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      await this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
       logger.debug(
         `Added trace ${entityId} to Doris queue for project ${projectId}`,
       );
@@ -1037,14 +1041,14 @@ export class IngestionService {
 
       // Write wrapper trace to Doris backend
       if (this.dorisWriter) {
-        this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+        await this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
       }
       finalObservationRecord.trace_id = finalObservationRecord.id;
     }
 
     // Write observation to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(
+      await this.dorisWriter.addToQueue(
         TableName.Observations,
         finalObservationRecord,
       );

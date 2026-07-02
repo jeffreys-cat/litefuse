@@ -90,6 +90,15 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(90 * 1024 * 1024), // 90MB - flush when queue exceeds this to avoid hitting Doris BE 100MB Stream Load limit
+  // Max concurrent in-flight Stream Loads across all tables. Each in-flight
+  // load holds its (~tens of MB) batch in memory while insert() retries, so an
+  // unbounded fan-out balloons worker RSS when Doris rejects/stalls writes.
+  // Bounds in-flight memory to ~this * batch-bytes; excess rows stay queued and
+  // apply backpressure (see MAX_QUEUE_SIZE_BYTES) instead of piling up.
+  LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: z.coerce
+    .number()
+    .positive()
+    .default(8),
   LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
     .number()
     .positive()

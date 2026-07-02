@@ -28,6 +28,11 @@ export class DorisWriter {
   writeInterval: number;
   gaugeInterval: number;
   maxAttempts: number;
+  maxConcurrentLoads: number;
+  // Number of Stream Loads currently in flight (spliced out of the queue and
+  // being written/retried). Gates flush() so at most maxConcurrentLoads batches
+  // are held in memory at once; the rest wait in the queue and backpressure.
+  private inFlightLoads = 0;
   queue: DorisQueue;
   queueSizeBytes: Map<TableName, number>;
 
@@ -48,6 +53,8 @@ export class DorisWriter {
     this.writeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
     this.gaugeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
     this.maxAttempts = sharedEnv.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
+    this.maxConcurrentLoads =
+      workerEnv.LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS;
 
     this.isIntervalFlushInProgress = false;
 
@@ -166,6 +173,14 @@ export class DorisWriter {
     const entityQueue = this.queue[tableName];
     if (entityQueue.length === 0) return;
 
+    // Concurrency gate: cap simultaneous in-flight Stream Loads. When at the
+    // cap, leave the rows in the queue — a later addToQueue trigger or the
+    // interval tick flushes them once a slot frees. This bounds how many
+    // batches are held in memory while insert() retries a slow/failing Doris,
+    // and (with addToQueue backpressure) keeps worker RSS from ballooning.
+    if (this.inFlightLoads >= this.maxConcurrentLoads) return;
+    this.inFlightLoads++;
+
     logger.info(
       `[DorisWriter.flush] Flushing ${tableName}, queue length: ${entityQueue.length}, batch size: ${this.batchSize}`,
     );
@@ -256,14 +271,30 @@ export class DorisWriter {
           );
         }
       });
+    } finally {
+      this.inFlightLoads--;
     }
   }
 
-  public addToQueue<T extends TableName>(
+  public async addToQueue<T extends TableName>(
     tableName: T,
     data: RecordInsertType<T>,
-  ) {
+  ): Promise<void> {
     const entityQueue = this.queue[tableName];
+
+    // Backpressure: if this table's buffered bytes are already at the hard cap,
+    // wait for flushes to drain it before enqueuing more. Without this, when
+    // Doris rejects/stalls writes (flushes gated by maxConcurrentLoads can't
+    // drain), the queue would grow unbounded and blow up worker RSS. Awaiting
+    // here propagates backpressure up to the ingestion job → the backlog stays
+    // in BullMQ/Redis instead of worker memory. (setTimeout yields the event
+    // loop, so BullMQ job locks keep renewing — no stalled-job churn.)
+    while (
+      (this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
     // Format + serialize exactly once, here at enqueue. The flush path just
     // concatenates these strings, so a row is never re-formatted or
     // re-serialized (not on flush, not on retry). estimatedSizeBytes is now

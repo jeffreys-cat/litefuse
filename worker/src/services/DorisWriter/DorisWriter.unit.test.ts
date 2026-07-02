@@ -732,4 +732,64 @@ describe("DorisWriter", () => {
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(writer["queue"][TableName.Traces]).toHaveLength(0);
   });
+
+  const mkTrace = (id: string) =>
+    ({
+      id,
+      name: "t",
+      metadata: {},
+      tags: [],
+      timestamp: Date.now(),
+      public: false,
+      bookmarked: false,
+      environment: "test",
+      project_id: "project1",
+      is_deleted: 0,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      event_ts: Date.now(),
+    }) as any;
+
+  it("caps concurrent in-flight stream loads at maxConcurrentLoads", async () => {
+    // Loads never resolve → they hold their slot; extra flushes must be gated.
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockImplementation(() => new Promise<void>(() => {}));
+    writer.maxConcurrentLoads = 2;
+
+    // 3 batches worth of rows → 3 flushes triggered, but only 2 may run.
+    for (let i = 0; i < 3 * writer.batchSize; i++) {
+      void writer.addToQueue(TableName.Traces, mkTrace(String(i)));
+    }
+    await Promise.resolve();
+
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    // The 3rd batch stays queued (gated), not spliced into a load.
+    expect(writer["queue"][TableName.Traces].length).toBe(writer.batchSize);
+  });
+
+  it("applies backpressure: addToQueue blocks over maxQueueSizeBytes, releases when drained", async () => {
+    vi.spyOn(dorisClientMock, "insert").mockImplementation(
+      () => new Promise<void>(() => {}),
+    );
+    writer.maxConcurrentLoads = 0; // no flush can drain the queue
+    writer.maxQueueSizeBytes = 1; // over cap after the first row
+
+    await writer.addToQueue(TableName.Traces, mkTrace("0")); // queue was empty → pushes
+
+    let released = false;
+    const blocked = writer
+      .addToQueue(TableName.Traces, mkTrace("1"))
+      .then(() => {
+        released = true;
+      });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(released).toBe(false); // still blocked = backpressure active
+
+    // Lift the cap → next poll exits the wait loop and the push completes.
+    writer.maxQueueSizeBytes = Number.MAX_SAFE_INTEGER;
+    await vi.advanceTimersByTimeAsync(100);
+    await blocked;
+    expect(released).toBe(true);
+  });
 });
