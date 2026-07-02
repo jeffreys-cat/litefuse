@@ -54,9 +54,8 @@ const dorisClientMock = {
 describe("DorisWriter", () => {
   let writer: DorisWriter;
 
-  // Flattened view of a table's buffered rows (chunk-queue internals), so the
-  // assertions below can treat the queue as a simple row list.
-  const q = (t: TableName): any[] => (writer as any).queuedRows(t);
+  // A table's buffered row array (queue internals), for the assertions below.
+  const q = (t: TableName): any[] => (writer as any).queue[t];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -652,10 +651,9 @@ describe("DorisWriter", () => {
     } as any);
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
-    // 3 writes: item "1" (fails), item "1" retry (succeeds), item "2" (succeeds).
-    // The re-queued batch and the newly-arrived row are written as separate
-    // batches (the chunk queue doesn't merge them), and both drain here.
-    expect(mockInsert).toHaveBeenCalledTimes(3);
+    // 2 writes: item "1" (fails), then a single flush of both the re-queued "1"
+    // and the new "2" (one splice → one batch → one insert) succeeds.
+    expect(mockInsert).toHaveBeenCalledTimes(2);
     expect(q(TableName.Traces)).toHaveLength(0);
   });
 
@@ -811,12 +809,13 @@ describe("DorisWriter", () => {
 
   it("pickReadyTable round-robins so no table (e.g. events_full) is starved", () => {
     // Seed two tables (Traces = first in enum, EventsFull = last) each with a
-    // ready sealed batch, bypassing addToQueue so nothing drains.
+    // stale (ready) row, bypassing addToQueue so nothing drains.
     const seed = (t: TableName) =>
-      (writer as any).queue[t].sealed.push({
-        rows: [{ createdAt: 0, attempts: 1, line: "{}", estimatedSizeBytes: 2 }],
-        bytes: 2,
-        readyAt: 0,
+      (writer as any).queue[t].push({
+        createdAt: 0,
+        attempts: 1,
+        line: "{}",
+        estimatedSizeBytes: 2,
       });
     seed(TableName.Traces);
     seed(TableName.EventsFull);
