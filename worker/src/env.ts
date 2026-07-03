@@ -107,6 +107,18 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(10_000),
+  // Exponential backoff for a failing table's retries. On a failed batch the
+  // whole table is gated until now + min(BASE * 2^(fails-1), MAX); a success
+  // clears it. Backoff is table-grained (not per-row), so it needs no change to
+  // the flat re-queue — see DorisWriter.pickReadyTable / processBatch.
+  LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_BASE_MS: z.coerce
+    .number()
+    .positive()
+    .default(1000),
+  LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_MAX_MS: z.coerce
+    .number()
+    .positive()
+    .default(30_000),
 
   // Analytics backend selection
   LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),

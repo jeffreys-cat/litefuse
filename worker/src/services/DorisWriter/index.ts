@@ -33,6 +33,15 @@ import { SpanKind } from "@opentelemetry/api";
  *    maxQueueSizeBytes, released when a drain frees space. Total worker memory
  *    is bounded by ~maxQueueSizeBytes (buffered) + maxConcurrentLoads * batch
  *    (in flight); the rest of the backlog stays in BullMQ/Redis.
+ *  - Retry: a failed batch is parked in a per-table retryBuffer as one entry
+ *    (the whole batch, kept intact) with its own attempts count and a
+ *    retryNotBefore timestamp = now + exp-backoff(attempts). Fresh rows keep
+ *    flowing through queue[table] untouched; a due entry is picked up by any
+ *    free drain worker (preferred over fresh work). Backoff is thus per-batch —
+ *    a poison batch retries alone without throttling healthy batches — and its
+ *    "wait" is just a timestamp, so it never occupies a concurrency slot. Entry
+ *    bytes stay counted in queueSizeBytes (same budget as fresh), so a sick BE
+ *    fills the buffer → backpressure → backlog stays in Redis, never OOM.
  */
 export class DorisWriter {
   private static instance: DorisWriter | null = null;
@@ -43,8 +52,19 @@ export class DorisWriter {
   gaugeInterval: number;
   maxAttempts: number;
   maxConcurrentLoads: number;
+  retryBackoffBaseMs: number;
+  retryBackoffMaxMs: number;
   queue: DorisQueue;
   queueSizeBytes: Map<TableName, number>;
+
+  // Per-table retry buffer: each RetryEntry is one failed batch (kept intact,
+  // written as a single Stream Load) carrying its own attempts + retryNotBefore.
+  private retryBuffer: DorisRetryBuffer;
+  private retryIdSeq = 0;
+  // A single precise wake-up for the soonest FUTURE retry, decoupled from the
+  // staleness tick / writeInterval. Already-due entries are served by the
+  // running drain pool, so this only ever arms for entries not yet due.
+  private retryTimer: NodeJS.Timeout | null = null;
 
   // Worker-pool state. At most maxConcurrentLoads drain workers run at once.
   private activeWorkers = 0;
@@ -76,6 +96,10 @@ export class DorisWriter {
       1,
       workerEnv.LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS,
     );
+    this.retryBackoffBaseMs =
+      workerEnv.LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_BASE_MS;
+    this.retryBackoffMaxMs =
+      workerEnv.LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_MAX_MS;
 
     this.queue = {
       [TableName.Traces]: [],
@@ -87,6 +111,15 @@ export class DorisWriter {
     };
 
     this.queueSizeBytes = new Map();
+
+    this.retryBuffer = {
+      [TableName.Traces]: [],
+      [TableName.Scores]: [],
+      [TableName.Observations]: [],
+      [TableName.BlobStorageFileLog]: [],
+      [TableName.DatasetRunItems]: [],
+      [TableName.EventsFull]: [],
+    };
 
     this.start();
   }
@@ -127,13 +160,15 @@ export class DorisWriter {
     this.gaugeIntervalId = setInterval(() => {
       for (const t of Object.values(TableName)) {
         const len = this.queue[t]?.length ?? 0;
+        const retrying = this.retryBuffer[t]?.length ?? 0;
         const added = this.addCounters.get(t) ?? 0;
         const flushed = this.flushCounters.get(t) ?? 0;
         this.addCounters.set(t, 0);
         this.flushCounters.set(t, 0);
-        if (len === 0 && added === 0 && flushed === 0) continue;
+        if (len === 0 && retrying === 0 && added === 0 && flushed === 0)
+          continue;
         logger.info(
-          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} +${String(added).padEnd(7)} -${flushed}`,
+          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} retry=${String(retrying).padEnd(5)} +${String(added).padEnd(7)} -${flushed}`,
         );
       }
     }, this.gaugeInterval);
@@ -152,6 +187,13 @@ export class DorisWriter {
     }
 
     await this.flushRemaining();
+
+    // flushRemaining's failed batches can re-arm the retry timer; clear it last
+    // so shutdown doesn't leave a dangling timer holding the process open.
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
 
     logger.info("DorisWriter shutdown complete.");
   }
@@ -202,7 +244,7 @@ export class DorisWriter {
   private scheduleDrain(): void {
     while (
       this.activeWorkers < this.maxConcurrentLoads &&
-      this.pickReadyTable() !== null
+      this.pickReadyTable(Date.now()) !== null
     ) {
       this.activeWorkers++;
       void this.drainWorker()
@@ -215,10 +257,32 @@ export class DorisWriter {
 
   private async drainWorker(): Promise<void> {
     for (;;) {
-      const table = this.pickReadyTable();
+      // One timestamp for this whole iteration so pickReadyTable and
+      // takeDueRetryEntry agree exactly — a table reported "ready" for a retry
+      // must then yield that retry (no skew that could spin this loop).
+      const now = Date.now();
+      const table = this.pickReadyTable(now);
       if (!table) return;
+
+      // Prefer a due retry entry over fresh work. Its bytes were re-counted in
+      // queueSizeBytes when it was parked; release them now (re-added on failure
+      // by parkForRetry, stay released on success). No await between the pick
+      // above and this splice, so no other worker can grab the same entry.
+      const entry = this.takeDueRetryEntry(table, now);
+      if (entry) {
+        this.queueSizeBytes.set(
+          table,
+          (this.queueSizeBytes.get(table) ?? 0) - entry.bytes,
+        );
+        this.notifyBufferDrained();
+        await this.processBatch(table, entry.items, entry.attempts);
+        continue;
+      }
+
       const items = this.queue[table].splice(0, this.batchSize);
-      if (items.length === 0) return;
+      // No fresh rows either (the table was ready only for a retry that a
+      // concurrent worker already took, or nothing is ready) — re-evaluate.
+      if (items.length === 0) continue;
 
       const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
       this.queueSizeBytes.set(
@@ -227,7 +291,6 @@ export class DorisWriter {
       );
       this.notifyBufferDrained();
 
-      const now = Date.now();
       for (const item of items) {
         recordHistogram(
           "langfuse.queue.doris_writer.wait_time",
@@ -235,32 +298,130 @@ export class DorisWriter {
           { unit: "milliseconds" },
         );
       }
-      await this.processBatch(table, items);
+      await this.processBatch(table, items, 0);
     }
   }
 
   /**
-   * The readiest table to write, or null. A table is ready when it holds a full
-   * batch or its oldest row is older than writeInterval (staleness). Scans
-   * round-robin from a rotating cursor so no table can be starved by an
-   * earlier-in-enum-order table (events_full is last, so a fixed-order scan
-   * could starve it while e.g. scores keep flowing).
+   * The readiest table to write, or null. A table is ready when it has a due
+   * retry entry, holds a full fresh batch, or its oldest fresh row is older than
+   * writeInterval (staleness). Scans round-robin from a rotating cursor so no
+   * table can be starved by an earlier-in-enum-order table (events_full is last,
+   * so a fixed-order scan could starve it while e.g. scores keep flowing).
    */
-  private pickReadyTable(): TableName | null {
-    const now = Date.now();
+  private pickReadyTable(now: number): TableName | null {
     const tables = Object.values(TableName);
     for (let i = 0; i < tables.length; i++) {
       const pos = (this.drainCursor + i) % tables.length;
-      const q = this.queue[tables[pos]];
-      const ready =
-        q.length >= this.batchSize ||
-        (q.length > 0 && now - q[0].createdAt >= this.writeInterval);
-      if (ready) {
+      if (this.hasReadyWork(tables[pos], now)) {
         this.drainCursor = (pos + 1) % tables.length;
         return tables[pos];
       }
     }
     return null;
+  }
+
+  /** A table has work now if a retry is due or its fresh queue is ready. */
+  private hasReadyWork(table: TableName, now: number): boolean {
+    const buf = this.retryBuffer[table];
+    for (const e of buf) if (now >= e.retryNotBefore) return true;
+    const q = this.queue[table];
+    return (
+      q.length >= this.batchSize ||
+      (q.length > 0 && now - q[0].createdAt >= this.writeInterval)
+    );
+  }
+
+  /**
+   * Remove and return the earliest-due retry entry for a table, or null if none
+   * is due. Synchronous (no await) so the splice can't race another worker.
+   */
+  private takeDueRetryEntry(table: TableName, now: number): RetryEntry | null {
+    const buf = this.retryBuffer[table];
+    let idx = -1;
+    let earliest = Infinity;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i].retryNotBefore <= now && buf[i].retryNotBefore < earliest) {
+        earliest = buf[i].retryNotBefore;
+        idx = i;
+      }
+    }
+    if (idx < 0) return null;
+    return buf.splice(idx, 1)[0];
+  }
+
+  /**
+   * Park a failed batch for a later retry, or drop it if it has exhausted a
+   * finite maxAttempts. `attempts` is the number of attempts already made
+   * (>= 1). The batch's bytes were released from queueSizeBytes when it was
+   * taken; on park we re-add them (shared budget → backpressure), on drop we
+   * leave them released.
+   */
+  private parkForRetry(
+    table: TableName,
+    items: QueuedRow[],
+    attempts: number,
+    bytes: number,
+  ): void {
+    // maxAttempts <= 0 means retry forever (never drop) — the default.
+    if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
+      // TODO - Add to a dead letter queue in Redis rather than dropping.
+      recordIncrement("langfuse.queue.doris_writer.error", items.length);
+      logger.error(
+        `Max attempts (${this.maxAttempts}) reached for ${table} batch of ${items.length}. Dropping.`,
+        { sample: items[0]?.line.slice(0, 500) },
+      );
+      return;
+    }
+
+    const delay = Math.min(
+      this.retryBackoffBaseMs * 2 ** Math.min(attempts - 1, 30),
+      this.retryBackoffMaxMs,
+    );
+    const id = ++this.retryIdSeq;
+    this.retryBuffer[table].push({
+      id,
+      items,
+      bytes,
+      attempts,
+      retryNotBefore: Date.now() + delay,
+    });
+    this.queueSizeBytes.set(
+      table,
+      (this.queueSizeBytes.get(table) ?? 0) + bytes,
+    );
+    this.rearmRetryTimer();
+    logger.warn(
+      `[DorisWriter] ${table} retry #${id} (${items.length} rows) attempt ${attempts} failed; backing off ${delay}ms.`,
+    );
+  }
+
+  /**
+   * Arm a single timer for the soonest FUTURE retry (not-yet-due). Already-due
+   * entries are handled by the running drain pool — a worker's loop keeps
+   * picking due entries until none remain — so arming for them would busy-spin.
+   * Called after every retryBuffer mutation; recomputes the true minimum.
+   */
+  private rearmRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    const now = Date.now();
+    let earliestFuture = Infinity;
+    for (const t of Object.values(TableName)) {
+      for (const e of this.retryBuffer[t]) {
+        if (e.retryNotBefore > now && e.retryNotBefore < earliestFuture) {
+          earliestFuture = e.retryNotBefore;
+        }
+      }
+    }
+    if (earliestFuture === Infinity) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.scheduleDrain();
+      this.rearmRetryTimer();
+    }, earliestFuture - now);
   }
 
   /** Wake all backpressured producers; each re-checks its table's cap. */
@@ -271,22 +432,34 @@ export class DorisWriter {
     for (const w of waiters) w();
   }
 
-  /** Write one batch; on failure re-queue rows (attempts+1) up to maxAttempts. */
+  /**
+   * Write one batch. On failure park the whole batch for retry via
+   * parkForRetry. `attemptsAlreadyMade` is how many attempts this batch had
+   * before this one (0 for a fresh batch, the entry's attempts for a retry), so
+   * the failure records attempt `attemptsAlreadyMade + 1`. The batch's bytes are
+   * already released from queueSizeBytes by the caller.
+   */
   private async processBatch(
     table: TableName,
     items: QueuedRow[],
+    attemptsAlreadyMade: number,
   ): Promise<void> {
     return instrumentAsync(
       { name: "write-to-doris", spanKind: SpanKind.CONSUMER },
       async () => {
-        recordIncrement("langfuse.queue.doris_writer.request");
-        const currentSpan = getCurrentSpan();
-        if (currentSpan) {
-          currentSpan.setAttributes({ [`${table}-length`]: items.length });
-        }
-
+        // The retry boundary is exactly "did the write succeed?". Everything up
+        // to and including writeToDoris is inside the try, so any failure before
+        // the rows are committed re-parks the batch (no loss). Post-write work
+        // (metrics/logs) is deliberately OUTSIDE this try: once the rows are
+        // committed we must never re-park (that would double-write), so a throw
+        // there must not reach this catch.
+        const processingStartTime = Date.now();
         try {
-          const processingStartTime = Date.now();
+          recordIncrement("langfuse.queue.doris_writer.request");
+          const currentSpan = getCurrentSpan();
+          if (currentSpan) {
+            currentSpan.setAttributes({ [`${table}-length`]: items.length });
+          }
 
           // Rows are pre-serialized; wrap them in a JSON array by joining with
           // commas — byte-identical to JSON.stringify(records), the format Doris
@@ -296,54 +469,36 @@ export class DorisWriter {
             body: `[${items.map((item) => item.line).join(",")}]`,
             recordCount: items.length,
           });
+        } catch (err) {
+          logger.error(`DorisWriter.processBatch ${table}`, err);
+          const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
+          this.parkForRetry(table, items, attemptsAlreadyMade + 1, bytes);
+          return;
+        }
 
+        // Write succeeded. Post-write bookkeeping is best-effort and must never
+        // trigger a re-park; swallow any error so it can't bubble to the drain
+        // worker (which would otherwise die mid-loop) or duplicate the write.
+        try {
           recordHistogram(
             "langfuse.queue.doris_writer.processing_time",
             Date.now() - processingStartTime,
             { unit: "milliseconds" },
           );
-
           logger.info(
             `[DorisWriter] Flushed ${items.length} records to Doris ${table}. Queue length: ${this.queue[table].length}`,
           );
-
           this.flushCounters.set(
             table,
             (this.flushCounters.get(table) ?? 0) + items.length,
           );
-
           recordGauge(
             "ingestion_doris_insert_queue_length",
             this.queue[table].length,
             { unit: "records", entityType: table },
           );
         } catch (err) {
-          logger.error(`DorisWriter.processBatch ${table}`, err);
-
-          for (const item of items) {
-            // maxAttempts <= 0 means retry forever (never drop) — the default.
-            if (this.maxAttempts <= 0 || item.attempts < this.maxAttempts) {
-              // Reset createdAt so the re-queued row isn't immediately "stale"
-              // again — this spaces DorisWriter-level retries by ~writeInterval
-              // (via the staleness tick) instead of a drain worker hot-looping.
-              this.queue[table].push({
-                ...item,
-                attempts: item.attempts + 1,
-                createdAt: Date.now(),
-              });
-              this.queueSizeBytes.set(
-                table,
-                (this.queueSizeBytes.get(table) ?? 0) + item.estimatedSizeBytes,
-              );
-            } else {
-              // TODO - Add to a dead letter queue in Redis rather than dropping
-              recordIncrement("langfuse.queue.doris_writer.error");
-              logger.error(
-                `Max attempts reached for ${table} record. Dropping record.`,
-                { line: item.line.slice(0, 500) },
-              );
-            }
-          }
+          logger.error(`DorisWriter.processBatch ${table} post-write`, err);
         }
       },
     );
@@ -389,12 +544,22 @@ export class DorisWriter {
     for (let pass = 0; pass < maxPasses; pass++) {
       const tasks: Promise<void>[] = [];
       for (const t of Object.values(TableName)) {
+        // Parked retries first (ignore their backoff — this is a final flush).
+        const buf = this.retryBuffer[t];
+        while (buf.length > 0) {
+          const entry = buf.pop() as RetryEntry;
+          this.queueSizeBytes.set(
+            t,
+            (this.queueSizeBytes.get(t) ?? 0) - entry.bytes,
+          );
+          tasks.push(this.processBatch(t, entry.items, entry.attempts));
+        }
         const q = this.queue[t];
         while (q.length > 0) {
           const items = q.splice(0, this.batchSize);
           const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
           this.queueSizeBytes.set(t, (this.queueSizeBytes.get(t) ?? 0) - bytes);
-          tasks.push(this.processBatch(t, items));
+          tasks.push(this.processBatch(t, items, 0));
         }
       }
       this.notifyBufferDrained();
@@ -446,4 +611,20 @@ type QueuedRow = {
 
 type DorisQueue = {
   [T in TableName]: QueuedRow[];
+};
+
+// A parked failed batch: the intact set of rows plus retry bookkeeping. `bytes`
+// is cached so byte accounting on take/park is O(1) (and matches what was
+// released from queueSizeBytes). `attempts` is the number of write attempts
+// already made; `retryNotBefore` is the epoch-ms gate the drain waits for.
+type RetryEntry = {
+  id: number;
+  items: QueuedRow[];
+  bytes: number;
+  attempts: number;
+  retryNotBefore: number;
+};
+
+type DorisRetryBuffer = {
+  [T in TableName]: RetryEntry[];
 };

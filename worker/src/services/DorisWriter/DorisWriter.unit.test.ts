@@ -17,6 +17,7 @@ vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
     logger: {
       info: vi.fn(),
       debug: vi.fn(),
+      warn: vi.fn(),
       error: vi.fn(),
     },
   };
@@ -33,6 +34,12 @@ vi.mock("../../env", async (importOriginal) => {
       LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: 8,
       LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: 100 * 1024 * 1024,
       LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS: 10000,
+      // Backoff base == max == writeInterval so a parked retry becomes due
+      // exactly one advanceTimersByTimeAsync(writeInterval) tick later — the
+      // timing-based retry tests below can then step one attempt per tick. A
+      // dedicated test overrides these on the instance to exercise real backoff.
+      LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_BASE_MS: 5000,
+      LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_MAX_MS: 5000,
     },
   };
 });
@@ -56,6 +63,13 @@ describe("DorisWriter", () => {
 
   // A table's buffered row array (queue internals), for the assertions below.
   const q = (t: TableName): any[] => (writer as any).queue[t];
+  // A table's parked failed-batch entries (retry buffer internals).
+  const retryEntries = (t: TableName): any[] => (writer as any).retryBuffer[t];
+  // Total rows still owned by the writer for a table: fresh queue + parked
+  // retries (each retry entry holds a whole batch of rows).
+  const ownedRows = (t: TableName): number =>
+    q(t).length +
+    retryEntries(t).reduce((s: number, e: any) => s + e.items.length, 0);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -85,7 +99,10 @@ describe("DorisWriter", () => {
     expect(writer.writeInterval).toBe(
       env.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS,
     );
-    expect(writer.maxAttempts).toBe(env.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS);
+    // maxAttempts is sourced from the SHARED env (@langfuse/shared/src/env),
+    // not the worker env mocked here, so we only assert it's a valid number.
+    // Its retry semantics are covered by the finite/infinite tests below.
+    expect(typeof writer.maxAttempts).toBe("number");
   });
 
   it("should add items to the queue", () => {
@@ -191,13 +208,21 @@ describe("DorisWriter", () => {
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
+    // First attempt failed → the batch is parked in the retry buffer (not back
+    // in the fresh queue) as one entry with attempts=1.
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalled();
-    expect(q(TableName.Traces)).toHaveLength(1);
-    expect(q(TableName.Traces)[0].attempts).toBe(2);
+    expect(q(TableName.Traces)).toHaveLength(0);
+    expect(retryEntries(TableName.Traces)).toHaveLength(1);
+    expect(retryEntries(TableName.Traces)[0].attempts).toBe(1);
+    expect(retryEntries(TableName.Traces)[0].items).toHaveLength(1);
 
+    // The retry fires off its own precise backoff timer (base ~1ms in the mock
+    // env), independent of writeInterval; the second attempt succeeds and the
+    // entry is gone.
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
     expect(mockInsert).toHaveBeenCalledTimes(2);
+    expect(retryEntries(TableName.Traces)).toHaveLength(0);
     expect(q(TableName.Traces)).toHaveLength(0);
   });
 
@@ -223,19 +248,22 @@ describe("DorisWriter", () => {
       event_ts: Date.now(),
     } as any);
 
-    for (let i = 0; i < writer.maxAttempts; i++) {
+    // One attempt per tick: first (staleness) attempt + (maxAttempts-1) retries.
+    for (let i = 0; i < writer.maxAttempts + 1; i++) {
       await vi.advanceTimersByTimeAsync(writer.writeInterval);
     }
 
-    await vi.advanceTimersByTimeAsync(writer.writeInterval);
-
     expect(mockInsert).toHaveBeenCalledTimes(writer.maxAttempts);
     expect(
-      (logger.error as any).mock.calls.some((call: any) =>
-        call[0].includes("Max attempts reached"),
+      (logger.error as any).mock.calls.some(
+        (call: any) =>
+          String(call[0]).includes("Max attempts") &&
+          String(call[0]).includes("Dropping"),
       ),
     ).toBe(true);
+    // Dropped from both fresh queue and retry buffer.
     expect(q(TableName.Traces)).toHaveLength(0);
+    expect(retryEntries(TableName.Traces)).toHaveLength(0);
   });
 
   it("retries forever without dropping when maxAttempts <= 0 (infinite, the default)", async () => {
@@ -264,16 +292,81 @@ describe("DorisWriter", () => {
       await vi.advanceTimersByTimeAsync(writer.writeInterval);
     }
 
-    // Kept retrying every interval, still queued, attempts climbed past any
-    // finite cap, and it was never dropped.
+    // Kept retrying every tick, the batch is still parked (one entry, one row),
+    // its attempts climbed past any finite cap, and it was never dropped.
     expect(mockInsert.mock.calls.length).toBeGreaterThanOrEqual(5);
-    expect(q(TableName.Traces)).toHaveLength(1);
-    expect(q(TableName.Traces)[0].attempts).toBeGreaterThan(3);
+    expect(q(TableName.Traces)).toHaveLength(0);
+    expect(retryEntries(TableName.Traces)).toHaveLength(1);
+    expect(retryEntries(TableName.Traces)[0].attempts).toBeGreaterThan(3);
+    expect(ownedRows(TableName.Traces)).toBe(1);
     expect(
       (logger.error as any).mock.calls.some((call: any) =>
-        String(call[0]).includes("Max attempts reached"),
+        String(call[0]).includes("Dropping"),
       ),
     ).toBe(false);
+  });
+
+  it("backs off a failed batch on its own timer, without blocking fresh rows on the same table", async () => {
+    writer.maxAttempts = 0; // infinite — isolate backoff from dropping
+    // Long backoff so the poison batch is observably not retried for a while;
+    // its wait lives on the precise retry timer, not the writeInterval tick.
+    writer.retryBackoffBaseMs = 100 * writer.writeInterval;
+    writer.retryBackoffMaxMs = 1000 * writer.writeInterval;
+
+    const trace = (id: string) =>
+      ({
+        id,
+        name: id,
+        metadata: {},
+        tags: [],
+        timestamp: Date.now(),
+        public: false,
+        bookmarked: false,
+        environment: "test",
+        project_id: "project1",
+        is_deleted: 0,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+        event_ts: Date.now(),
+      }) as any;
+
+    // Fail only the batch carrying the poison row; every other batch succeeds.
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockImplementation(async (_t: any, body: any) => {
+        if (String(body).includes("poison")) throw new Error("DB Error");
+        return undefined as any;
+      });
+    const poisonCalls = () =>
+      mockInsert.mock.calls.filter((c: any) => String(c[1]).includes("poison"))
+        .length;
+    const goodCalls = () =>
+      mockInsert.mock.calls.filter((c: any) => String(c[1]).includes("good"))
+        .length;
+
+    // Park the poison batch: one attempt fails, it lands in the retry buffer.
+    writer.addToQueue(TableName.Traces, trace("poison"));
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    expect(poisonCalls()).toBe(1);
+    expect(retryEntries(TableName.Traces)).toHaveLength(1);
+
+    // Many ticks within the backoff window: poison is NOT retried (its timer is
+    // far in the future), yet fresh rows on the SAME table flow through and get
+    // written — the backoff never occupies the table or a concurrency slot.
+    writer.addToQueue(TableName.Traces, trace("good"));
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    }
+    expect(poisonCalls()).toBe(1); // still not retried
+    expect(goodCalls()).toBeGreaterThanOrEqual(1); // fresh flowed
+    expect(q(TableName.Traces)).toHaveLength(0); // fresh drained, not blocked
+    expect(retryEntries(TableName.Traces)).toHaveLength(1); // poison still parked
+
+    // Once the backoff window elapses the poison batch retries (still fails,
+    // re-parks, never dropped in infinite mode).
+    await vi.advanceTimersByTimeAsync(writer.retryBackoffBaseMs);
+    expect(poisonCalls()).toBeGreaterThanOrEqual(2);
+    expect(retryEntries(TableName.Traces)).toHaveLength(1);
   });
 
   it("should shutdown gracefully", async () => {
@@ -690,10 +783,12 @@ describe("DorisWriter", () => {
     } as any);
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
-    // 2 writes: item "1" (fails), then a single flush of both the re-queued "1"
-    // and the new "2" (one splice → one batch → one insert) succeeds.
-    expect(mockInsert).toHaveBeenCalledTimes(2);
+    // 3 writes: item "1" fails and is parked; on the next tick it is retried as
+    // its own intact batch (success) while the fresh item "2" flushes as a
+    // separate batch — retried batches are never merged back into fresh rows.
+    expect(mockInsert).toHaveBeenCalledTimes(3);
     expect(q(TableName.Traces)).toHaveLength(0);
+    expect(retryEntries(TableName.Traces)).toHaveLength(0);
   });
 
   it("should handle BlobStorageFileLog table", async () => {
@@ -859,7 +954,7 @@ describe("DorisWriter", () => {
     seed(TableName.Traces);
     seed(TableName.EventsFull);
 
-    const pick = () => (writer as any).pickReadyTable();
+    const pick = () => (writer as any).pickReadyTable(Date.now());
     const first = pick();
     const second = pick();
 
