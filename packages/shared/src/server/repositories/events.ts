@@ -757,7 +757,7 @@ export const getTraceByIdFromEventsTable = async ({
  * Field groups for selective field fetching in v2 observations API
  *
  * - core: Always included (cursor-required fields)
- * - basic, time, io, metadata, model, usage, prompt, metrics: Optional groups
+ * - basic, time, io, metadata, model, usage, prompt, metrics, trace_context: Optional groups
  */
 export const OBSERVATION_FIELD_GROUPS = [
   "core", // Always included: id, traceId, startTime, endTime, projectId, parentObservationId, type
@@ -769,6 +769,7 @@ export const OBSERVATION_FIELD_GROUPS = [
   "usage", // usageDetails, costDetails, totalCost
   "prompt", // promptId, promptName, promptVersion
   "metrics", // latency, timeToFirstToken
+  "trace_context", // traceName, userId, sessionId, traceTags
 ] as const;
 
 export type ObservationFieldGroup = (typeof OBSERVATION_FIELD_GROUPS)[number];
