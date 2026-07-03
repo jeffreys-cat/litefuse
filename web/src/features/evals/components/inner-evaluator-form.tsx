@@ -44,10 +44,10 @@ import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePos
 import { Checkbox } from "@/src/components/ui/checkbox";
 import { Switch } from "@/src/components/ui/switch";
 import {
+  createDefaultFormMappings,
   evalConfigFormSchema,
   type EvalFormType,
   getTargetDisplayName,
-  inferDefaultMapping,
   type LangfuseObject,
 } from "@/src/features/evals/utils/evaluator-form-utils";
 import { validateAndTransformVariableMapping } from "@/src/features/evals/utils/variable-mapping-validation";
@@ -275,6 +275,7 @@ export const InnerEvaluatorForm = (props: {
     formError: string | null;
   }) => React.ReactNode;
   oldConfigId?: string;
+  defaultTarget?: EvalTargetObject;
 }) => {
   const [formError, setFormError] = useState<string | null>(null);
   const capture = usePostHogClientCapture();
@@ -307,14 +308,19 @@ export const InnerEvaluatorForm = (props: {
     defaultValues: {
       scoreName:
         props.existingEvaluator?.scoreName ?? `${props.evalTemplate.name}`,
-      target: props.existingEvaluator?.targetObject ?? EvalTargetObject.EVENT,
+      target:
+        props.existingEvaluator?.targetObject ??
+        props.defaultTarget ??
+        EvalTargetObject.EVENT,
       filter: props.existingEvaluator?.filter
         ? z.array(singleFilter).parse(props.existingEvaluator.filter)
-        : (props.existingEvaluator?.targetObject ?? EvalTargetObject.EVENT) ===
-            EvalTargetObject.TRACE
+        : (props.existingEvaluator?.targetObject ??
+              props.defaultTarget ??
+              EvalTargetObject.EVENT) === EvalTargetObject.TRACE
           ? // For new trace evaluators, exclude internal environments by default
             DEFAULT_TRACE_FILTER
           : (props.existingEvaluator?.targetObject ??
+                props.defaultTarget ??
                 EvalTargetObject.EVENT) === EvalTargetObject.EVENT
             ? // For new observation evaluators, default to GENERATION type
               DEFAULT_OBSERVATION_FILTER
@@ -328,16 +334,9 @@ export const InnerEvaluatorForm = (props: {
           : z
               .array(variableMapping)
               .parse(props.existingEvaluator.variableMapping)
-        : z.array(variableMapping).parse(
-            props.evalTemplate
-              ? props.evalTemplate.vars.map((v) => ({
-                  templateVariable: v,
-                  langfuseObject: "trace" as const,
-                  objectName: null,
-                  selectedColumnId: "input",
-                  jsonSelector: null,
-                }))
-              : [],
+        : createDefaultFormMappings(
+            props.evalTemplate?.vars ?? [],
+            props.existingEvaluator?.targetObject ?? EvalTargetObject.EVENT,
           ),
       sampling: props.existingEvaluator?.sampling
         ? props.existingEvaluator.sampling.toNumber()
@@ -360,13 +359,7 @@ export const InnerEvaluatorForm = (props: {
       const target = form.getValues("target");
       form.setValue(
         "mapping",
-        props.evalTemplate.vars.map((v) => ({
-          templateVariable: v,
-          langfuseObject: isLegacyEvalTarget(target)
-            ? ("trace" as const)
-            : undefined,
-          ...inferDefaultMapping(v),
-        })),
+        createDefaultFormMappings(props.evalTemplate.vars, target),
       );
       form.setValue("scoreName", `${props.evalTemplate.name}`);
     }

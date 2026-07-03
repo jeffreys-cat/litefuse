@@ -10,6 +10,7 @@ import { projectNameSchema } from "@/src/features/auth/lib/projectNameSchema";
 import { auditLog } from "@/src/features/audit-logs/auditLog";
 import { throwIfNoOrganizationAccess } from "@/src/features/rbac/utils/checkOrganizationAccess";
 import { ApiAuthService } from "@/src/features/public-api/server/apiAuth";
+import { seedProjectAnnotationDefaults } from "@/src/features/projects/server/seedProjectAnnotationDefaults";
 import {
   QueueJobs,
   redis,
@@ -17,7 +18,11 @@ import {
   getEnvironmentsForProject,
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
-import { StringNoHTMLNonEmpty } from "@langfuse/shared";
+import {
+  getDefaultScoreConfigsForProject,
+  StringNoHTMLNonEmpty,
+} from "@langfuse/shared";
+import { Prisma } from "@langfuse/shared/src/db";
 
 export const projectsRouter = createTRPCRouter({
   create: protectedOrganizationProcedure
@@ -50,12 +55,23 @@ export const projectsRouter = createTRPCRouter({
         });
       }
 
-      const project = await ctx.prisma.project.create({
-        data: {
-          name: input.name,
-          orgId: input.orgId,
+      const project = await ctx.prisma.$transaction(async (tx) => {
+        const project = await tx.project.create({
+          data: {
+            name: input.name,
+            orgId: input.orgId,
+          },
+        });
+        await tx.scoreConfig.createMany({
+          data: getDefaultScoreConfigsForProject(project.id),
+        });
+        await seedProjectAnnotationDefaults(tx, project.id);
+        return project;
         },
-      });
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
       await auditLog({
         session: ctx.session,
         resourceType: "project",

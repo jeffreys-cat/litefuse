@@ -3,9 +3,8 @@ import {
   singleFilter,
   type langfuseObjects,
   TimeScopeSchema,
+  wipVariableMapping,
 } from "@langfuse/shared";
-import { wipVariableMapping } from "@langfuse/shared";
-import { OUTPUT_MAPPING } from "@/src/features/evals/utils/evaluator-constants";
 
 // Legacy eval targets (TRACE, DATASET) use full variable mapping UI with object selector
 // Modern eval targets (EVENT, EXPERIMENT) use simplified UI with just column selection
@@ -30,14 +29,24 @@ export type LangfuseObject = (typeof langfuseObjects)[number];
 export type VariableMapping = z.infer<typeof wipVariableMapping>;
 
 export const inferDefaultMapping = (
-  variable: string,
+  _variable: string,
 ): Pick<VariableMapping, "selectedColumnId"> => {
   return {
-    selectedColumnId: OUTPUT_MAPPING.includes(variable.toLowerCase())
-      ? "output"
-      : "input",
+    selectedColumnId: undefined,
   };
 };
+
+export const createDefaultFormMappings = (
+  variables: string[],
+  target: string,
+): z.infer<typeof wipVariableMapping>[] =>
+  variables.map((templateVariable) => ({
+    templateVariable,
+    langfuseObject: isLegacyEvalTarget(target) ? "trace" : undefined,
+    objectName: isLegacyEvalTarget(target) ? null : undefined,
+    jsonSelector: null,
+    ...inferDefaultMapping(templateVariable),
+  }));
 
 export const fieldHasJsonSelectorOption = (
   selectedColumnId: string | undefined | null,

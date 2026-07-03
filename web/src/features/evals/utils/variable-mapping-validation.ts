@@ -29,6 +29,9 @@ type ValidationResult =
       error: string;
     };
 
+const OBJECT_FIELD_REQUIRED_ERROR =
+  "Please select an Object Field for every Evaluation Prompt variable before executing the evaluator.";
+
 /**
  * Validates and transforms variable mappings based on the target type.
  * Returns validated data or an error message.
@@ -51,7 +54,7 @@ export function validateAndTransformVariableMapping(
   if (incompleteMappings.length > 0) {
     return {
       success: false,
-      error: "Please complete all variable mappings",
+      error: OBJECT_FIELD_REQUIRED_ERROR,
     };
   }
 
@@ -109,7 +112,7 @@ export function validateAndTransformVariableMapping(
   if (!validatedVarMapping.success) {
     return {
       success: false,
-      error: "Please complete all variable mappings",
+      error: OBJECT_FIELD_REQUIRED_ERROR,
     };
   }
 
