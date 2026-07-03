@@ -69,10 +69,10 @@ const EnvSchema = z.object({
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
-  LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
-    .number()
-    .positive()
-    .default(1000),
+  // Max write attempts per row before dropping. 0 (or negative) = retry forever
+  // (never drop) — the default. This is the single retry authority (DorisWriter
+  // re-queues failed rows; the Doris client itself does a single attempt).
+  LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce.number().int().default(0),
   LITEFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS: z.coerce
     .number()
     .positive()

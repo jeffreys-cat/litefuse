@@ -201,7 +201,8 @@ describe("DorisWriter", () => {
     expect(q(TableName.Traces)).toHaveLength(0);
   });
 
-  it("should drop records after max attempts", async () => {
+  it("should drop records after max attempts (finite mode)", async () => {
+    writer.maxAttempts = 3; // finite; default is 0 = infinite (never drop)
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockRejectedValue(new Error("DB Error"));
@@ -235,6 +236,44 @@ describe("DorisWriter", () => {
       ),
     ).toBe(true);
     expect(q(TableName.Traces)).toHaveLength(0);
+  });
+
+  it("retries forever without dropping when maxAttempts <= 0 (infinite, the default)", async () => {
+    writer.maxAttempts = 0; // infinite — never drop
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockRejectedValue(new Error("DB Error"));
+
+    writer.addToQueue(TableName.Traces, {
+      id: "1",
+      name: "test",
+      metadata: {},
+      tags: [],
+      timestamp: Date.now(),
+      public: false,
+      bookmarked: false,
+      environment: "test",
+      project_id: "project1",
+      is_deleted: 0,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      event_ts: Date.now(),
+    } as any);
+
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    }
+
+    // Kept retrying every interval, still queued, attempts climbed past any
+    // finite cap, and it was never dropped.
+    expect(mockInsert.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(q(TableName.Traces)).toHaveLength(1);
+    expect(q(TableName.Traces)[0].attempts).toBeGreaterThan(3);
+    expect(
+      (logger.error as any).mock.calls.some((call: any) =>
+        String(call[0]).includes("Max attempts reached"),
+      ),
+    ).toBe(false);
   });
 
   it("should shutdown gracefully", async () => {

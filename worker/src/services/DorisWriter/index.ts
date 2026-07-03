@@ -321,7 +321,8 @@ export class DorisWriter {
           logger.error(`DorisWriter.processBatch ${table}`, err);
 
           for (const item of items) {
-            if (item.attempts < this.maxAttempts) {
+            // maxAttempts <= 0 means retry forever (never drop) — the default.
+            if (this.maxAttempts <= 0 || item.attempts < this.maxAttempts) {
               // Reset createdAt so the re-queued row isn't immediately "stale"
               // again — this spaces DorisWriter-level retries by ~writeInterval
               // (via the staleness tick) instead of a drain worker hot-looping.

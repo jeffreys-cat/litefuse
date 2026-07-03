@@ -754,10 +754,9 @@ export class DorisClient {
   }
 
   /**
-   * Batch insert (with retry) of a pre-serialized Stream Load body. The
-   * ingestion writer serializes each row exactly once at enqueue time and
-   * hands the joined body here, so retries re-send the same immutable string
-   * without ever re-serializing.
+   * Single-attempt Stream Load of a pre-serialized body. Retry/backoff is NOT
+   * done here — it is owned entirely by the caller (DorisWriter re-queues failed
+   * rows), so retry logic lives in exactly one layer. Throws on failure.
    * @param table Target table name
    * @param body Pre-serialized Stream Load body (JSONL or JSON array)
    * @param recordCount Number of rows in `body` (logging only)
@@ -770,38 +769,7 @@ export class DorisClient {
     recordCount: number,
     options: DorisStreamLoadOptions = {},
   ): Promise<void> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
-      try {
-        await this.streamLoadBody(table, body, recordCount, options);
-        return; // Success, exit retry loop
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (attempt < this.config.maxRetries) {
-          // Exponential backoff, capped at 30s. The cap matters: with a high
-          // maxRetries an uncapped 2^attempt delay grows to hours/days, so a
-          // write against a down BE would never retry again — holding the
-          // caller's slot ~forever and failing to notice when the BE recovers.
-          // Capping keeps it probing at least every 30s → prompt recovery.
-          const delay = Math.min(
-            this.config.retryDelay * Math.pow(2, attempt - 1),
-            30_000,
-          );
-          logger.warn(
-            `Stream load attempt ${attempt} failed for ${table}, retrying in ${delay}ms: ${lastError.message}`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-      }
-    }
-
-    // All retries failed. Size comes from the already-serialized body.
-    const dataSizeKB = (Buffer.byteLength(body, "utf8") / 1024).toFixed(2);
-    throw new Error(
-      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message} | table=${table}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}`,
-    );
+    await this.streamLoadBody(table, body, recordCount, options);
   }
 
   /**

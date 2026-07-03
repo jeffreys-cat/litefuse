@@ -262,7 +262,7 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     );
   });
 
-  it("retries on BE error and eventually surfaces the failure", async () => {
+  it("insert makes a single attempt and surfaces the failure (no internal retry)", async () => {
     await closeServer(be.server);
     let beHits = 0;
     be = await startServer((_req, res) => {
@@ -289,9 +289,11 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
       maxSockets: 8,
     });
 
+    // Retry is owned by the caller (DorisWriter), so insert() tries exactly
+    // once and throws — the BE is hit a single time.
     await expect(
       client.insert("traces", JSON.stringify([{ id: "x" }]), 1),
-    ).rejects.toThrowError(/Stream load failed after 3 attempts/);
-    expect(beHits).toBe(3);
+    ).rejects.toThrow();
+    expect(beHits).toBe(1);
   });
 });
