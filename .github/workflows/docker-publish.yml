@@ -1,0 +1,140 @@
+name: Docker Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_tag:
+        description: "Docker tag to publish; defaults to manual-<run_number>"
+        required: false
+        type: string
+      publish_latest:
+        description: "Also publish the latest tag"
+        required: false
+        default: false
+        type: boolean
+      platforms:
+        description: "Target platforms"
+        required: true
+        default: "linux/amd64,linux/arm64"
+        type: choice
+        options:
+          - "linux/amd64,linux/arm64"
+          - "linux/amd64"
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: docker-publish-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish Docker images
+    runs-on: ubuntu-latest
+    environment: "protected branches"
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve publish options
+        id: publish-options
+        shell: bash
+        env:
+          MANUAL_DOCKER_TAG: ${{ inputs.docker_tag }}
+          REQUESTED_PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          build_id="$(git rev-parse --short HEAD)"
+          platforms="linux/amd64,linux/arm64"
+          manual_tag=""
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            platforms="$REQUESTED_PLATFORMS"
+            manual_tag="$MANUAL_DOCKER_TAG"
+
+            if [ -z "$manual_tag" ]; then
+              manual_tag="manual-${{ github.run_number }}"
+            fi
+
+            if [[ ! "$manual_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+              echo "Invalid Docker tag: $manual_tag" >&2
+              exit 1
+            fi
+          fi
+
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "manual_tag=$manual_tag" >> "$GITHUB_OUTPUT"
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - name: Extract Docker metadata (web)
+        id: meta-web
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            litefuse/litefuse
+          flavor: |
+            latest=false
+          tags: |
+            type=sha
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.publish_latest) }}
+            type=raw,value=${{ steps.publish-options.outputs.manual_tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push Docker image (web)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./web/Dockerfile
+          push: true
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
+          platforms: ${{ steps.publish-options.outputs.platforms }}
+          build-args: |
+            NEXT_PUBLIC_BUILD_ID=${{ steps.publish-options.outputs.build_id }}
+
+      - name: Extract Docker metadata (worker)
+        id: meta-worker
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            litefuse/litefuse-worker
+          flavor: |
+            latest=false
+          tags: |
+            type=sha
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.publish_latest) }}
+            type=raw,value=${{ steps.publish-options.outputs.manual_tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push Docker image (worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./worker/Dockerfile
+          push: true
+          tags: ${{ steps.meta-worker.outputs.tags }}
+          labels: ${{ steps.meta-worker.outputs.labels }}
+          platforms: ${{ steps.publish-options.outputs.platforms }}
+          build-args: |
+            NEXT_PUBLIC_BUILD_ID=${{ steps.publish-options.outputs.build_id }}
