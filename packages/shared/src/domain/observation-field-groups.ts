@@ -8,6 +8,7 @@ export const OBSERVATION_FIELD_GROUPS = [
   "usage",
   "prompt",
   "metrics",
+  "trace_context",
 ] as const;
 
 export type ObservationFieldGroup = (typeof OBSERVATION_FIELD_GROUPS)[number];
@@ -72,5 +73,11 @@ export const OBSERVATION_FIELD_GROUP_OPTIONS: Array<{
     value: "metrics",
     label: "Metrics",
     description: "Latency and time-to-first-token style performance metrics.",
+  },
+  {
+    value: "trace_context",
+    label: "Trace Context",
+    description:
+      "Trace-level context such as trace name, release, and tags linked to the observation.",
   },
 ];

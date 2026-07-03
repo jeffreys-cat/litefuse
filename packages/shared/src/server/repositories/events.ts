@@ -3,6 +3,7 @@ import {
   Observation,
   EventsObservation,
   ObservationType,
+  OBSERVATION_FIELD_GROUPS,
   type ObservationFieldGroup,
 } from "../../domain";
 import { env } from "../../env";
@@ -764,27 +765,6 @@ export const getTraceByIdFromEventsTable = async ({
 
   return res.shift();
 };
-
-/**
- * Field groups for selective field fetching in v2 observations API
- *
- * - core: Always included (cursor-required fields)
- * - basic, time, io, metadata, model, usage, prompt, metrics, trace_context: Optional groups
- */
-export const OBSERVATION_FIELD_GROUPS = [
-  "core", // Always included: id, traceId, startTime, endTime, projectId, parentObservationId, type
-  "basic", // name, level, statusMessage, version, environment, bookmarked, public, userId, sessionId
-  "time", // completionStartTime, createdAt, updatedAt
-  "io", // input, output
-  "metadata", // metadata
-  "model", // providedModelName, internalModelId, modelParameters
-  "usage", // usageDetails, costDetails, totalCost, usagePricingTierName
-  "prompt", // promptId, promptName, promptVersion
-  "metrics", // latency, timeToFirstToken
-  "trace_context", // tags, release, traceName
-] as const;
-
-export type ObservationFieldGroup = (typeof OBSERVATION_FIELD_GROUPS)[number];
 
 const OBSERVATION_CORE_FIELDS = [
   "id",
