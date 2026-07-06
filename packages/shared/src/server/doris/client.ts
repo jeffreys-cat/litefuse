@@ -58,6 +58,9 @@ export interface DorisClientConfig {
   headers?: Record<string, string>;
   maxOpenConnections?: number;
   maxSockets?: number;
+  // Skip the FE probe and PUT the body straight to feHttpUrl (which must then
+  // be a BE webserver address). See DORIS_STREAM_LOAD_DIRECT in env.ts.
+  streamLoadDirect?: boolean;
 }
 
 export type DorisClientType = DorisClient;
@@ -96,6 +99,8 @@ export class DorisClient {
       maxOpenConnections:
         config.maxOpenConnections ?? env.DORIS_MAX_OPEN_CONNECTIONS,
       maxSockets,
+      streamLoadDirect:
+        config.streamLoadDirect ?? env.DORIS_STREAM_LOAD_DIRECT === "true",
     } as Required<DorisClientConfig>;
 
     // keepAlive + maxFreeSockets so stream-load sockets get reused instead of
@@ -613,39 +618,47 @@ export class DorisClient {
       // no bytes at all — JSON.stringify("") would send a 2-byte `""`. axios
       // then sets Content-Length: 0 for us. (Don't set Content-Length
       // manually too; a duplicate header makes the peer reject with 400.)
-      logger.debug("DorisClient: Sending empty-body probe PUT to FE", { url });
-      const probe = await this.streamLoadPut(url, undefined, authHeaders);
+      // Direct-to-BE mode (DORIS_STREAM_LOAD_DIRECT): feHttpUrl points at a BE
+      // webserver, which ingests the PUT itself — no FE probe, no redirect.
+      // Local docker dev needs this: the FE's 307 Location carries the BE's
+      // docker-internal IP (e.g. 172.29.0.3:8040) that the host cannot reach,
+      // while the BE's port is host-mapped (localhost:8040).
+      let targetUrl = url;
+      if (!this.config.streamLoadDirect) {
+        logger.debug("DorisClient: Sending empty-body probe PUT to FE", {
+          url,
+        });
+        const probe = await this.streamLoadPut(url, undefined, authHeaders);
 
-      if (probe.status !== 307 || !probe.headers?.location) {
-        // FE accepted the request but didn't redirect — this is how it
-        // reports header / auth errors (missing 100-continue, bad
-        // credentials, unknown table). Surface the FE-side message
-        // verbatim so the outer catch can log it.
-        const data = probe.data;
-        const detail =
-          (typeof data === "object" && data !== null
-            ? data.Message || data.msg || JSON.stringify(data)
-            : String(data)) ||
-          `FE returned status ${probe.status} without Location header`;
-        throw new Error(`Stream load FE probe failed: ${detail}`);
+        if (probe.status !== 307 || !probe.headers?.location) {
+          // FE accepted the request but didn't redirect — this is how it
+          // reports header / auth errors (missing 100-continue, bad
+          // credentials, unknown table). Surface the FE-side message
+          // verbatim so the outer catch can log it.
+          const data = probe.data;
+          const detail =
+            (typeof data === "object" && data !== null
+              ? data.Message || data.msg || JSON.stringify(data)
+              : String(data)) ||
+            `FE returned status ${probe.status} without Location header`;
+          throw new Error(`Stream load FE probe failed: ${detail}`);
+        }
+
+        // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
+        // in the Location header). Supports both http:// and https://.
+        targetUrl = probe.headers.location.replace(/^(https?:\/\/)[^@/]+@/, "$1");
       }
 
-      // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
-      // in the Location header). Supports both http:// and https://.
-      const redirectUrl = probe.headers.location.replace(
-        /^(https?:\/\/)[^@/]+@/,
-        "$1",
-      );
-
-      logger.debug("DorisClient: Sending body PUT to BE (redirect)", {
-        redirectUrl,
+      logger.debug("DorisClient: Sending body PUT to BE", {
+        targetUrl,
+        direct: this.config.streamLoadDirect,
         bodyBytes: Buffer.byteLength(jsonData, "utf8"),
       });
 
-      // Body goes straight to the redirected BE, reusing the same keep-alive
-      // agent as the FE probe so we don't open one TCP per stream load.
+      // Body goes straight to the BE (redirected or direct), reusing the same
+      // keep-alive agent so we don't open one TCP per stream load.
       const response = await this.streamLoadPut(
-        redirectUrl,
+        targetUrl,
         jsonData,
         authHeaders,
       );

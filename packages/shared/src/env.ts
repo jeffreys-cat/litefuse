@@ -69,6 +69,13 @@ const EnvSchema = z.object({
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
   DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
+  // Stream Load direct-to-BE mode: skip the FE probe (empty PUT → 307) and PUT
+  // the body straight to DORIS_FE_HTTP_URL, which must then point at a BE
+  // webserver port (e.g. localhost:8040). For local docker dev, where the FE's
+  // 307 Location carries the BE's docker-internal IP that the host cannot
+  // reach. Production keeps this off and goes through the FE (load balancing +
+  // failover across BEs).
+  DORIS_STREAM_LOAD_DIRECT: z.enum(["true", "false"]).default("false"),
   // Max write attempts per row before dropping. 0 (or negative) = retry forever
   // (never drop) — the default. This is the single retry authority (DorisWriter
   // re-queues failed rows; the Doris client itself does a single attempt).
