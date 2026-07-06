@@ -33,6 +33,7 @@ vi.mock("../../env", async (importOriginal) => {
       LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: 3,
       LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: 8,
       LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: 100 * 1024 * 1024,
+      LITEFUSE_INGESTION_DORIS_MAX_BATCH_SIZE_BYTES: 64 * 1024 * 1024,
       LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS: 10000,
       // Backoff base == max == writeInterval so a parked retry becomes due
       // exactly one advanceTimersByTimeAsync(writeInterval) tick later — the
@@ -969,5 +970,79 @@ describe("DorisWriter", () => {
     expect(new Set([first, second])).toEqual(
       new Set([TableName.Traces, TableName.EventsFull]),
     );
+  });
+
+  it("caps batches by bytes (maxBatchBytes) and flushes on byte-fullness without waiting for row count", async () => {
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockResolvedValue(undefined);
+    const fatTrace = (id: string) =>
+      ({ ...mkTrace(id), metadata: { pad: "x".repeat(1200) } }) as any;
+
+    // First row while the cap is still huge — measure the real serialized size.
+    await writer.addToQueue(TableName.Traces, fatTrace("0"));
+    const rowBytes = q(TableName.Traces)[0].estimatedSizeBytes;
+    expect(rowBytes).toBeGreaterThan(1200);
+    // Cap at 2.5 rows: a batch fits exactly 2 rows; 3 buffered rows are
+    // byte-full (and batchSize=100 rows is never reached).
+    writer.maxBatchBytes = Math.floor(rowBytes * 2.5);
+
+    await writer.addToQueue(TableName.Traces, fatTrace("1"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockInsert).not.toHaveBeenCalled(); // 2 rows: under bytes, rows, staleness
+
+    await writer.addToQueue(TableName.Traces, fatTrace("2"));
+    await vi.advanceTimersByTimeAsync(0);
+    // 3 buffered rows ≥ byte cap → flush-ready IMMEDIATELY (no staleness tick,
+    // no full row count). The batch takes exactly 2 rows (a 3rd would exceed
+    // maxBatchBytes) and the remainder stays queued.
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    expect(mockInsert.mock.calls[0][2]).toBe(2); // recordCount
+    expect(q(TableName.Traces)).toHaveLength(1);
+
+    // The 1-row remainder is under every trigger → flushes on staleness.
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    expect(mockInsert.mock.calls[1][2]).toBe(1);
+    expect(q(TableName.Traces)).toHaveLength(0);
+
+    // A single row larger than the cap still ships — alone (rows can't split).
+    writer.maxBatchBytes = 10;
+    await writer.addToQueue(TableName.Traces, fatTrace("3"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockInsert).toHaveBeenCalledTimes(3);
+    expect(mockInsert.mock.calls[2][2]).toBe(1);
+    expect(q(TableName.Traces)).toHaveLength(0);
+  });
+
+  it("flushRemaining runs in pool-sized waves, never exceeding maxConcurrentLoads", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockImplementation(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise<void>((r) => setTimeout(r, 10));
+        inFlight--;
+      });
+
+    // Build up 5 full batches with the normal drain disabled, then flush.
+    writer.maxConcurrentLoads = 0;
+    for (let i = 0; i < 5 * writer.batchSize; i++) {
+      await writer.addToQueue(TableName.Traces, mkTrace(String(i)));
+    }
+    expect(mockInsert).not.toHaveBeenCalled();
+
+    writer.maxConcurrentLoads = 2;
+    const flush = writer.forceFlushAll();
+    for (let k = 0; k < 4; k++) {
+      await vi.advanceTimersByTimeAsync(10); // release one 10ms wave at a time
+    }
+    await flush;
+
+    expect(mockInsert).toHaveBeenCalledTimes(5);
+    expect(peak).toBeLessThanOrEqual(2); // waves of maxConcurrentLoads, not all at once
+    expect(q(TableName.Traces)).toHaveLength(0);
   });
 });

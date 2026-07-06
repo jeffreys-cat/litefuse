@@ -26,10 +26,12 @@ import { SpanKind } from "@opentelemetry/api";
  * Doris via Stream Load with a bounded worker pool:
  *
  *  - addToQueue serializes each row once and pushes it to its table's array.
- *  - A drain pool of at most maxConcurrentLoads workers pulls a batch
- *    (splice batchSize from the front) from a "ready" table and writes it —
- *    ready = the array holds a full batch, or its oldest row is older than
- *    writeInterval (staleness, so low-volume tables still flush on time).
+ *  - A drain pool of at most maxConcurrentLoads workers pulls a batch from a
+ *    "ready" table and writes it. A batch is capped by batchSize rows AND
+ *    maxBatchBytes bytes (whichever first — keeps every Stream Load body under
+ *    the BE's 100MB json limit); ready = a full batch by rows or bytes, or the
+ *    oldest row is older than writeInterval (staleness, so low-volume tables
+ *    still flush on time).
  *  - Backpressure: addToQueue awaits when a table's buffered bytes reach
  *    maxQueueSizeBytes, released when a drain frees space. Total worker memory
  *    is bounded by ~maxQueueSizeBytes (buffered) + maxConcurrentLoads * batch
@@ -49,6 +51,7 @@ export class DorisWriter {
   private static client: DorisClientType | null = null;
   batchSize: number;
   maxQueueSizeBytes: number;
+  maxBatchBytes: number;
   writeInterval: number;
   gaugeInterval: number;
   maxAttempts: number;
@@ -88,6 +91,8 @@ export class DorisWriter {
     this.batchSize = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
     this.maxQueueSizeBytes =
       workerEnv.LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES;
+    this.maxBatchBytes =
+      workerEnv.LITEFUSE_INGESTION_DORIS_MAX_BATCH_SIZE_BYTES;
     this.writeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS;
     this.gaugeInterval = workerEnv.LITEFUSE_INGESTION_DORIS_GAUGE_INTERVAL_MS;
     this.maxAttempts = sharedEnv.LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS;
@@ -282,12 +287,11 @@ export class DorisWriter {
         continue;
       }
 
-      const items = this.queue[table].splice(0, this.batchSize);
+      const { items, bytes } = this.takeFreshBatch(table);
       // No fresh rows either (the table was ready only for a retry that a
       // concurrent worker already took, or nothing is ready) — re-evaluate.
       if (items.length === 0) continue;
 
-      const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
       this.queueSizeBytes.set(
         table,
         (this.queueSizeBytes.get(table) ?? 0) - bytes,
@@ -324,15 +328,55 @@ export class DorisWriter {
     return null;
   }
 
-  /** A table has work now if a retry is due or its fresh queue is ready. */
+  /**
+   * A table has work now if a retry is due or its fresh queue is ready.
+   * Fresh readiness is three-dimensional — rows (a full batchSize), bytes
+   * (buffered fresh bytes reach maxBatchBytes: with big rows a byte-capped
+   * batch is complete long before the row count, and without this trigger it
+   * would sit until the staleness tick), or time (oldest row older than
+   * writeInterval).
+   */
   private hasReadyWork(table: TableName, now: number): boolean {
     const buf = this.retryBuffer[table];
-    for (const e of buf) if (now >= e.retryNotBefore) return true;
+    let retryBytes = 0;
+    for (const e of buf) {
+      if (now >= e.retryNotBefore) return true;
+      retryBytes += e.bytes;
+    }
     const q = this.queue[table];
+    // queueSizeBytes counts fresh + parked retries; subtract the parked part
+    // so the byte trigger fires on FRESH bytes only (a big parked-but-not-due
+    // retry must not make the fresh queue look flush-ready).
+    const freshBytes = (this.queueSizeBytes.get(table) ?? 0) - retryBytes;
     return (
       q.length >= this.batchSize ||
+      freshBytes >= this.maxBatchBytes ||
       (q.length > 0 && now - q[0].createdAt >= this.writeInterval)
     );
+  }
+
+  /**
+   * Assemble one batch from the head of a table's fresh queue: take rows until
+   * batchSize rows OR the next row would push the batch past maxBatchBytes —
+   * always at least one row (a single row can't be split; one larger than the
+   * cap ships alone). Single splice (no per-row shift), and the byte sum is
+   * returned so the caller doesn't re-reduce. Caps every Stream Load body
+   * safely under the BE's streaming_load_json_max_mb.
+   */
+  private takeFreshBatch(table: TableName): {
+    items: QueuedRow[];
+    bytes: number;
+  } {
+    const q = this.queue[table];
+    let count = 0;
+    let bytes = 0;
+    while (count < this.batchSize && count < q.length) {
+      const next = q[count].estimatedSizeBytes;
+      if (count > 0 && bytes + next > this.maxBatchBytes) break;
+      bytes += next;
+      count++;
+    }
+    return { items: q.splice(0, count), bytes };
   }
 
   /**
@@ -558,14 +602,16 @@ export class DorisWriter {
   }
 
   /**
-   * Flush everything currently queued right now, bounded by maxConcurrentLoads.
-   * Runs a few passes so rows re-queued by a failed write get another attempt
-   * instead of being silently dropped — bounded so a persistently-down BE can't
-   * hang shutdown. Used on shutdown and by tests.
+   * Flush everything currently queued right now, bounded by maxConcurrentLoads
+   * (tasks are collected as thunks and run in pool-sized waves — the flush must
+   * not fire dozens of concurrent Stream Loads at the BE just because it's
+   * shutting down). Runs a few passes so batches parked by a failed write get
+   * another attempt instead of being silently dropped — bounded so a
+   * persistently-down BE can't hang shutdown. Used on shutdown and by tests.
    */
   private async flushRemaining(maxPasses = 3): Promise<void> {
     for (let pass = 0; pass < maxPasses; pass++) {
-      const tasks: Promise<void>[] = [];
+      const tasks: Array<() => Promise<void>> = [];
       for (const t of Object.values(TableName)) {
         // Parked retries first (ignore their backoff — this is a final flush).
         const buf = this.retryBuffer[t];
@@ -575,19 +621,23 @@ export class DorisWriter {
             t,
             (this.queueSizeBytes.get(t) ?? 0) - entry.bytes,
           );
-          tasks.push(this.processBatch(t, entry.items, entry.attempts));
+          tasks.push(() => this.processBatch(t, entry.items, entry.attempts));
         }
         const q = this.queue[t];
         while (q.length > 0) {
-          const items = q.splice(0, this.batchSize);
-          const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
+          const { items, bytes } = this.takeFreshBatch(t);
           this.queueSizeBytes.set(t, (this.queueSizeBytes.get(t) ?? 0) - bytes);
-          tasks.push(this.processBatch(t, items, 0));
+          tasks.push(() => this.processBatch(t, items, 0));
         }
       }
       this.notifyBufferDrained();
       if (tasks.length === 0) return;
-      await Promise.allSettled(tasks);
+      // Pool-sized waves. Guard the step against a (test-only) 0 override,
+      // which would otherwise loop forever on an empty slice.
+      const step = Math.max(1, this.maxConcurrentLoads);
+      for (let i = 0; i < tasks.length; i += step) {
+        await Promise.allSettled(tasks.slice(i, i + step).map((fn) => fn()));
+      }
     }
   }
 

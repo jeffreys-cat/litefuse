@@ -86,10 +86,27 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(1000),
+  // Per-table BUFFER cap (worker memory / backpressure): addToQueue blocks
+  // while a table's buffered bytes (fresh + parked retries) are at this cap,
+  // leaving the backlog in BullMQ/Redis. This bounds RAM, not request size —
+  // the per-request bound is MAX_BATCH_SIZE_BYTES below. Keep this >= that
+  // (else batches degrade to buffer-sized); for throughput aim at roughly
+  // MAX_CONCURRENT_LOADS * typical batch bytes.
   LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: z.coerce
     .number()
     .positive()
-    .default(90 * 1024 * 1024), // 90MB - flush when queue exceeds this to avoid hitting Doris BE 100MB Stream Load limit
+    .default(90 * 1024 * 1024), // 90MB
+  // Per-BATCH byte cap (request sizing): batch assembly stops at batchSize rows
+  // OR this many bytes, whichever first (always >= 1 row), and buffered bytes
+  // reaching it make the table flush-ready without waiting for the row count /
+  // staleness. Keeps a single Stream Load body clear of the BE's
+  // streaming_load_json_max_mb (100MB) hard limit — without it, batchSize big
+  // rows can assemble a >100MB body that fails deterministically and, under
+  // infinite retry, wedges the table forever.
+  LITEFUSE_INGESTION_DORIS_MAX_BATCH_SIZE_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(64 * 1024 * 1024), // 64MB — 36% headroom under the BE's 100MB
   // Max concurrent in-flight Stream Loads across all tables. Each in-flight
   // load holds its (~tens of MB) batch in memory while insert() retries, so an
   // unbounded fan-out balloons worker RSS when Doris rejects/stalls writes.
@@ -107,10 +124,11 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(10_000),
-  // Exponential backoff for a failing table's retries. On a failed batch the
-  // whole table is gated until now + min(BASE * 2^(fails-1), MAX); a success
-  // clears it. Backoff is table-grained (not per-row), so it needs no change to
-  // the flat re-queue — see DorisWriter.pickReadyTable / processBatch.
+  // Exponential backoff for a failed batch's retries: a failed batch is parked
+  // in DorisWriter's per-table retryBuffer with retryNotBefore = now +
+  // min(BASE * 2^(attempts-1), MAX). Backoff is per-batch — fresh rows and
+  // other batches keep flowing; the wait is a timestamp, never a held
+  // concurrency slot. See DorisWriter.parkForRetry.
   LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_BASE_MS: z.coerce
     .number()
     .positive()
