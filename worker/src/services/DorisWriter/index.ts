@@ -370,9 +370,12 @@ export class DorisWriter {
     reason: string;
   }): void {
     const { table, items, attempts, bytes } = params;
-    // Cap sized to fit the client's full failure message (leg/URL prefix +
-    // up-to-1000-char verbatim response), so the cause is never chopped short.
-    const reason = params.reason.slice(0, 2000);
+    // Headline only: the client already logged the FULL failure (verbatim
+    // response included) at error level at the same instant. Repeating it here
+    // doubled every failure's log volume. The first 200 chars carry the
+    // discriminating facts (leg + target URL + status / "Status != Success"),
+    // which is what a retry line needs for correlation.
+    const reason = params.reason.slice(0, 200);
     // maxAttempts <= 0 means retry forever (never drop) — the default.
     if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
       // TODO - Add to a dead letter queue in Redis rather than dropping.
