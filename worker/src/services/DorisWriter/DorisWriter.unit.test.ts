@@ -209,9 +209,13 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     // First attempt failed → the batch is parked in the retry buffer (not back
-    // in the fresh queue) as one entry with attempts=1.
+    // in the fresh queue) as one entry with attempts=1. The writer's failure
+    // signal is the parkForRetry warn carrying the cause (the detailed
+    // error-level line is the client's, which is mocked out here).
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    expect(logger.error).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("DB Error"),
+    );
     expect(q(TableName.Traces)).toHaveLength(0);
     expect(retryEntries(TableName.Traces)).toHaveLength(1);
     expect(retryEntries(TableName.Traces)[0].attempts).toBe(1);
@@ -689,13 +693,15 @@ describe("DorisWriter", () => {
       event_ts: Date.now(),
     } as any);
 
+    // Each failure surfaces its cause on the retry warn line (the detailed
+    // error line belongs to the client, mocked out here).
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
-    expect(logger.error).toHaveBeenCalledWith(
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Network error"),
     );
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
-    expect(logger.error).toHaveBeenCalledWith(
+    expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Timeout"),
     );
 

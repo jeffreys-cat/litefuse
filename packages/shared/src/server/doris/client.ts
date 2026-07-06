@@ -46,6 +46,11 @@ export interface DorisQueryOptions {
   timeout?: number;
 }
 
+// Truncation for verbatim peer-response bodies embedded in error messages —
+// enough to carry a full Stream Load result JSON (Message, ErrorURL, counts)
+// without letting an HTML error page flood the log line.
+const RESPONSE_LOG_MAX_CHARS = 1000;
+
 export interface DorisClientConfig {
   feHttpUrl?: string;
   feQueryPort?: number;
@@ -642,7 +647,7 @@ export class DorisClient {
           (typeof data === "string" ? data : JSON.stringify(data)) ||
           "empty body";
         throw new Error(
-          `Stream load FE probe PUT ${feUrl} returned HTTP ${probe.status} without a 307 redirect; response: ${body.slice(0, 1000)}`,
+          `Stream load FE probe PUT ${feUrl} returned HTTP ${probe.status} without a 307 redirect; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`,
         );
       }
 
@@ -669,38 +674,16 @@ export class DorisClient {
       // Check load result
       const result = response.data;
       if (result.Status !== "Success") {
-        // Extract error message from different response formats
-        let errorMessage = "Unknown error";
-
-        if (result.Message) {
-          // Standard Stream Load error format
-          errorMessage = result.Message;
-        } else if (result.msg && result.data) {
-          // Authentication or API error format
-          errorMessage = `${result.msg}: ${result.data}`;
-        } else if (result.msg) {
-          // Simple message format
-          errorMessage = result.msg;
-        } else if (result.data) {
-          // Data field contains error details
-          errorMessage = result.data;
-        } else if (typeof result === "string") {
-          // Plain text response
-          errorMessage = result;
-        }
-
-        logger.error("DorisClient: Stream load failed (verbose)", {
-          responseData: result,
-          errorMessage,
-        });
-
-        // Include ErrorURL in the thrown error so logs are usable for debugging
-        // without needing to crank LOG_LEVEL to debug.
-        const errorUrlSuffix =
-          result && (result.ErrorURL || result.errorURL)
-            ? ` (ErrorURL: ${result.ErrorURL ?? result.errorURL})`
-            : "";
-        throw new Error(`Stream load failed: ${errorMessage}${errorUrlSuffix}`);
+        // BE answered but did not accept the load. Report the response
+        // verbatim — it already carries Message, ErrorURL, filtered-row
+        // counts, txn info — instead of picking fields case by case. The
+        // outer catch logs it exactly once.
+        const body =
+          (typeof result === "string" ? result : JSON.stringify(result)) ||
+          "empty body";
+        throw new Error(
+          `Stream load Status != Success; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+        );
       }
 
       if (env.LITEFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
@@ -717,32 +700,19 @@ export class DorisClient {
         });
       }
     } catch (error) {
-      // Enhanced error handling for different error types
+      // Build the failure message from FACTS only, verbatim: HTTP status +
+      // raw response body when the peer answered, the transport error message
+      // when it didn't. No field-picking, no interpretation.
       let errorMessage = "Unknown error";
 
       if (error && typeof error === "object" && "response" in error) {
         // Axios HTTP error with response
         const axiosError = error as any;
         if (axiosError.response?.data) {
-          const responseData = axiosError.response.data;
-
-          logger.debug("DorisClient: HTTP error response data", {
-            status: axiosError.response.status,
-            statusText: axiosError.response.statusText,
-            responseData: responseData,
-          });
-
-          if (responseData.msg && responseData.data) {
-            errorMessage = `${responseData.msg}: ${responseData.data}`;
-          } else if (responseData.msg) {
-            errorMessage = responseData.msg;
-          } else if (responseData.Message) {
-            errorMessage = responseData.Message;
-          } else if (typeof responseData === "string") {
-            errorMessage = responseData;
-          } else {
-            errorMessage = `HTTP ${axiosError.response.status}: ${axiosError.response.statusText}`;
-          }
+          const d = axiosError.response.data;
+          const body =
+            (typeof d === "string" ? d : JSON.stringify(d)) || "empty body";
+          errorMessage = `HTTP ${axiosError.response.status} ${axiosError.response.statusText ?? ""}; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`;
         } else {
           errorMessage = axiosError.message || "Network error";
         }

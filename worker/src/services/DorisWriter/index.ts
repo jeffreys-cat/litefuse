@@ -370,7 +370,9 @@ export class DorisWriter {
     reason: string;
   }): void {
     const { table, items, attempts, bytes } = params;
-    const reason = params.reason.slice(0, 500);
+    // Cap sized to fit the client's full failure message (leg/URL prefix +
+    // up-to-1000-char verbatim response), so the cause is never chopped short.
+    const reason = params.reason.slice(0, 2000);
     // maxAttempts <= 0 means retry forever (never drop) — the default.
     if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
       // TODO - Add to a dead letter queue in Redis rather than dropping.
@@ -478,7 +480,9 @@ export class DorisWriter {
             recordCount: items.length,
           });
         } catch (err) {
-          logger.error(`DorisWriter.processBatch ${table}`, err);
+          // Not logged here: the client logged the detailed error-level line
+          // ("Stream load failed for <table> ...") and parkForRetry's warn
+          // carries the cause. One detailed line + one state line per failure.
           const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
           this.parkForRetry({
             table,
@@ -531,17 +535,20 @@ export class DorisWriter {
     // newline-delimited body instead, and mixing them makes Doris try to parse
     // the whole array/lines as a single JSON value ("Not an json object or json
     // array").
-    await (DorisWriter.client ?? dorisClient())
-      .insert(params.table, params.body, params.recordCount, {
+    // On failure the error propagates to processBatch → parkForRetry, whose
+    // warn line carries the cause; the client already logged the detailed
+    // error-level line. No extra logging here (it was pure duplication).
+    await (DorisWriter.client ?? dorisClient()).insert(
+      params.table,
+      params.body,
+      params.recordCount,
+      {
         format: "json",
         strip_outer_array: true,
         read_json_by_line: false,
         timeout: 600, // 10 minutes
-      })
-      .catch((err: any) => {
-        logger.error(`DorisWriter.writeToDoris ${err}`);
-        throw err;
-      });
+      },
+    );
 
     logger.debug(`DorisWriter.writeToDoris: ${Date.now() - startTime} ms`);
 
