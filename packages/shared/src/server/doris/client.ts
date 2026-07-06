@@ -613,21 +613,41 @@ export class DorisClient {
       // no bytes at all — JSON.stringify("") would send a 2-byte `""`. axios
       // then sets Content-Length: 0 for us. (Don't set Content-Length
       // manually too; a duplicate header makes the peer reject with 400.)
+      // Tag transport errors with WHICH leg failed and the exact target URL.
+      // Without this a bare axios "timeout of 30000ms exceeded" is
+      // undiagnosable — it doesn't say whether the FE probe or the body PUT
+      // to the (possibly unreachable) redirect target hung. The tag is read
+      // by the outer catch and prefixed into the logged/thrown message.
+      const tagLeg = (e: unknown, leg: string, target: string): never => {
+        if (e && typeof e === "object") {
+          (e as any).streamLoadLeg = leg;
+          (e as any).streamLoadTarget = target;
+        }
+        throw e;
+      };
+      const feUrl = `${this.config.feHttpUrl}${url}`;
+
       logger.debug("DorisClient: Sending empty-body probe PUT to FE", { url });
-      const probe = await this.streamLoadPut(url, undefined, authHeaders);
+      const probe = await this.streamLoadPut(url, undefined, authHeaders).catch(
+        (e) => tagLeg(e, "FE probe PUT", feUrl),
+      );
 
       if (probe.status !== 307 || !probe.headers?.location) {
         // FE accepted the request but didn't redirect — this is how it
         // reports header / auth errors (missing 100-continue, bad
         // credentials, unknown table). Surface the FE-side message
-        // verbatim so the outer catch can log it.
+        // verbatim, plus the probed URL and status: a 200 here (often with a
+        // TxnId/"OK" body) means the probe executed as a real load, i.e.
+        // DORIS_FE_HTTP_URL points at a BE or a proxy instead of the FE.
         const data = probe.data;
         const detail =
           (typeof data === "object" && data !== null
             ? data.Message || data.msg || JSON.stringify(data)
-            : String(data)) ||
-          `FE returned status ${probe.status} without Location header`;
-        throw new Error(`Stream load FE probe failed: ${detail}`);
+            : String(data)) || "no response body";
+        throw new Error(
+          `Stream load FE probe PUT ${feUrl} returned ${probe.status} without a 307 redirect: ${detail}` +
+            ` (expected 307+Location from the FE — a 200 usually means DORIS_FE_HTTP_URL points at a BE/proxy, not the FE)`,
+        );
       }
 
       // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
@@ -648,7 +668,7 @@ export class DorisClient {
         redirectUrl,
         jsonData,
         authHeaders,
-      );
+      ).catch((e) => tagLeg(e, "BE body PUT", redirectUrl));
 
       // Check load result
       const result = response.data;
@@ -736,6 +756,17 @@ export class DorisClient {
         errorMessage = String(error);
       }
 
+      // Prefix which leg failed (FE probe vs BE body PUT) + the exact target
+      // URL + the axios error code (ECONNABORTED/ECONNREFUSED/EPIPE/...), set
+      // by tagLeg above. A bare "timeout of 30000ms exceeded" is useless; the
+      // same timeout tagged "[BE body PUT http://172.29.0.3:8040/... ]" points
+      // straight at an unreachable redirect target.
+      const anyErr = error as any;
+      const legPrefix = anyErr?.streamLoadLeg
+        ? `[${anyErr.streamLoadLeg} ${anyErr.streamLoadTarget}${anyErr?.code ? ` ${anyErr.code}` : ""}] `
+        : "";
+      const finalMessage = `${legPrefix}${errorMessage}`;
+
       // Inline errorMessage into the message string so it survives the
       // default text log format (which drops the metadata object). Without
       // this, "[E-217]json body size ... exceed BE's conf
@@ -746,10 +777,10 @@ export class DorisClient {
         2,
       );
       logger.error(
-        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}): ${errorMessage}`,
+        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}): ${finalMessage}`,
       );
 
-      throw new Error(errorMessage);
+      throw new Error(finalMessage);
     }
   }
 

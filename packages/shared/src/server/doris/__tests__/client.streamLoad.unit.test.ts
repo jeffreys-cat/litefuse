@@ -290,10 +290,66 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     });
 
     // Retry is owned by the caller (DorisWriter), so insert() tries exactly
-    // once and throws — the BE is hit a single time.
+    // once and throws — the BE is hit a single time. The error must name the
+    // failing LEG and its target URL (diagnosability: a bare axios message
+    // like "timeout of 30000ms exceeded" doesn't say which hop broke).
     await expect(
       client.insert("traces", JSON.stringify([{ id: "x" }]), 1),
-    ).rejects.toThrow();
+    ).rejects.toThrow(
+      new RegExp(`\\[BE body PUT http://127\\.0\\.0\\.1:${be.port}`),
+    );
     expect(beHits).toBe(1);
+  });
+
+  it("names the probed URL + status when the 'FE' answers 200 (e.g. DORIS_FE_HTTP_URL points at a BE)", async () => {
+    // Misconfiguration probe: the default `be` server answers 200 with a JSON
+    // body — exactly what a real BE does when the empty probe executes as a
+    // 0-row load. The old message was just "FE probe failed: OK"; it must now
+    // carry the URL, the status, and the BE/proxy hint.
+    client = new DorisClient({
+      feHttpUrl: `http://127.0.0.1:${be.port}`, // "FE" is actually the BE
+      database: "langfuse",
+      username: "admin",
+      password: "secret",
+      timeout: 5000,
+      maxRetries: 1,
+      maxSockets: 8,
+    });
+
+    await expect(
+      client.streamLoad("traces", [{ id: "x" }]),
+    ).rejects.toThrow(
+      new RegExp(
+        `FE probe PUT http://127\\.0\\.0\\.1:${be.port}.*returned 200 without a 307.*points at a BE/proxy`,
+      ),
+    );
+  });
+
+  it("tags transport errors with the failing leg and target (connection refused on the FE probe)", async () => {
+    // Point at a closed port: the probe can't even connect. The surfaced error
+    // must say WHICH leg (FE probe) and WHERE (the exact URL), plus the
+    // network error code — not just axios' bare message.
+    const deadPort = fe.port;
+    await closeServer(fe.server);
+
+    client = new DorisClient({
+      feHttpUrl: `http://127.0.0.1:${deadPort}`,
+      database: "langfuse",
+      username: "admin",
+      password: "secret",
+      timeout: 2000,
+      maxRetries: 1,
+      maxSockets: 8,
+    });
+
+    await expect(client.streamLoad("traces", [{ id: "x" }])).rejects.toThrow(
+      new RegExp(`\\[FE probe PUT http://127\\.0\\.0\\.1:${deadPort}.*ECONNREFUSED`),
+    );
+
+    // afterEach closes fe.server — recreate a live one so it has something to close.
+    fe = await startServer((_req, res) => {
+      res.writeHead(307, { Location: `http://127.0.0.1:${be.port}/x` });
+      res.end();
+    });
   });
 });

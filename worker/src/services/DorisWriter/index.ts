@@ -358,20 +358,25 @@ export class DorisWriter {
    * finite maxAttempts. `attempts` is the number of attempts already made
    * (>= 1). The batch's bytes were released from queueSizeBytes when it was
    * taken; on park we re-add them (shared budget → backpressure), on drop we
-   * leave them released.
+   * leave them released. `reason` is the failure message — logged on EVERY
+   * backoff/drop line so a sustained failure stays diagnosable from any
+   * retry log line, not just the first error before the backoff kicked in.
    */
-  private parkForRetry(
-    table: TableName,
-    items: QueuedRow[],
-    attempts: number,
-    bytes: number,
-  ): void {
+  private parkForRetry(params: {
+    table: TableName;
+    items: QueuedRow[];
+    attempts: number;
+    bytes: number;
+    reason: string;
+  }): void {
+    const { table, items, attempts, bytes } = params;
+    const reason = params.reason.slice(0, 500);
     // maxAttempts <= 0 means retry forever (never drop) — the default.
     if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
       // TODO - Add to a dead letter queue in Redis rather than dropping.
       recordIncrement("langfuse.queue.doris_writer.error", items.length);
       logger.error(
-        `Max attempts (${this.maxAttempts}) reached for ${table} batch of ${items.length}. Dropping.`,
+        `Max attempts (${this.maxAttempts}) reached for ${table} batch of ${items.length}. Dropping. cause: ${reason}`,
         { sample: items[0]?.line.slice(0, 500) },
       );
       return;
@@ -395,7 +400,7 @@ export class DorisWriter {
     );
     this.rearmRetryTimer();
     logger.warn(
-      `[DorisWriter] ${table} retry #${id} (${items.length} rows) attempt ${attempts} failed; backing off ${delay}ms.`,
+      `[DorisWriter] ${table} retry #${id} (${items.length} rows) attempt ${attempts} failed; backing off ${delay}ms. cause: ${reason}`,
     );
   }
 
@@ -475,7 +480,13 @@ export class DorisWriter {
         } catch (err) {
           logger.error(`DorisWriter.processBatch ${table}`, err);
           const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
-          this.parkForRetry(table, items, attemptsAlreadyMade + 1, bytes);
+          this.parkForRetry({
+            table,
+            items,
+            attempts: attemptsAlreadyMade + 1,
+            bytes,
+            reason: err instanceof Error ? err.message : String(err),
+          });
           return;
         }
 
