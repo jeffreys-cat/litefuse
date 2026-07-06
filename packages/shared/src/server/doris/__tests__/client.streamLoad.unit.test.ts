@@ -301,13 +301,13 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     expect(beHits).toBe(1);
   });
 
-  it("names the probed URL + status when the 'FE' answers 200 (e.g. DORIS_FE_HTTP_URL points at a BE)", async () => {
-    // Misconfiguration probe: the default `be` server answers 200 with a JSON
-    // body — exactly what a real BE does when the empty probe executes as a
-    // 0-row load. The old message was just "FE probe failed: OK"; it must now
-    // carry the URL, the status, and the BE/proxy hint.
+  it("reports probed URL, status and verbatim response when the probe gets no 307", async () => {
+    // The default `be` server answers 200 with a JSON body. The error must
+    // report the facts AS-IS — probed URL, received status, raw response body
+    // — with no interpretation baked in (the old message was just "FE probe
+    // failed: OK", which named neither the URL nor the status).
     client = new DorisClient({
-      feHttpUrl: `http://127.0.0.1:${be.port}`, // "FE" is actually the BE
+      feHttpUrl: `http://127.0.0.1:${be.port}`, // probe target answers 200
       database: "langfuse",
       username: "admin",
       password: "secret",
@@ -318,7 +318,7 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
 
     await expect(client.streamLoad("traces", [{ id: "x" }])).rejects.toThrow(
       new RegExp(
-        `FE probe PUT http://127\\.0\\.0\\.1:${be.port}.*returned 200 without a 307.*points at a BE/proxy`,
+        `FE probe PUT http://127\\.0\\.0\\.1:${be.port}.*returned HTTP 200 without a 307 redirect; response: .*"Status":"Success"`,
       ),
     );
   });

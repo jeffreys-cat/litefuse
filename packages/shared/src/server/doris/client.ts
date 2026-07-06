@@ -562,7 +562,7 @@ export class DorisClient {
     };
 
     // Generate unique load label for idempotency
-    const loadLabel = `langfuse_${table}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const loadLabel = `langfuse_${table}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
     // Prepare request headers
     const headers: Record<string, string> = {
@@ -633,20 +633,16 @@ export class DorisClient {
       );
 
       if (probe.status !== 307 || !probe.headers?.location) {
-        // FE accepted the request but didn't redirect — this is how it
-        // reports header / auth errors (missing 100-continue, bad
-        // credentials, unknown table). Surface the FE-side message
-        // verbatim, plus the probed URL and status: a 200 here (often with a
-        // TxnId/"OK" body) means the probe executed as a real load, i.e.
-        // DORIS_FE_HTTP_URL points at a BE or a proxy instead of the FE.
+        // The probe didn't get the expected 307 redirect. Report the facts
+        // verbatim — probed URL, received status, raw response body — and let
+        // the reader judge the cause (FE-side header/auth errors, a proxy, a
+        // misdirected URL, ... all surface here). No interpretation in logs.
         const data = probe.data;
-        const detail =
-          (typeof data === "object" && data !== null
-            ? data.Message || data.msg || JSON.stringify(data)
-            : String(data)) || "no response body";
+        const body =
+          (typeof data === "string" ? data : JSON.stringify(data)) ||
+          "empty body";
         throw new Error(
-          `Stream load FE probe PUT ${feUrl} returned ${probe.status} without a 307 redirect: ${detail}` +
-            ` (expected 307+Location from the FE — a 200 usually means DORIS_FE_HTTP_URL points at a BE/proxy, not the FE)`,
+          `Stream load FE probe PUT ${feUrl} returned HTTP ${probe.status} without a 307 redirect; response: ${body.slice(0, 1000)}`,
         );
       }
 
