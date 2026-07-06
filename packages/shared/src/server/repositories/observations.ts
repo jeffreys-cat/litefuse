@@ -766,13 +766,24 @@ const getObservationsTableInternal = async <T>(
 
   const appliedObservationsFilter = observationsFilter.apply();
 
+  // The UI sends the column as "startTime" (uiTableId — see
+  // components/table/use-cases/observations.tsx) while some callers use the
+  // uiTableName "Start Time"; accept both (matching only the display name made
+  // this find() never fire for the generations table, so the partition prune
+  // below never applied).
+  const isStartTimeColumn = (c: string) =>
+    c === "Start Time" || c === "startTime";
   const timeFilter = opts.filter.find(
     (f) =>
-      f.column === "Start Time" && (f.operator === ">=" || f.operator === ">"),
+      f.type === "datetime" &&
+      isStartTimeColumn(f.column) &&
+      (f.operator === ">=" || f.operator === ">"),
   );
   const toTimeFilter = opts.filter.find(
     (f) =>
-      f.column === "Start Time" && (f.operator === "<=" || f.operator === "<"),
+      f.type === "datetime" &&
+      isStartTimeColumn(f.column) &&
+      (f.operator === "<=" || f.operator === "<"),
   );
 
   // Partition prune: events_full is AUTO-partitioned by start_time_date, but the
