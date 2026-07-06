@@ -770,6 +770,26 @@ const getObservationsTableInternal = async <T>(
     (f) =>
       f.column === "Start Time" && (f.operator === ">=" || f.operator === ">"),
   );
+  const toTimeFilter = opts.filter.find(
+    (f) =>
+      f.column === "Start Time" && (f.operator === "<=" || f.operator === "<"),
+  );
+
+  // Partition prune: events_full is AUTO-partitioned by start_time_date, but the
+  // UI's Start Time filter only constrains start_time — the optimizer cannot
+  // derive partition bounds from a different column, so without an explicit
+  // start_time_date predicate every day-partition is scanned. Mirror the time
+  // bounds onto the partition column; DATE() of the same values keeps the
+  // semantics identical (>/>= both imply >= DATE(x), </<= imply <= DATE(x)) —
+  // the precise start_time predicate still does the exact filtering.
+  const partitionPrune = [
+    ...(timeFilter
+      ? ["AND o.start_time_date >= DATE({obsStartTimeFrom: DateTime})"]
+      : []),
+    ...(toTimeFilter
+      ? ["AND o.start_time_date <= DATE({obsStartTimeTo: DateTime})"]
+      : []),
+  ].join("\n        ");
 
   const hasScoresFilter = filter.some((f) =>
     f.column.toLowerCase().includes("score"),
@@ -852,6 +872,7 @@ const getObservationsTableInternal = async <T>(
                 AND t.is_root = 1
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
       WHERE ${appliedObservationsFilter.query}
+        ${partitionPrune}
                    ${search.query}
         ${dorisOrderBy}
         ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
@@ -865,6 +886,16 @@ const getObservationsTableInternal = async <T>(
         ? {
             timeFilterValue: convertDateToAnalyticsDateTime(
               timeFilter.value as Date,
+            ),
+            obsStartTimeFrom: convertDateToAnalyticsDateTime(
+              timeFilter.value as Date,
+            ),
+          }
+        : {}),
+      ...(toTimeFilter
+        ? {
+            obsStartTimeTo: convertDateToAnalyticsDateTime(
+              toTimeFilter.value as Date,
             ),
           }
         : {}),
