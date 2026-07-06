@@ -837,6 +837,25 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
       projectId,
     },
   });
+  // Mirror into traces_scalar (one row per trace, dual-written at ingestion —
+  // migration 0039) so deleted traces don't linger in the flat list fast path.
+  await commandDoris({
+    query: `
+      DELETE FROM traces_scalar
+      WHERE project_id = {projectId: String}
+      AND id IN ({traceIds: Array(String)});
+    `,
+    params: {
+      projectId,
+      traceIds,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
 };
 
 export const hasAnyTraceOlderThan = async (
@@ -897,6 +916,24 @@ export const deleteTracesOlderThanDays = async (
       projectId,
     },
   });
+  // Mirror into traces_scalar (root rows only by construction).
+  await commandDoris({
+    query: `
+      DELETE FROM traces_scalar
+      WHERE project_id = {projectId: String}
+      AND start_time < {cutoffDate: DateTime};
+    `,
+    params: {
+      projectId,
+      cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
   return true;
 };
 
@@ -914,6 +951,22 @@ export const deleteTracesByProjectId = async (
   `;
   await commandDoris({
     query: query,
+    params: {
+      projectId,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
+  // Mirror into traces_scalar.
+  await commandDoris({
+    query: `
+      DELETE FROM traces_scalar
+      WHERE project_id = {projectId: String};
+    `,
     params: {
       projectId,
     },

@@ -916,6 +916,9 @@ const DATE_FIELD_MAPPINGS = {
   // back to the dual-column branch (which would also synthesize a stray
   // `timestamp_date` field that events_full doesn't have).
   events_full: { sourceField: "start_time", dateField: "start_time_date" },
+  // traces_scalar mirrors events_full's timestamp shape (root-span dual-write;
+  // start_time_date derived from start_time, no stray timestamp_date).
+  traces_scalar: { sourceField: "start_time", dateField: "start_time_date" },
 } as const;
 
 /**

@@ -44,6 +44,7 @@ import {
   validateAndInflateScore,
   DatasetRunItemRecordInsertType,
   EventRecordInsertType,
+  TraceScalarRecordInsertType,
   traceException,
   flattenJsonToPathArrays,
   getDatasetItemById,
@@ -540,6 +541,38 @@ export class IngestionService {
       backend: "doris",
       target: "events_full",
     });
+
+    // Dual-write the root span's scalar fields as the trace's one row in
+    // traces_scalar (flat trace-list fast path, migration 0039). Every merged
+    // re-write of the root row lands here too, so MoW keeps the scalar row
+    // current. Field semantics aligned with traces_mv / list expectations:
+    // name is the explicit trace_name (no span-name fallback, per design), and
+    // empty-string scalars become NULL to match the MV's NULLIF(x, '').
+    if (eventRecord.is_root === 1 && eventRecord.trace_id) {
+      const scalarRecord: TraceScalarRecordInsertType = {
+        project_id: eventRecord.project_id,
+        id: eventRecord.trace_id,
+        start_time: eventRecord.start_time,
+        end_time: eventRecord.end_time ?? null,
+        name: eventRecord.trace_name || null,
+        user_id: eventRecord.user_id || null,
+        session_id: eventRecord.session_id || null,
+        release: eventRecord.release || null,
+        version: eventRecord.version || null,
+        environment: eventRecord.environment ?? "default",
+        bookmarked: eventRecord.bookmarked ?? false,
+        public: eventRecord.public ?? false,
+        tags: eventRecord.tags ?? [],
+        metadata: eventRecord.metadata ?? {},
+        event_ts: eventRecord.event_ts,
+      };
+      await this.dorisWriter.addToQueue(TableName.TracesScalar, scalarRecord);
+      recordIncrement("langfuse.ingestion.write", 1, {
+        object: "event",
+        backend: "doris",
+        target: "traces_scalar",
+      });
+    }
   }
 
   private async processDatasetRunItemEventList(params: {

@@ -11,6 +11,7 @@ import {
   recordIncrement,
   ScoreRecordInsertType,
   TraceRecordInsertType,
+  TraceScalarRecordInsertType,
   DatasetRunItemRecordInsertType,
 } from "@langfuse/shared/src/server";
 
@@ -108,6 +109,7 @@ export class DorisWriter {
       [TableName.BlobStorageFileLog]: [],
       [TableName.DatasetRunItems]: [],
       [TableName.EventsFull]: [],
+      [TableName.TracesScalar]: [],
     };
 
     this.queueSizeBytes = new Map();
@@ -119,6 +121,7 @@ export class DorisWriter {
       [TableName.BlobStorageFileLog]: [],
       [TableName.DatasetRunItems]: [],
       [TableName.EventsFull]: [],
+      [TableName.TracesScalar]: [],
     };
 
     this.start();
@@ -583,6 +586,9 @@ export enum TableName {
   BlobStorageFileLog = "blob_storage_file_log",
   DatasetRunItems = "dataset_run_items_rmt",
   EventsFull = "events_full",
+  // One scalar row per trace (root span), dual-written next to EventsFull.
+  // Serves the flat trace-list fast path (see migration 0039).
+  TracesScalar = "traces_scalar",
 }
 
 type RecordInsertType<T extends TableName> = T extends TableName.Scores
@@ -597,7 +603,9 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
           ? DatasetRunItemRecordInsertType
           : T extends TableName.EventsFull
             ? EventRecordInsertType
-            : never;
+            : T extends TableName.TracesScalar
+              ? TraceScalarRecordInsertType
+              : never;
 
 // A queued row: its final, already-formatted JSON string plus bookkeeping. We
 // keep only the string — not the source object — so the queue stays compact and

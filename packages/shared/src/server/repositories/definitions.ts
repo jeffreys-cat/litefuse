@@ -797,3 +797,30 @@ export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
   event_ts: z.number(),
 });
 export type EventRecordInsertType = z.infer<typeof eventRecordInsertSchema>;
+
+// traces_scalar: one row per trace — the root span's scalar fields, dual-written
+// at ingestion next to events_full (see migration 0039). Timestamps are epoch-ms
+// numbers like the other *InsertType shapes; start_time_date is derived by
+// formatRecordForDoris from start_time. Empty-string user_id/session_id/release/
+// version are normalized to null at the dual-write site so filters match the
+// MV's NULLIF(x, '') semantics.
+export const traceScalarRecordInsertSchema = z.object({
+  project_id: z.string(),
+  id: z.string(),
+  start_time: z.number(),
+  end_time: z.number().nullish(),
+  name: z.string().nullish(),
+  user_id: z.string().nullish(),
+  session_id: z.string().nullish(),
+  release: z.string().nullish(),
+  version: z.string().nullish(),
+  environment: z.string().default("default"),
+  bookmarked: z.boolean().nullish(),
+  public: z.boolean().nullish(),
+  tags: z.array(z.string()).nullish(),
+  metadata: z.record(z.string(), z.string()).nullish(),
+  event_ts: z.number(),
+});
+export type TraceScalarRecordInsertType = z.infer<
+  typeof traceScalarRecordInsertSchema
+>;

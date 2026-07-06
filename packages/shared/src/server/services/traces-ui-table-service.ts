@@ -443,6 +443,317 @@ const mvHavingColumnTokens = new Set(
   tracesTableMvHavingColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
 );
 
+// --- traces_scalar flat fast path (rows / count) ---------------------------
+// traces_scalar (migration 0039) holds ONE row per trace — the root span's
+// scalar fields, dual-written at ingestion. Every column the list returns is in
+// it, so when all filters are scalar-routable the rows/count queries run as a
+// FLAT single-table scan: no GROUP BY, no traces_mv rewrite, no MV-staleness
+// compensation, and inverted indexes on user_id/session_id/name/tags/environment
+// serve the filters directly. Metric filters (cost/tokens/latency/level) are
+// all-span aggregates the scalar table cannot answer — those lists fall through
+// to the MV fast path below; metrics queries always stay on the MV path.
+
+// UI column → direct traces_scalar column, for routing scalar filters into the
+// flat WHERE. name serves both Name and Trace Name (the table stores the
+// explicit trace_name). Values were normalized at write time (empty string →
+// NULL) to match the MV's NULLIF(x, '') semantics, so operators behave
+// identically on both paths.
+const tracesScalarFilterColumns: UiColumnMappings = [
+  {
+    uiTableName: "Environment",
+    uiTableId: "environment",
+    tableName: "traces",
+    select: "environment",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "User ID",
+    uiTableId: "userId",
+    tableName: "traces",
+    select: "user_id",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Session ID",
+    uiTableId: "sessionId",
+    tableName: "traces",
+    select: "session_id",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Version",
+    uiTableId: "version",
+    tableName: "traces",
+    select: "version",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Release",
+    uiTableId: "release",
+    tableName: "traces",
+    select: dq("release"),
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Name",
+    uiTableId: "name",
+    tableName: "traces",
+    select: "name",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "Trace Name",
+    uiTableId: "traceName",
+    tableName: "traces",
+    select: "name",
+    queryPrefix: "",
+  },
+  {
+    uiTableName: "⭐️",
+    uiTableId: "bookmarked",
+    tableName: "traces",
+    select: "bookmarked",
+    queryPrefix: "",
+  },
+];
+
+const scalarFilterColumnTokens = new Set(
+  tracesScalarFilterColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
+);
+
+// Eligibility mirrors canUseMvListFastPath but restricted to what the scalar
+// table can answer: timestamp range, trace-id list, tags, per-key metadata,
+// scalar column filters, ID search, timestamp ordering. Metric column filters
+// (mvHavingColumnTokens minus these) disqualify — the MV fast path handles them.
+const canUseScalarListFastPath = (params: {
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
+}): boolean => {
+  const { filter, orderBy, searchQuery, searchType } = params;
+  if (searchQuery && (!searchType || searchType.some((t) => t !== "id")))
+    return false;
+  if (orderBy && orderBy.column !== "timestamp") return false;
+  return filter.every(
+    (f) =>
+      (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
+      ((f.type === "stringOptions" || f.type === "string") &&
+        isIdFilterColumn(f.column)) ||
+      (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
+      (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
+      scalarFilterColumnTokens.has(f.column),
+  );
+};
+
+// Flat WHERE over traces_scalar — one row per trace means every filter that was
+// HAVING on the MV rollup becomes a plain WHERE on a column here.
+const buildScalarListWhere = (
+  filter: FilterState,
+  searchQuery?: string,
+): { whereParts: string[]; params: Record<string, unknown> } => {
+  const whereParts: string[] = ["project_id = {projectId: String}"];
+  const params: Record<string, unknown> = {};
+
+  const tsFilters = filter.filter((f) => f.type === "datetime");
+  const fromFilter = tsFilters.find(
+    (f) => f.operator === ">=" || f.operator === ">",
+  );
+  const toFilter = tsFilters.find(
+    (f) => f.operator === "<=" || f.operator === "<",
+  );
+  if (fromFilter) {
+    params.fromTs = convertDateToAnalyticsDateTime(fromFilter.value as Date);
+    // Date column first for partition prune, then the precise bound.
+    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
+    whereParts.push(`start_time ${fromFilter.operator} {fromTs: DateTime}`);
+  }
+  if (toFilter) {
+    params.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
+    whereParts.push("start_time_date <= DATE({toTs: DateTime})");
+    whereParts.push(`start_time ${toFilter.operator} {toTs: DateTime}`);
+  }
+
+  const idFilter = filter.find(
+    (f) =>
+      isIdFilterColumn(f.column) &&
+      (f.type === "stringOptions" || f.type === "string"),
+  );
+  if (idFilter) {
+    const ids =
+      idFilter.type === "stringOptions"
+        ? (idFilter.value as string[])
+        : [idFilter.value as string];
+    params.traceIds = ids;
+    whereParts.push("id IN ({traceIds: Array(String)})");
+  }
+
+  // tags: native ARRAY column; exact membership via array_contains (same
+  // operator handling as the MV fast path, minus the rollup).
+  for (const f of filter) {
+    if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
+    const contains = (f.value as string[]).map((v) => {
+      const escaped = v.replace(/'/g, "''");
+      return `array_contains(tags, '${escaped}')`;
+    });
+    if (contains.length === 0) continue;
+    if (f.operator === "all of") whereParts.push(`(${contains.join(" AND ")})`);
+    else if (f.operator === "none of")
+      whereParts.push(`NOT (${contains.join(" OR ")})`);
+    else whereParts.push(`(${contains.join(" OR ")})`); // "any of"
+  }
+
+  // metadata: per-key lookup on the native map column (mirrors the base
+  // StringObjectFilter operators on map['key']).
+  for (const f of filter) {
+    if (f.type !== "stringObject" || !isMetadataFilterColumn(f.column))
+      continue;
+    const escapedKey = f.key.replace(/'/g, "''");
+    const lookup = `element_at(metadata, '${escapedKey}')`;
+    const escapedValue = f.value.replace(/'/g, "''");
+    switch (f.operator) {
+      case "=":
+        whereParts.push(`${lookup} = '${escapedValue}'`);
+        break;
+      case "contains":
+        whereParts.push(`INSTR(${lookup}, '${escapedValue}') > 0`);
+        break;
+      case "does not contain":
+        whereParts.push(`INSTR(${lookup}, '${escapedValue}') = 0`);
+        break;
+      case "starts with":
+        whereParts.push(`STARTS_WITH(${lookup}, '${escapedValue}')`);
+        break;
+      case "ends with":
+        whereParts.push(`ENDS_WITH(${lookup}, '${escapedValue}')`);
+        break;
+    }
+  }
+
+  // scalar column filters → direct column predicates. The Doris filter classes
+  // emit inline-escaped values (no bind params), so the SQL is self-contained.
+  const scalarColumnFilters = filter.filter((f) =>
+    scalarFilterColumnTokens.has(f.column),
+  );
+  if (scalarColumnFilters.length > 0) {
+    const res = new FilterList(
+      createDorisFilterFromFilterState(
+        scalarColumnFilters,
+        tracesScalarFilterColumns,
+      ),
+    ).apply();
+    if (res.query) whereParts.push(res.query);
+  }
+
+  // ID search (searchType ["id"]): trace id + root user_id / name, OR-ed.
+  if (searchQuery) {
+    params.searchLike = `%${searchQuery}%`;
+    whereParts.push(
+      `(id LIKE {searchLike: String}` +
+        ` OR user_id LIKE {searchLike: String}` +
+        ` OR name LIKE {searchLike: String})`,
+    );
+  }
+
+  return { whereParts, params };
+};
+
+const runScalarRowsFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderByDesc: boolean;
+  searchQuery?: string;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<TracesTableReturnType[]> => {
+  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
+    params;
+
+  const { whereParts, params: filterParams } = buildScalarListWhere(
+    filter,
+    searchQuery,
+  );
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  const order = orderByDesc ? "DESC" : "ASC";
+  const pagination =
+    limit !== undefined && page !== undefined
+      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
+      : "";
+  if (pagination) {
+    queryParams.limit = limit;
+    queryParams.offset = (limit ?? 0) * (page ?? 0);
+  }
+
+  // Flat scan: one row per trace already, so the sort leads with the
+  // materialized date column (partition-ordered) then the precise timestamp —
+  // the same ordering shape as the MV path's DATE(MIN(ts)), MIN(ts).
+  const query = `
+    SELECT
+      id,
+      project_id,
+      start_time AS ${dq("timestamp")},
+      tags,
+      bookmarked,
+      name,
+      ${dq("release")},
+      version,
+      user_id,
+      environment,
+      session_id,
+      ${dq("public")}
+    FROM traces_scalar
+    WHERE ${whereParts.join(" AND ")}
+    ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
+    ${pagination}
+  `;
+
+  return await queryDoris<TracesTableReturnType>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table",
+      projectId,
+    },
+  });
+};
+
+const runScalarCountFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  searchQuery?: string;
+  tags?: Record<string, string>;
+}): Promise<Array<{ count: string }>> => {
+  const { projectId, filter, tags, searchQuery } = params;
+
+  const { whereParts, params: filterParams } = buildScalarListWhere(
+    filter,
+    searchQuery,
+  );
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  // One row per trace → count(*) needs no dedup/grouping.
+  const query = `
+    SELECT count(*) AS count
+    FROM traces_scalar
+    WHERE ${whereParts.join(" AND ")}
+  `;
+
+  return await queryDoris<{ count: string }>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table-count",
+      projectId,
+    },
+  });
+};
+
 // A filter is MV-fast-path-routable when it maps to the aggregate: the timestamp
 // range (partition prune + MIN(start_time)), a trace_id list, tags (array_contains
 // on the rolled-up native array), per-key metadata (element_at over the rolled-up
@@ -849,6 +1160,35 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   });
   const orderByDesc =
     orderBy?.column === "timestamp" ? orderBy.order !== "ASC" : true;
+
+  // Flat traces_scalar path first (rows/count only): the list's columns are all
+  // root-pick scalars dual-written one-row-per-trace, so scalar-routable filters
+  // skip aggregation entirely. Metric-filtered lists fall to the MV fast path;
+  // metrics queries always use the MV path (all-span aggregates).
+  const scalarEligible =
+    (select === "rows" || select === "count") &&
+    canUseScalarListFastPath({ filter, orderBy, searchQuery, searchType });
+
+  if (select === "rows" && scalarEligible) {
+    return (await runScalarRowsFastPath({
+      projectId,
+      filter,
+      orderByDesc,
+      limit,
+      page,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
+  if (select === "count" && scalarEligible) {
+    return (await runScalarCountFastPath({
+      projectId,
+      filter,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
 
   if (select === "rows" && mvEligible) {
     return (await runMvRowsFastPath({
