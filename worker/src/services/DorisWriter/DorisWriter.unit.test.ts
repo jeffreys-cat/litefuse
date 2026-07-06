@@ -1075,4 +1075,27 @@ describe("DorisWriter", () => {
     expect(releasedCalls).toHaveLength(1);
     expect(releasedCalls[0][0]).toMatch(/released after \d+(\.\d+)?s \(1 enqueues were blocked\)/);
   });
+
+  it("gauge counts failed attempts (fail=) and dropped rows (drop=) per window", async () => {
+    writer.maxAttempts = 1; // finite: first failure drops immediately
+    vi.spyOn(dorisClientMock, "insert").mockRejectedValue(
+      new Error("DB Error"),
+    );
+
+    writer.addToQueue(TableName.Traces, mkTrace("1"));
+    await vi.advanceTimersByTimeAsync(writer.writeInterval); // attempt fails → drop
+
+    expect((writer as any).failCounters.get(TableName.Traces)).toBe(1);
+    expect((writer as any).dropCounters.get(TableName.Traces)).toBe(1);
+
+    // The gauge tick renders both and resets the window.
+    await vi.advanceTimersByTimeAsync(writer.gaugeInterval);
+    const gaugeLine = (logger.info as any).mock.calls
+      .map((c: any) => String(c[0]))
+      .find((s: string) => s.includes("fail=1"));
+    expect(gaugeLine).toBeDefined();
+    expect(gaugeLine).toContain("drop=1");
+    expect((writer as any).failCounters.get(TableName.Traces)).toBe(0);
+    expect((writer as any).dropCounters.get(TableName.Traces)).toBe(0);
+  });
 });

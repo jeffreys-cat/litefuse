@@ -93,6 +93,10 @@ export class DorisWriter {
   private flushCounters = new Map<TableName, number>();
   private flushDurTotalMs = new Map<TableName, number>();
   private flushBatchCount = new Map<TableName, number>();
+  // Failure-side window counters: failed write ATTEMPTS (each parkForRetry
+  // call) and DROPPED rows (finite-maxAttempts exhaustion only).
+  private failCounters = new Map<TableName, number>();
+  private dropCounters = new Map<TableName, number>();
 
   // Backpressure episode tracking, per table: how many producers are currently
   // parked (bpWaiterCount), when the episode started (bpEngagedSince) and how
@@ -191,21 +195,35 @@ export class DorisWriter {
         const retrying = this.retryBuffer[t]?.length ?? 0;
         const added = this.addCounters.get(t) ?? 0;
         const flushed = this.flushCounters.get(t) ?? 0;
+        const failed = this.failCounters.get(t) ?? 0;
+        const dropped = this.dropCounters.get(t) ?? 0;
         const bufBytes = this.queueSizeBytes.get(t) ?? 0;
         const durTotal = this.flushDurTotalMs.get(t) ?? 0;
         const durCount = this.flushBatchCount.get(t) ?? 0;
         this.addCounters.set(t, 0);
         this.flushCounters.set(t, 0);
+        this.failCounters.set(t, 0);
+        this.dropCounters.set(t, 0);
         this.flushDurTotalMs.set(t, 0);
         this.flushBatchCount.set(t, 0);
-        if (len === 0 && retrying === 0 && added === 0 && flushed === 0)
+        if (
+          len === 0 &&
+          retrying === 0 &&
+          added === 0 &&
+          flushed === 0 &&
+          failed === 0 &&
+          dropped === 0
+        )
           continue;
         printedAny = true;
         const pct = Math.round((bufBytes / this.maxQueueSizeBytes) * 100);
         const loadAvg =
           durCount > 0 ? `${(durTotal / durCount / 1000).toFixed(1)}s` : "-";
+        // drop= only when non-zero — it's impossible in the default infinite-
+        // retry mode, so don't waste a column on a constant 0.
+        const dropPart = dropped > 0 ? ` drop=${dropped}` : "";
         logger.info(
-          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} buf=${mb(bufBytes)}/${mb(this.maxQueueSizeBytes)}MB(${pct}%) retry=${String(retrying).padEnd(5)} +${String(added).padEnd(7)} -${String(flushed).padEnd(7)} load_avg=${loadAvg}`,
+          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} buf=${mb(bufBytes)}/${mb(this.maxQueueSizeBytes)}MB(${pct}%) retry=${String(retrying).padEnd(5)} +${String(added).padEnd(7)} -${String(flushed).padEnd(7)} fail=${String(failed).padEnd(5)}${dropPart} load_avg=${loadAvg}`,
         );
       }
       let totalWaiters = 0;
@@ -484,10 +502,16 @@ export class DorisWriter {
     // failure). Line size stays bounded because the client caps embedded peer
     // response bodies at RESPONSE_LOG_MAX_CHARS when building the message.
     const reason = params.reason;
+    // Window counter for the gauge's fail= (one per failed attempt).
+    this.failCounters.set(table, (this.failCounters.get(table) ?? 0) + 1);
     // maxAttempts <= 0 means retry forever (never drop) — the default.
     if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
       // TODO - Add to a dead letter queue in Redis rather than dropping.
       recordIncrement("langfuse.queue.doris_writer.error", items.length);
+      this.dropCounters.set(
+        table,
+        (this.dropCounters.get(table) ?? 0) + items.length,
+      );
       logger.error(
         `Max attempts (${this.maxAttempts}) reached for ${table} batch of ${items.length}. Dropping. cause: ${reason}`,
         { sample: items[0]?.line.slice(0, 500) },
