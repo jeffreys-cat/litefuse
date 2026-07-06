@@ -68,7 +68,16 @@ const EnvSchema = z.object({
   DORIS_USER: z.string().optional(),
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
-  DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
+  // HTTP client timeout. NOTE: axios' timeout is a SOCKET-IDLE timeout, not a
+  // total-duration cap — it only fires after this many ms with no bytes on the
+  // wire (verified empirically against axios 1.12.2). For Stream Load the body
+  // upload keeps the socket active; the idle stretch is the BE's quiet
+  // write/commit phase (~WriteDataTimeMs - ReceiveDataTimeMs +
+  // CommitAndPublishTimeMs), observed at 12-17s per load on a healthy bench —
+  // 60s gives ~4x headroom so loads aren't client-aborted (and then retried
+  // against an already-committing txn) when the BE is under compaction/publish
+  // pressure. We tell Doris `timeout: 600` per load; the BE owns the hard cap.
+  DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
   // Max write attempts per row before dropping. 0 (or negative) = retry forever
   // (never drop) — the default. This is the single retry authority (DorisWriter
   // re-queues failed rows; the Doris client itself does a single attempt).
