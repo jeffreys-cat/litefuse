@@ -1045,4 +1045,34 @@ describe("DorisWriter", () => {
     expect(peak).toBeLessThanOrEqual(2); // waves of maxConcurrentLoads, not all at once
     expect(q(TableName.Traces)).toHaveLength(0);
   });
+
+  it("logs edge-triggered BACKPRESSURE engaged/released lines around a blocking episode", async () => {
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockImplementation(() => new Promise<void>(() => {})); // hang → no drain
+    writer.maxConcurrentLoads = 0; // no drain worker can run
+    writer.maxQueueSizeBytes = 1; // over cap after the first row
+
+    await writer.addToQueue(TableName.Traces, mkTrace("0")); // queue empty → pushes
+
+    const blocked = writer.addToQueue(TableName.Traces, mkTrace("1"));
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    // First parked producer → exactly one ENGAGED warn (edge, not per wake).
+    const engagedCalls = (logger.warn as any).mock.calls.filter((c: any) =>
+      String(c[0]).includes("BACKPRESSURE engaged"),
+    );
+    expect(engagedCalls).toHaveLength(1);
+    expect(engagedCalls[0][0]).toContain("traces");
+
+    // Let a drain succeed → producer unblocks → one released info with stats.
+    mockInsert.mockResolvedValue(undefined);
+    writer.maxConcurrentLoads = 1;
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    await blocked;
+    const releasedCalls = (logger.info as any).mock.calls.filter((c: any) =>
+      String(c[0]).includes("backpressure released"),
+    );
+    expect(releasedCalls).toHaveLength(1);
+    expect(releasedCalls[0][0]).toMatch(/released after \d+(\.\d+)?s \(1 enqueues were blocked\)/);
+  });
 });

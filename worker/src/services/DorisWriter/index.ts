@@ -21,6 +21,9 @@ import { logger } from "@langfuse/shared/src/server";
 import { instrumentAsync } from "@langfuse/shared/src/server";
 import { SpanKind } from "@opentelemetry/api";
 
+// Byte count → megabytes with one decimal, for gauge/backpressure log lines.
+const mb = (n: number): string => (n / 1048576).toFixed(1);
+
 /**
  * Buffers rows per table (a plain FIFO array per table) and writes them to
  * Doris via Stream Load with a bounded worker pool:
@@ -81,11 +84,24 @@ export class DorisWriter {
   // cap. Woken by notifyBufferDrained() when a drain reduces buffered bytes.
   private bufferWaiters: Array<() => void> = [];
 
-  // Per-window add/flush counters drive the gauge log. Both reset to 0
+  // Per-window add/flush counters drive the gauge log. All reset to 0
   // each time the gauge tick emits, so each log line shows the rate over
-  // exactly one interval.
+  // exactly one interval. flushDurTotalMs/flushBatchCount additionally yield
+  // the window's average successful-load duration (load_avg) — the direct
+  // "writes got slow" signal.
   private addCounters = new Map<TableName, number>();
   private flushCounters = new Map<TableName, number>();
+  private flushDurTotalMs = new Map<TableName, number>();
+  private flushBatchCount = new Map<TableName, number>();
+
+  // Backpressure episode tracking, per table: how many producers are currently
+  // parked (bpWaiterCount), when the episode started (bpEngagedSince) and how
+  // many enqueues it blocked (bpBlockedEnqueues). Drives edge-triggered
+  // ENGAGED/released logs (one line per episode, no per-wake spam) and the
+  // pool gauge's `waiters=` field.
+  private bpWaiterCount = new Map<TableName, number>();
+  private bpEngagedSince = new Map<TableName, number>();
+  private bpBlockedEnqueues = new Map<TableName, number>();
 
   private constructor() {
     this.batchSize = workerEnv.LITEFUSE_INGESTION_DORIS_WRITE_BATCH_SIZE;
@@ -161,22 +177,42 @@ export class DorisWriter {
       this.writeInterval,
     );
 
-    // Periodic queue gauge — one log line per table per window, but
-    // skip tables that are completely silent (q=0 and no add/flush in
-    // the window). Format: `q=<rows> +<added> -<flushed>`.
+    // Periodic queue gauge — one line per active table + one pool line, so the
+    // write state is readable at a glance: buffer fill vs cap (how close to
+    // backpressure), retry depth, in/out rates, average successful-load
+    // duration (writes got slow?), pool saturation and parked producers
+    // (backpressure happening right now?). Tables completely silent in the
+    // window are skipped.
     const gaugeWindowSec = Math.round(this.gaugeInterval / 1000);
     this.gaugeIntervalId = setInterval(() => {
+      let printedAny = false;
       for (const t of Object.values(TableName)) {
         const len = this.queue[t]?.length ?? 0;
         const retrying = this.retryBuffer[t]?.length ?? 0;
         const added = this.addCounters.get(t) ?? 0;
         const flushed = this.flushCounters.get(t) ?? 0;
+        const bufBytes = this.queueSizeBytes.get(t) ?? 0;
+        const durTotal = this.flushDurTotalMs.get(t) ?? 0;
+        const durCount = this.flushBatchCount.get(t) ?? 0;
         this.addCounters.set(t, 0);
         this.flushCounters.set(t, 0);
+        this.flushDurTotalMs.set(t, 0);
+        this.flushBatchCount.set(t, 0);
         if (len === 0 && retrying === 0 && added === 0 && flushed === 0)
           continue;
+        printedAny = true;
+        const pct = Math.round((bufBytes / this.maxQueueSizeBytes) * 100);
+        const loadAvg =
+          durCount > 0 ? `${(durTotal / durCount / 1000).toFixed(1)}s` : "-";
         logger.info(
-          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} retry=${String(retrying).padEnd(5)} +${String(added).padEnd(7)} -${flushed}`,
+          `[DorisWriter.gauge.${gaugeWindowSec}s] ${t.padEnd(22)} q=${String(len).padEnd(7)} buf=${mb(bufBytes)}/${mb(this.maxQueueSizeBytes)}MB(${pct}%) retry=${String(retrying).padEnd(5)} +${String(added).padEnd(7)} -${String(flushed).padEnd(7)} load_avg=${loadAvg}`,
+        );
+      }
+      let totalWaiters = 0;
+      for (const n of this.bpWaiterCount.values()) totalWaiters += n;
+      if (printedAny || this.activeWorkers > 0 || totalWaiters > 0) {
+        logger.info(
+          `[DorisWriter.gauge.${gaugeWindowSec}s] pool loads=${this.activeWorkers}/${this.maxConcurrentLoads} waiters=${totalWaiters}`,
         );
       }
     }, this.gaugeInterval);
@@ -214,10 +250,39 @@ export class DorisWriter {
     // cap. Released by notifyBufferDrained() when a drain reduces the bytes.
     // Awaiting (not busy-polling) yields the event loop, so BullMQ job locks
     // keep renewing while intake is throttled and the backlog stays in Redis.
-    while (
-      (this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes
-    ) {
-      await new Promise<void>((resolve) => this.bufferWaiters.push(resolve));
+    // Episodes are logged edge-triggered: one ENGAGED warn when the first
+    // producer parks, one released info when the last parked producer gets
+    // through — so the log answers "is intake blocked, since when, how much"
+    // without a line per wake-up.
+    if ((this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes) {
+      const waiters = (this.bpWaiterCount.get(tableName) ?? 0) + 1;
+      this.bpWaiterCount.set(tableName, waiters);
+      if (waiters === 1) {
+        this.bpEngagedSince.set(tableName, Date.now());
+        this.bpBlockedEnqueues.set(tableName, 0);
+        logger.warn(
+          `[DorisWriter] ${tableName} BACKPRESSURE engaged: buf ${mb(this.queueSizeBytes.get(tableName) ?? 0)}/${mb(this.maxQueueSizeBytes)}MB (q=${this.queue[tableName].length} rows, retry=${this.retryBuffer[tableName].length}) — intake blocked`,
+        );
+      }
+      this.bpBlockedEnqueues.set(
+        tableName,
+        (this.bpBlockedEnqueues.get(tableName) ?? 0) + 1,
+      );
+
+      while (
+        (this.queueSizeBytes.get(tableName) ?? 0) >= this.maxQueueSizeBytes
+      ) {
+        await new Promise<void>((resolve) => this.bufferWaiters.push(resolve));
+      }
+
+      const left = (this.bpWaiterCount.get(tableName) ?? 1) - 1;
+      this.bpWaiterCount.set(tableName, left);
+      if (left === 0) {
+        const since = this.bpEngagedSince.get(tableName) ?? Date.now();
+        logger.info(
+          `[DorisWriter] ${tableName} backpressure released after ${((Date.now() - since) / 1000).toFixed(1)}s (${this.bpBlockedEnqueues.get(tableName) ?? 0} enqueues were blocked)`,
+        );
+      }
     }
 
     // Format + serialize exactly once, here at enqueue. The drain path just
@@ -544,10 +609,20 @@ export class DorisWriter {
         // trigger a re-park; swallow any error so it can't bubble to the drain
         // worker (which would otherwise die mid-loop) or duplicate the write.
         try {
+          const durationMs = Date.now() - processingStartTime;
           recordHistogram(
             "langfuse.queue.doris_writer.processing_time",
-            Date.now() - processingStartTime,
+            durationMs,
             { unit: "milliseconds" },
+          );
+          // Window accumulators for the gauge's load_avg.
+          this.flushDurTotalMs.set(
+            table,
+            (this.flushDurTotalMs.get(table) ?? 0) + durationMs,
+          );
+          this.flushBatchCount.set(
+            table,
+            (this.flushBatchCount.get(table) ?? 0) + 1,
           );
           logger.info(
             `[DorisWriter] Flushed ${items.length} records to Doris ${table}. Queue length: ${this.queue[table].length}`,
