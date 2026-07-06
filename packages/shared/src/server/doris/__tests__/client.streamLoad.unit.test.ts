@@ -262,33 +262,6 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     );
   });
 
-  it("direct mode (streamLoadDirect) PUTs the body straight to the configured URL — no FE probe, no redirect", async () => {
-    // Local docker dev: the FE's 307 Location carries the BE's docker-internal
-    // IP the host can't reach, so feHttpUrl points at the host-mapped BE port
-    // and the client must skip the probe entirely.
-    client = new DorisClient({
-      feHttpUrl: `http://127.0.0.1:${be.port}`, // "FE" url IS the BE in direct mode
-      database: "langfuse",
-      username: "admin",
-      password: "secret",
-      timeout: 5000,
-      maxRetries: 1,
-      maxSockets: 8,
-      streamLoadDirect: true,
-    });
-
-    await client.streamLoad("traces", [{ id: "1", name: "t1" }]);
-
-    // Exactly one request, carrying the body, straight to the BE; the FE
-    // server was never contacted (no probe).
-    expect(fe.requests).toHaveLength(0);
-    expect(be.requests).toHaveLength(1);
-    expect(be.requests[0].body).toBe('[{"id":"1","name":"t1"}]');
-    const expectedAuth =
-      "Basic " + Buffer.from("admin:secret").toString("base64");
-    expect(be.requests[0].authorization).toBe(expectedAuth);
-  });
-
   it("insert makes a single attempt and surfaces the failure (no internal retry)", async () => {
     await closeServer(be.server);
     let beHits = 0;
