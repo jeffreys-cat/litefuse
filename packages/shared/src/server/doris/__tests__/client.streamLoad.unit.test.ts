@@ -316,9 +316,7 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
       maxSockets: 8,
     });
 
-    await expect(
-      client.streamLoad("traces", [{ id: "x" }]),
-    ).rejects.toThrow(
+    await expect(client.streamLoad("traces", [{ id: "x" }])).rejects.toThrow(
       new RegExp(
         `FE probe PUT http://127\\.0\\.0\\.1:${be.port}.*returned 200 without a 307.*points at a BE/proxy`,
       ),
@@ -343,7 +341,9 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     });
 
     await expect(client.streamLoad("traces", [{ id: "x" }])).rejects.toThrow(
-      new RegExp(`\\[FE probe PUT http://127\\.0\\.0\\.1:${deadPort}.*ECONNREFUSED`),
+      new RegExp(
+        `\\[FE probe PUT http://127\\.0\\.0\\.1:${deadPort}.*ECONNREFUSED`,
+      ),
     );
 
     // afterEach closes fe.server — recreate a live one so it has something to close.
