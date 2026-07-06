@@ -671,9 +671,12 @@ export class DorisClient {
         authHeaders,
       ).catch((e) => tagLeg(e, "BE body PUT", redirectUrl));
 
-      // Check load result
+      // Check load result. result may be a non-object (empty 200 body, plain
+      // text, a stray 3xx passed by validateStatus) — optional chaining keeps
+      // the failure path reporting the VERBATIM body instead of dying on a
+      // TypeError that would mask the real fact.
       const result = response.data;
-      if (result.Status !== "Success") {
+      if (result?.Status !== "Success") {
         // BE answered but did not accept the load. Report the response
         // verbatim — it already carries Message, ErrorURL, filtered-row
         // counts, txn info — instead of picking fields case by case. The
