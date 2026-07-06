@@ -370,16 +370,11 @@ export class DorisWriter {
     reason: string;
   }): void {
     const { table, items, attempts, bytes } = params;
-    // Headline only: the client already logged the FULL failure (verbatim
-    // response included) at error level at the same instant. Repeating it here
-    // doubled every failure's log volume. Cut at our own "; response:"
-    // delimiter (the discriminating facts — leg, target URL, status — all
-    // precede it) so the warn never trails a dangling half-JSON fragment;
-    // cap as a fallback for delimiter-less transport errors.
-    const respIdx = params.reason.indexOf("; response:");
-    const reason = (
-      respIdx > 0 ? params.reason.slice(0, respIdx) : params.reason
-    ).slice(0, 300);
+    // The cause is carried VERBATIM — no truncation. Every retry/drop line is
+    // self-sufficient (grep the warn stream alone and you have the full
+    // failure). Line size stays bounded because the client caps embedded peer
+    // response bodies at RESPONSE_LOG_MAX_CHARS when building the message.
+    const reason = params.reason;
     // maxAttempts <= 0 means retry forever (never drop) — the default.
     if (this.maxAttempts > 0 && attempts >= this.maxAttempts) {
       // TODO - Add to a dead letter queue in Redis rather than dropping.
