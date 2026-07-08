@@ -9,6 +9,7 @@ import {
   parseIO,
 } from "@langfuse/shared";
 import { env } from "../../env";
+import { truncateWellFormed } from "./truncateWellFormed";
 import {
   convertObservationReadToInsert,
   convertScoreReadToInsert,
@@ -345,11 +346,14 @@ export class IngestionService {
     // parseIO(.., "compact") the UI applies (ChatML last-message extraction, raw
     // fallback) then truncates to 200 chars. Truncated JSON renders fine — the UI's
     // deepParseJson falls back to showing the raw string on parse failure.
+    // truncateWellFormed (not a bare slice): a slice that splits a surrogate
+    // pair at the limit leaves a lone surrogate that Doris's simdjson rejects,
+    // poisoning the whole batch (see truncateWellFormed.ts).
     const trimPreview = (io: string | null | undefined): string | null => {
       if (io == null) return null;
       const compact = parseIO(io, "compact");
       const s = typeof compact === "string" ? compact : io;
-      return s.slice(0, 200);
+      return truncateWellFormed(s, 200);
     };
     const input_trim = trimPreview(resolvedInput);
     const output_trim = trimPreview(eventData.output);
