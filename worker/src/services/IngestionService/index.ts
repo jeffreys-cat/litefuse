@@ -564,6 +564,13 @@ export class IngestionService {
         public: eventRecord.public ?? false,
         tags: eventRecord.tags ?? [],
         metadata: eventRecord.metadata ?? {},
+        // Precomputed compact previews + audit timestamps: let the
+        // verbosity="compact" byId point read be served entirely from
+        // traces_scalar (convertDorisToDomain needs created_at/updated_at).
+        input_trim: eventRecord.input_trim ?? null,
+        output_trim: eventRecord.output_trim ?? null,
+        created_at: eventRecord.created_at,
+        updated_at: eventRecord.updated_at,
         event_ts: eventRecord.event_ts,
       };
       await this.dorisWriter.addToQueue(TableName.TracesScalar, scalarRecord);

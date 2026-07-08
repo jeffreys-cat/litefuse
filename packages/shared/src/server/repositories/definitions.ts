@@ -819,6 +819,12 @@ export const traceScalarRecordInsertSchema = z.object({
   public: z.boolean().nullish(),
   tags: z.array(z.string()).nullish(),
   metadata: z.record(z.string(), z.string()).nullish(),
+  // 200-char ingestion-precomputed previews — serve traces.byId
+  // verbosity="compact" (the trace-list cell preview) as a flat point read.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
+  created_at: z.number(),
+  updated_at: z.number(),
   event_ts: z.number(),
 });
 export type TraceScalarRecordInsertType = z.infer<

@@ -491,6 +491,79 @@ export const getTraceById = async ({
   /** When true, sets input/output columns to empty in the query to reduce database load */
   excludeInputOutput?: boolean;
 }) => {
+  // Compact fast path: verbosity "compact" (the trace-list cell preview) only
+  // needs root-pick scalars + input_trim/output_trim, all of which live on
+  // traces_scalar (one row per trace, dual-written at ingestion — migration
+  // 0039). (project_id, id) is the unique-key prefix and id the distribution
+  // column, so this is a single-tablet point lookup instead of the events_full
+  // aggregate. Falls back to the aggregate below when the scalar row is
+  // missing (data predating the dual-write, or a trace whose root span never
+  // arrived).
+  if (excludeInputOutput) {
+    const scalarRows = await queryDoris<TraceRecordReadType>({
+      query: `
+        SELECT
+          id,
+          project_id,
+          start_time AS ${dq("timestamp")},
+          name,
+          user_id,
+          session_id,
+          ${dq("release")},
+          version,
+          environment,
+          bookmarked,
+          ${dq("public")},
+          tags,
+          metadata,
+          input_trim,
+          output_trim,
+          created_at,
+          updated_at,
+          event_ts
+        FROM traces_scalar
+        WHERE project_id = {projectId: String}
+          AND id = {traceId: String}
+          ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
+          ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
+        LIMIT 1
+      `,
+      params: {
+        traceId,
+        projectId,
+        ...(timestamp
+          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+          : {}),
+        ...(fromTimestamp
+          ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "byId-scalar",
+        projectId,
+      },
+    });
+    if (scalarRows.length > 0) {
+      const scalarRes = scalarRows.map((r) => ({
+        ...convertDorisToDomain(r),
+        input_trim: r.input_trim ?? null,
+        output_trim: r.output_trim ?? null,
+      }));
+      scalarRes.forEach((trace) => {
+        recordDistribution(
+          "langfuse.query_by_id_age",
+          new Date().getTime() - trace.timestamp.getTime(),
+          {
+            table: "traces_scalar",
+          },
+        );
+      });
+      return scalarRes.shift();
+    }
+  }
+
   // Phase C alignment with upstream langfuse-main's eventsTracesAggregation:
   // trace identity is derived from the set of observations sharing
   // trace_id, not from a synthetic `t-<trace_id>` row.
