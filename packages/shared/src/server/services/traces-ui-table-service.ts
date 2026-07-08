@@ -1017,6 +1017,153 @@ const runMvCountFastPath = async (params: {
   });
 };
 
+// --- trace_metrics_agg metrics fast path -----------------------------------
+// trace_metrics_agg (migration 0040) is the realtime write-side rollup: one
+// AGGREGATE-KEY row per (project, trace, day), maintained by the ingestion
+// dual-write. Reading it needs no MV rewrite and no staleness compensation —
+// unlike traces_mv, it is CURRENT for the live partition. The metrics query
+// only rolls the per-day rows up to one row per trace (SUM-of-SUM /
+// MIN-of-MIN / MAX-of-MAX — a handful of rows per trace).
+//
+// Eligibility: an explicit trace-id list must be present. traces.metrics (the
+// only caller) always sends the page's ids, which traces.all ALREADY produced
+// under the full filter set — so every non-time filter is redundant here and
+// deliberately NOT re-applied (the router already prunes score filters on the
+// same reasoning). Unknown filter columns still disqualify, so a future
+// caller without pre-filtered ids falls back to the MV path instead of
+// silently losing its filters.
+const canUseAggMetricsFastPath = (params: {
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+}): boolean => {
+  const { filter, orderBy, searchQuery } = params;
+  if (searchQuery) return false;
+  if (orderBy && orderBy.column !== "timestamp") return false;
+  const hasIdFilter = filter.some(
+    (f) =>
+      isIdFilterColumn(f.column) &&
+      (f.type === "stringOptions" || f.type === "string"),
+  );
+  if (!hasIdFilter) return false;
+  // Every filter must be one traces.all could have applied when producing the
+  // id list (time/id/tags/metadata/scalar/metric columns).
+  return filter.every(
+    (f) =>
+      (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
+      ((f.type === "stringOptions" || f.type === "string") &&
+        isIdFilterColumn(f.column)) ||
+      (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
+      (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
+      scalarFilterColumnTokens.has(f.column) ||
+      mvHavingColumnTokens.has(f.column),
+  );
+};
+
+const runAggMetricsFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderByDesc: boolean;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<TracesTableMetricsDorisReturnType[]> => {
+  const { projectId, filter, orderByDesc, limit, page, tags } = params;
+
+  const whereParts: string[] = ["project_id = {projectId: String}"];
+  const havingParts: string[] = [];
+  const queryParams: Record<string, unknown> = { projectId };
+
+  const tsFilters = filter.filter((f) => f.type === "datetime");
+  const fromFilter = tsFilters.find(
+    (f) => f.operator === ">=" || f.operator === ">",
+  );
+  const toFilter = tsFilters.find(
+    (f) => f.operator === "<=" || f.operator === "<",
+  );
+  if (fromFilter) {
+    queryParams.fromTs = convertDateToAnalyticsDateTime(
+      fromFilter.value as Date,
+    );
+    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
+    havingParts.push(
+      `MIN(min_start_time) ${fromFilter.operator} {fromTs: DateTime}`,
+    );
+  }
+  if (toFilter) {
+    queryParams.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
+    whereParts.push("start_time_date <= DATE({toTs: DateTime})");
+    havingParts.push(
+      `MIN(min_start_time) ${toFilter.operator} {toTs: DateTime}`,
+    );
+  }
+
+  const idFilter = filter.find(
+    (f) =>
+      isIdFilterColumn(f.column) &&
+      (f.type === "stringOptions" || f.type === "string"),
+  );
+  if (idFilter) {
+    queryParams.traceIds =
+      idFilter.type === "stringOptions"
+        ? (idFilter.value as string[])
+        : [idFilter.value as string];
+    whereParts.push("trace_id IN ({traceIds: Array(String)})");
+  }
+
+  const order = orderByDesc ? "DESC" : "ASC";
+  const pagination =
+    limit !== undefined && page !== undefined
+      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
+      : "";
+  if (pagination) {
+    queryParams.limit = limit;
+    queryParams.offset = (limit ?? 0) * (page ?? 0);
+  }
+
+  // Latency/level formulas mirror OUTER_LATENCY/OUTER_LEVEL over the agg
+  // columns (identical NULL behavior: an all-open trace yields NULL latency).
+  const query = `
+    SELECT
+      trace_id AS id,
+      project_id,
+      MIN(min_start_time) AS ${dq("timestamp")},
+      milliseconds_diff(
+        CASE WHEN MAX(max_start_time) > MAX(max_end_time) THEN MAX(max_start_time) ELSE MAX(max_end_time) END,
+        CASE WHEN MIN(min_start_time) < MIN(min_end_time) THEN MIN(min_start_time) ELSE MIN(min_end_time) END
+      ) / 1000 AS latency,
+      SUM(total_cost) AS total_cost,
+      SUM(input_tokens) AS input_tokens,
+      SUM(output_tokens) AS output_tokens,
+      SUM(total_tokens) AS total_tokens,
+      SUM(input_cost) AS input_cost,
+      SUM(output_cost) AS output_cost,
+      CASE WHEN SUM(error_count) > 0 THEN 'ERROR' WHEN SUM(warning_count) > 0 THEN 'WARNING' WHEN SUM(default_count) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END AS level,
+      SUM(error_count) AS error_count,
+      SUM(warning_count) AS warning_count,
+      SUM(default_count) AS default_count,
+      SUM(debug_count) AS debug_count,
+      SUM(observation_count) AS observation_count
+    FROM trace_metrics_agg
+    WHERE ${whereParts.join(" AND ")}
+    GROUP BY project_id, trace_id
+    ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
+    ORDER BY DATE(MIN(min_start_time)) ${order}, MIN(min_start_time) ${order}, MAX(event_ts) DESC
+    ${pagination}
+  `;
+
+  return await queryDoris<TracesTableMetricsDorisReturnType>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table-metrics-agg",
+      projectId,
+    },
+  });
+};
+
 // Metrics fast path: a single-table aggregate over events_full (no t self-JOIN,
 // no observations_stats CTE, no scores JOIN) that transparently rewrites onto
 // traces_mv. scores are NOT part of this query — the tRPC layer fetches them
@@ -1199,6 +1346,23 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       page,
       tags: props.tags,
       searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
+  // Realtime agg rollup first (id-scoped metrics — the traces.metrics page
+  // call): current on the live partition, no MV rewrite/staleness. Falls to
+  // the MV path when no id list is present or a filter isn't id-list-derived.
+  if (
+    select === "metrics" &&
+    canUseAggMetricsFastPath({ filter, orderBy, searchQuery })
+  ) {
+    return (await runAggMetricsFastPath({
+      projectId,
+      filter,
+      orderByDesc,
+      limit,
+      page,
+      tags: props.tags,
     })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
   }
 
