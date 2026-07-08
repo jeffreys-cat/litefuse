@@ -8,11 +8,13 @@ describe("truncateWellFormed", () => {
     // offset inside splits a pair — a bare slice leaves a lone high surrogate
     // (exactly what wedged the events_full batch: "...| 待定 | 🇪\ud83c").
     const s = "| 待定 | 🇪🇸 西班牙";
-    const cut = truncateWellFormed(s, 9); // lands mid-🇸
+    // Units: 0-6 ASCII/CJK, 7-8 = 🇪 (one pair), 9-10 = 🇸. Cutting at 10
+    // keeps 🇸's high surrogate without its low half.
+    const cut = truncateWellFormed(s, 10);
     expect(cut.isWellFormed()).toBe(true);
     expect(cut.endsWith("�")).toBe(true); // the cut half → replacement char
     // A bare slice at the same offset is NOT well-formed — the bug being fixed.
-    expect(s.slice(0, 9).isWellFormed()).toBe(false);
+    expect(s.slice(0, 10).isWellFormed()).toBe(false);
   });
 
   it("repairs lone surrogates already present inside the kept window", () => {
