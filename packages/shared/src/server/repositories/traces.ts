@@ -929,6 +929,25 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
       projectId,
     },
   });
+  // Mirror into trace_metrics_agg (per-trace metric rollup — migration 0040;
+  // key columns only, as the AGGREGATE model requires for DELETE).
+  await commandDoris({
+    query: `
+      DELETE FROM trace_metrics_agg
+      WHERE project_id = {projectId: String}
+      AND trace_id IN ({traceIds: Array(String)});
+    `,
+    params: {
+      projectId,
+      traceIds,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
 };
 
 export const hasAnyTraceOlderThan = async (
@@ -1007,6 +1026,26 @@ export const deleteTracesOlderThanDays = async (
       projectId,
     },
   });
+  // Mirror into trace_metrics_agg. The AGGREGATE model only allows DELETE on
+  // key columns, so the retention bound uses the day-granular partition key
+  // (start_time_date) instead of start_time — same retention intent.
+  await commandDoris({
+    query: `
+      DELETE FROM trace_metrics_agg
+      WHERE project_id = {projectId: String}
+      AND start_time_date < DATE({cutoffDate: DateTime});
+    `,
+    params: {
+      projectId,
+      cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
   return true;
 };
 
@@ -1038,6 +1077,22 @@ export const deleteTracesByProjectId = async (
   await commandDoris({
     query: `
       DELETE FROM traces_scalar
+      WHERE project_id = {projectId: String};
+    `,
+    params: {
+      projectId,
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "delete",
+      projectId,
+    },
+  });
+  // Mirror into trace_metrics_agg.
+  await commandDoris({
+    query: `
+      DELETE FROM trace_metrics_agg
       WHERE project_id = {projectId: String};
     `,
     params: {

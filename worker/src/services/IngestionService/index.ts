@@ -45,6 +45,7 @@ import {
   DatasetRunItemRecordInsertType,
   EventRecordInsertType,
   TraceScalarRecordInsertType,
+  TraceMetricsAggRecordInsertType,
   traceException,
   flattenJsonToPathArrays,
   getDatasetItemById,
@@ -578,6 +579,48 @@ export class IngestionService {
         object: "event",
         backend: "doris",
         target: "traces_scalar",
+      });
+    }
+
+    // Dual-write ONE metric increment per span into trace_metrics_agg
+    // (AGGREGATE KEY folds them into the realtime per-trace rollup — migration
+    // 0040). Every span contributes: SUMs ignore the root's null tokens/cost;
+    // level counts include the root's level exactly once (matching traces_mv);
+    // MIN/MAX build the trace time window and are duplication-immune. Batches
+    // for this table carry a stable stream-load label (exactly-once for writer
+    // retries); residual duplication (job replay / OTel re-delivery) is
+    // repaired T+1 from events_full.
+    if (eventRecord.trace_id) {
+      const aggRecord: TraceMetricsAggRecordInsertType = {
+        project_id: eventRecord.project_id,
+        trace_id: eventRecord.trace_id,
+        // UTC date of the span's start — same derivation events_full uses for
+        // its start_time_date partition key, so both tables agree on the day.
+        start_time_date: new Date(eventRecord.start_time)
+          .toISOString()
+          .slice(0, 10),
+        input_tokens: eventRecord.input_tokens_calculated ?? null,
+        output_tokens: eventRecord.output_tokens_calculated ?? null,
+        total_tokens: eventRecord.total_tokens_calculated ?? null,
+        input_cost: eventRecord.input_cost_calculated ?? null,
+        output_cost: eventRecord.output_cost_calculated ?? null,
+        total_cost: eventRecord.total_cost ?? null,
+        error_count: eventRecord.level === "ERROR" ? 1 : 0,
+        warning_count: eventRecord.level === "WARNING" ? 1 : 0,
+        default_count: eventRecord.level === "DEFAULT" ? 1 : 0,
+        debug_count: eventRecord.level === "DEBUG" ? 1 : 0,
+        observation_count: eventRecord.is_root === 0 ? 1 : 0,
+        min_start_time: eventRecord.start_time,
+        max_start_time: eventRecord.start_time,
+        min_end_time: eventRecord.end_time ?? null,
+        max_end_time: eventRecord.end_time ?? null,
+        event_ts: eventRecord.event_ts,
+      };
+      await this.dorisWriter.addToQueue(TableName.TracesMetricsAgg, aggRecord);
+      recordIncrement("langfuse.ingestion.write", 1, {
+        object: "event",
+        backend: "doris",
+        target: "trace_metrics_agg",
       });
     }
   }
