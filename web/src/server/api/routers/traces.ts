@@ -565,6 +565,15 @@ export const traceRouter = createTRPCRouter({
               { bookmarked: input.bookmarked },
             ),
           );
+          // traces_scalar serves the trace LIST (and compact byId); without
+          // this mirror the toggled bookmark reverts on the next list load.
+          promises.push(
+            partialUpdateDoris({
+              table: "traces_scalar",
+              where: { project_id: input.projectId, id: input.traceId },
+              set: { bookmarked: input.bookmarked },
+            }),
+          );
           await Promise.all(promises);
         } else {
           logger.error(
@@ -635,6 +644,14 @@ export const traceRouter = createTRPCRouter({
             { public: input.public },
           ),
         );
+        // traces_scalar mirror — the list/compact-byId read target.
+        promises.push(
+          partialUpdateDoris({
+            table: "traces_scalar",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { public: input.public },
+          }),
+        );
         await Promise.all(promises);
         return traceById;
       } catch (error) {
@@ -696,6 +713,13 @@ export const traceRouter = createTRPCRouter({
             { traceIds: [input.traceId], rootOnly: true },
             { tags: input.tags },
           ),
+          // traces_scalar mirror — the list/compact-byId read target (tags
+          // filters run on its inverted index).
+          partialUpdateDoris({
+            table: "traces_scalar",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { tags: input.tags },
+          }),
         ]);
       } catch (error) {
         logger.error("Failed to call traces.updateTags", error);

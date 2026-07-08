@@ -72,10 +72,12 @@ export async function upsertDoris<T extends Record<string, unknown>>(opts: {
  * single-row mutations like bookmark, publish, and tag updates.
  */
 export async function partialUpdateDoris(opts: {
-  // events_full added for the master events_full migration; legacy table
-  // names retained per code-retention principle (their write paths are
-  // unreachable under the OTel-only contract but the type stays valid).
-  table: "traces" | "observations" | "scores" | "events_full";
+  // events_full added for the master events_full migration; traces_scalar for
+  // the trace-list mirror (bookmark/public/tags toggles must reach the list's
+  // read target). Legacy table names retained per code-retention principle
+  // (their write paths are unreachable under the OTel-only contract but the
+  // type stays valid).
+  table: "traces" | "observations" | "scores" | "events_full" | "traces_scalar";
   where: Record<string, unknown>;
   set: Record<string, unknown>;
 }): Promise<void> {
