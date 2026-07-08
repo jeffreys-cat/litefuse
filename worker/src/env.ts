@@ -137,6 +137,22 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(30_000),
+  // T+1 repair of trace_metrics_agg from events_full (see
+  // features/traceMetricsRepair): recomputes closed day-partitions so residual
+  // increment duplication (job replay / OTel re-delivery) never survives past
+  // the current day. DAYS_BACK = how many closed days each pass recomputes.
+  LITEFUSE_TRACE_METRICS_REPAIR_ENABLED: z
+    .enum(["true", "false"])
+    .default("true"),
+  LITEFUSE_TRACE_METRICS_REPAIR_INTERVAL_MS: z.coerce
+    .number()
+    .positive()
+    .default(6 * 60 * 60 * 1000), // 6h — re-repairing is idempotent
+  LITEFUSE_TRACE_METRICS_REPAIR_DAYS_BACK: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1),
 
   // Analytics backend selection
   LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),

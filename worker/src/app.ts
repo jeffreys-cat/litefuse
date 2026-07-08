@@ -72,6 +72,7 @@ import {
 } from "./features/batch-data-retention-cleaner";
 import { MediaRetentionCleaner } from "./features/media-retention-cleaner";
 import { BatchTraceDeletionCleaner } from "./features/batch-trace-deletion-cleaner";
+import { TraceMetricsRepairRunner } from "./features/traceMetricsRepair";
 import { BatchProjectMediaCleaner } from "./features/batch-project-media-cleaner";
 import { BatchProjectBlobCleaner } from "./features/batch-project-blob-cleaner";
 
@@ -543,6 +544,14 @@ export let batchTraceDeletionCleaner: BatchTraceDeletionCleaner | null = null;
 if (env.LITEFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED === "true") {
   batchTraceDeletionCleaner = new BatchTraceDeletionCleaner();
   batchTraceDeletionCleaner.start();
+}
+
+// T+1 repair of trace_metrics_agg closed partitions from events_full
+export let traceMetricsRepairRunner: TraceMetricsRepairRunner | null = null;
+
+if (env.LITEFUSE_TRACE_METRICS_REPAIR_ENABLED === "true") {
+  traceMetricsRepairRunner = new TraceMetricsRepairRunner();
+  traceMetricsRepairRunner.start();
 }
 
 process.on("SIGINT", () => onShutdown("SIGINT"));
