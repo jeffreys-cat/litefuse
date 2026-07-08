@@ -352,4 +352,85 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
       res.end();
     });
   });
+
+  // --- stable-label exactly-once semantics (verified against Doris 4.0.6) ---
+
+  const labelAlreadyExists = (existingJobStatus?: string) =>
+    JSON.stringify({
+      TxnId: -1,
+      Label: "ignored",
+      Status: "Label Already Exists",
+      ...(existingJobStatus ? { ExistingJobStatus: existingJobStatus } : {}),
+      Message:
+        "[LABEL_ALREADY_EXISTS]TStatus: errCode = 2, detailMessage = Label has already been used, relate to txn [42], status [VISIBLE].",
+    });
+
+  const swapBeResponse = async (body: string) => {
+    await closeServer(be.server);
+    be = await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(body);
+    });
+    await closeServer(fe.server);
+    fe = await startServer((req, res, record) => {
+      res.writeHead(307, {
+        Location: `http://admin:secret@127.0.0.1:${be.port}${record.url}`,
+      });
+      res.end();
+    });
+    client = new DorisClient({
+      feHttpUrl: `http://127.0.0.1:${fe.port}`,
+      database: "langfuse",
+      username: "admin",
+      password: "secret",
+      timeout: 5000,
+      maxRetries: 1,
+      maxSockets: 8,
+    });
+  };
+
+  it("caller-supplied stable label reaches the BE verbatim", async () => {
+    await client.streamLoad("traces", [{ id: "1" }], {
+      label: "langfuse_traces_123_stable-uuid",
+    });
+    expect(be.requests[0].label).toBe("langfuse_traces_123_stable-uuid");
+    // FE probe carries it too (the FE registers the label at probe time).
+    expect(fe.requests[0].label).toBe("langfuse_traces_123_stable-uuid");
+  });
+
+  it("stable label + Label Already Exists + FINISHED = SUCCESS (dedup, no re-park)", async () => {
+    await swapBeResponse(labelAlreadyExists("FINISHED"));
+    // Must RESOLVE: the earlier attempt of this batch committed; re-parking
+    // would double-apply AGGREGATE-KEY SUM columns.
+    await expect(
+      client.streamLoad("traces", [{ id: "1" }], { label: "stable-1" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("stable label + Label Already Exists + RUNNING = retryable failure", async () => {
+    await swapBeResponse(labelAlreadyExists("RUNNING"));
+    await expect(
+      client.streamLoad("traces", [{ id: "1" }], { label: "stable-2" }),
+    ).rejects.toThrow(/label busy.*RUNNING/s);
+  });
+
+  it("stable label + Label Already Exists without ExistingJobStatus falls back to SHOW TRANSACTION (unresolvable → retryable)", async () => {
+    // The mocked mysql pool has no query(); resolveLabelTxnStatus catches and
+    // returns UNKNOWN → the client must throw a retryable error rather than
+    // either wedging or falsely succeeding.
+    await swapBeResponse(labelAlreadyExists(undefined));
+    await expect(
+      client.streamLoad("traces", [{ id: "1" }], { label: "stable-3" }),
+    ).rejects.toThrow(/txn status UNKNOWN/);
+  });
+
+  it("WITHOUT a caller label, Label Already Exists stays a plain failure (collision, not dedup)", async () => {
+    await swapBeResponse(labelAlreadyExists("FINISHED"));
+    // Generated per-attempt labels must never treat "already exists" as
+    // success — that response can only mean a collision with someone else's
+    // load, and swallowing it would silently drop this batch.
+    await expect(client.streamLoad("traces", [{ id: "1" }])).rejects.toThrow(
+      /Label Already Exists/,
+    );
+  });
 });

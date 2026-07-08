@@ -1076,6 +1076,55 @@ describe("DorisWriter", () => {
     expect(releasedCalls[0][0]).toMatch(/released after \d+(\.\d+)?s \(1 enqueues were blocked\)/);
   });
 
+  it("stable-label tables: the SAME label rides every retry of a batch; fresh batches get distinct labels; other tables get none", async () => {
+    // Opt Traces into stable labels (in prod only AGGREGATE-KEY tables are in
+    // the set — trace_metrics_agg).
+    (writer as any).stableLabelTables = new Set([TableName.Traces]);
+    const mockInsert = vi
+      .spyOn(dorisClientMock, "insert")
+      .mockRejectedValueOnce(new Error("DB Error")) // attempt 1 fails → parks
+      .mockResolvedValue(undefined); // retry + everything after succeeds
+
+    writer.addToQueue(TableName.Traces, mkTrace("1"));
+    await vi.advanceTimersByTimeAsync(writer.writeInterval); // attempt 1
+    await vi.advanceTimersByTimeAsync(writer.writeInterval); // retry (backoff = writeInterval in mock env)
+
+    expect(mockInsert.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const label1 = (mockInsert.mock.calls[0][3] as any)?.label;
+    const label2 = (mockInsert.mock.calls[1][3] as any)?.label;
+    // Born at batch assembly, reused VERBATIM on the retry — the precondition
+    // for FE label dedup (a regenerated label would break exactly-once).
+    expect(label1).toMatch(/^langfuse_traces_\d+_[0-9a-f-]{36}$/);
+    expect(label2).toBe(label1);
+
+    // A NEW batch must get a NEW label.
+    writer.addToQueue(TableName.Traces, mkTrace("2"));
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    const label3 = (
+      mockInsert.mock.calls[mockInsert.mock.calls.length - 1][3] as any
+    )?.label;
+    expect(label3).toMatch(/^langfuse_traces_\d+_[0-9a-f-]{36}$/);
+    expect(label3).not.toBe(label1);
+
+    // Non-opted-in tables carry no label (client self-generates per attempt).
+    writer.addToQueue(TableName.Scores, {
+      id: "s1",
+      project_id: "p",
+      trace_id: "t",
+      name: "s",
+      value: 1,
+      timestamp: Date.now(),
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      event_ts: Date.now(),
+      is_deleted: 0,
+    } as any);
+    await vi.advanceTimersByTimeAsync(writer.writeInterval);
+    const lastCall = mockInsert.mock.calls[mockInsert.mock.calls.length - 1];
+    expect(lastCall[0]).toBe("scores");
+    expect((lastCall[3] as any)?.label).toBeUndefined();
+  });
+
   it("gauge counts failed attempts (fail=) and dropped rows (drop=) per window", async () => {
     writer.maxAttempts = 1; // finite: first failure drops immediately
     vi.spyOn(dorisClientMock, "insert").mockRejectedValue(

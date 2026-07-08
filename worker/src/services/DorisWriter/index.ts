@@ -20,6 +20,7 @@ import { env as workerEnv } from "../../env";
 import { logger } from "@langfuse/shared/src/server";
 import { instrumentAsync } from "@langfuse/shared/src/server";
 import { SpanKind } from "@opentelemetry/api";
+import { randomUUID } from "crypto";
 
 // Byte count → megabytes with one decimal, for gauge/backpressure log lines.
 const mb = (n: number): string => (n / 1048576).toFixed(1);
@@ -63,6 +64,16 @@ export class DorisWriter {
   retryBackoffMaxMs: number;
   queue: DorisQueue;
   queueSizeBytes: Map<TableName, number>;
+
+  // Tables whose batches carry a caller-owned STABLE label (generated once at
+  // batch assembly, reused verbatim on every retry) → exactly-once via the FE
+  // label registry (client treats "Label Already Exists"+FINISHED as success).
+  // Opt-in ONLY for tables where duplicate application corrupts data
+  // (AGGREGATE-KEY SUM columns). MoW unique-key tables stay label-less: their
+  // keys make replays idempotent, and for per-attempt labels "already exists"
+  // must remain a plain failure (collision). trace_metrics_agg joins here when
+  // it lands. Instance field (not module const) so tests can override.
+  stableLabelTables: ReadonlySet<TableName> = new Set([]);
 
   // Per-table retry buffer: each RetryEntry is one failed batch (kept intact,
   // written as a single Stream Load) carrying its own attempts + retryNotBefore.
@@ -366,11 +377,16 @@ export class DorisWriter {
           (this.queueSizeBytes.get(table) ?? 0) - entry.bytes,
         );
         this.notifyBufferDrained();
-        await this.processBatch(table, entry.items, entry.attempts);
+        await this.processBatch({
+          table,
+          items: entry.items,
+          attemptsAlreadyMade: entry.attempts,
+          label: entry.label,
+        });
         continue;
       }
 
-      const { items, bytes } = this.takeFreshBatch(table);
+      const { items, bytes, label } = this.takeFreshBatch(table);
       // No fresh rows either (the table was ready only for a retry that a
       // concurrent worker already took, or nothing is ready) — re-evaluate.
       if (items.length === 0) continue;
@@ -388,7 +404,7 @@ export class DorisWriter {
           { unit: "milliseconds" },
         );
       }
-      await this.processBatch(table, items, 0);
+      await this.processBatch({ table, items, attemptsAlreadyMade: 0, label });
     }
   }
 
@@ -449,6 +465,7 @@ export class DorisWriter {
   private takeFreshBatch(table: TableName): {
     items: QueuedRow[];
     bytes: number;
+    label?: string;
   } {
     const q = this.queue[table];
     let count = 0;
@@ -459,7 +476,14 @@ export class DorisWriter {
       bytes += next;
       count++;
     }
-    return { items: q.splice(0, count), bytes };
+    // Stable label is born HERE, with the batch, and follows it verbatim
+    // through every retry (RetryEntry.label). The batch is never split or
+    // merged afterwards, so label ↔ content binding holds for life — the
+    // precondition for the FE's label-dedup semantics.
+    const label = this.stableLabelTables.has(table)
+      ? `langfuse_${table}_${Date.now()}_${randomUUID()}`
+      : undefined;
+    return { items: q.splice(0, count), bytes, label };
   }
 
   /**
@@ -495,8 +519,9 @@ export class DorisWriter {
     attempts: number;
     bytes: number;
     reason: string;
+    label?: string;
   }): void {
-    const { table, items, attempts, bytes } = params;
+    const { table, items, attempts, bytes, label } = params;
     // The cause is carried VERBATIM — no truncation. Every retry/drop line is
     // self-sufficient (grep the warn stream alone and you have the full
     // failure). Line size stays bounded because the client caps embedded peer
@@ -530,6 +555,7 @@ export class DorisWriter {
       bytes,
       attempts,
       retryNotBefore: Date.now() + delay,
+      label,
     });
     this.queueSizeBytes.set(
       table,
@@ -537,7 +563,7 @@ export class DorisWriter {
     );
     this.rearmRetryTimer();
     logger.warn(
-      `[DorisWriter] ${table} retry #${id} (${items.length} rows) attempt ${attempts} failed; backing off ${delay}ms. cause: ${reason}`,
+      `[DorisWriter] ${table} retry #${id} (${items.length} rows) attempt ${attempts} failed; backing off ${delay}ms.${label ? ` label=${label}` : ""} cause: ${reason}`,
     );
   }
 
@@ -584,11 +610,14 @@ export class DorisWriter {
    * the failure records attempt `attemptsAlreadyMade + 1`. The batch's bytes are
    * already released from queueSizeBytes by the caller.
    */
-  private async processBatch(
-    table: TableName,
-    items: QueuedRow[],
-    attemptsAlreadyMade: number,
-  ): Promise<void> {
+  private async processBatch(params: {
+    table: TableName;
+    items: QueuedRow[];
+    attemptsAlreadyMade: number;
+    /** Stable per-batch label (stableLabelTables only); undefined otherwise. */
+    label?: string;
+  }): Promise<void> {
+    const { table, items, attemptsAlreadyMade, label } = params;
     return instrumentAsync(
       { name: "write-to-doris", spanKind: SpanKind.CONSUMER },
       async () => {
@@ -613,6 +642,7 @@ export class DorisWriter {
             table,
             body: `[${items.map((item) => item.line).join(",")}]`,
             recordCount: items.length,
+            label,
           });
         } catch (err) {
           // Not logged here: the client logged the detailed error-level line
@@ -625,6 +655,7 @@ export class DorisWriter {
             attempts: attemptsAlreadyMade + 1,
             bytes,
             reason: err instanceof Error ? err.message : String(err),
+            label,
           });
           return;
         }
@@ -671,6 +702,7 @@ export class DorisWriter {
     table: TableName;
     body: string;
     recordCount: number;
+    label?: string;
   }): Promise<void> {
     const startTime = Date.now();
 
@@ -692,6 +724,8 @@ export class DorisWriter {
         strip_outer_array: true,
         read_json_by_line: false,
         timeout: 600, // 10 minutes
+        // Stable per-batch label → exactly-once (stableLabelTables only).
+        label: params.label,
       },
     );
 
@@ -720,13 +754,27 @@ export class DorisWriter {
             t,
             (this.queueSizeBytes.get(t) ?? 0) - entry.bytes,
           );
-          tasks.push(() => this.processBatch(t, entry.items, entry.attempts));
+          tasks.push(() =>
+            this.processBatch({
+              table: t,
+              items: entry.items,
+              attemptsAlreadyMade: entry.attempts,
+              label: entry.label,
+            }),
+          );
         }
         const q = this.queue[t];
         while (q.length > 0) {
-          const { items, bytes } = this.takeFreshBatch(t);
+          const { items, bytes, label } = this.takeFreshBatch(t);
           this.queueSizeBytes.set(t, (this.queueSizeBytes.get(t) ?? 0) - bytes);
-          tasks.push(() => this.processBatch(t, items, 0));
+          tasks.push(() =>
+            this.processBatch({
+              table: t,
+              items,
+              attemptsAlreadyMade: 0,
+              label,
+            }),
+          );
         }
       }
       this.notifyBufferDrained();
@@ -800,6 +848,15 @@ type RetryEntry = {
   bytes: number;
   attempts: number;
   retryNotBefore: number;
+  /**
+   * Stable per-batch stream-load label (stableLabelTables only). Born at batch
+   * assembly, reused VERBATIM on every retry — the FE label registry then
+   * dedups a retry whose earlier attempt actually committed (exactly-once for
+   * AGGREGATE-KEY tables). Never regenerate; never split/merge a labeled batch
+   * except after a DEFINITE abort (aborted txns free the label — a timeout is
+   * NOT definite, the txn may still commit).
+   */
+  label?: string;
 };
 
 type DorisRetryBuffer = {

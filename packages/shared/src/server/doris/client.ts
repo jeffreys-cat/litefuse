@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from "axios";
+import { randomUUID } from "crypto";
 import http from "http";
 import https from "https";
 import mysql from "mysql2/promise";
@@ -38,6 +39,18 @@ export interface DorisStreamLoadOptions {
   max_filter_ratio?: number;
   timeout?: number;
   load_mem_limit?: number;
+  /**
+   * Caller-owned STABLE label (must be identical across retries of the same
+   * batch). Supplying it opts this load into exactly-once semantics: a
+   * response of "Label Already Exists" + ExistingJobStatus FINISHED is treated
+   * as SUCCESS (the previous attempt committed — e.g. the client timed out
+   * after the body landed), instead of a failure. Without it a per-attempt
+   * label is generated and "Label Already Exists" stays a plain failure (it
+   * could only be a collision). Only pass this for tables where duplicate
+   * application corrupts data (AGGREGATE-KEY SUM columns); MoW unique-key
+   * tables are idempotent and don't need it.
+   */
+  label?: string;
 }
 
 export interface DorisQueryOptions {
@@ -566,8 +579,14 @@ export class DorisClient {
       ...options,
     };
 
-    // Generate unique load label for idempotency
-    const loadLabel = `langfuse_${table}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    // A caller-owned label opts into exactly-once dedup semantics (see
+    // DorisStreamLoadOptions.label). Otherwise generate a per-attempt label —
+    // crypto-grade randomness: once "Label Already Exists" can mean SUCCESS
+    // (stable path), a collision would silently swallow a batch, so entropy
+    // must be beyond doubt for both paths.
+    const stableLabel = options.label != null;
+    const loadLabel =
+      options.label ?? `langfuse_${table}_${Date.now()}_${randomUUID()}`;
 
     // Prepare request headers
     const headers: Record<string, string> = {
@@ -676,6 +695,46 @@ export class DorisClient {
       // the failure path reporting the VERBATIM body instead of dying on a
       // TypeError that would mask the real fact.
       const result = response.data;
+
+      // Exactly-once handshake — ONLY for caller-owned stable labels. A prior
+      // attempt of THIS batch may have committed after we timed out; the FE's
+      // label registry is the authority (verified on Doris 4.0.6):
+      //   ExistingJobStatus FINISHED → the txn is VISIBLE: this batch is
+      //     already in Doris. Success, don't re-park (that would double-apply
+      //     AGGREGATE-KEY SUM columns).
+      //   ExistingJobStatus RUNNING → the earlier attempt is still in flight
+      //     server-side. Throw retryable: it will resolve to FINISHED (dedup)
+      //     or the txn aborts (label freed → next retry loads normally).
+      //   Anything else → resolve via SHOW TRANSACTION (aborted txns free the
+      //     label, so "already exists" implies PREPARE/COMMITTED/VISIBLE).
+      // For generated per-attempt labels this can only be a collision → fall
+      // through to the plain failure path (retry gets a fresh label).
+      if (stableLabel && result?.Status === "Label Already Exists") {
+        if (result.ExistingJobStatus === "FINISHED") {
+          logger.info(
+            `Stream load deduplicated by label (already committed): ${JSON.stringify({ table, loadLabel, message: result.Message })}`,
+          );
+          return;
+        }
+        if (result.ExistingJobStatus === "RUNNING") {
+          throw new Error(
+            `Stream load label busy (earlier attempt still running); response: ${JSON.stringify(result).slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+          );
+        }
+        // Unknown/missing ExistingJobStatus (format drift safety net): ask the
+        // FE directly instead of wedging the batch in an eternal retry loop.
+        const txnStatus = await this.resolveLabelTxnStatus(loadLabel);
+        if (txnStatus === "VISIBLE" || txnStatus === "COMMITTED") {
+          logger.info(
+            `Stream load deduplicated by label (SHOW TRANSACTION=${txnStatus}): ${JSON.stringify({ table, loadLabel })}`,
+          );
+          return;
+        }
+        throw new Error(
+          `Stream load label already exists, txn status ${txnStatus}; response: ${JSON.stringify(result).slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+        );
+      }
+
       if (result?.Status !== "Success") {
         // BE answered but did not accept the load. Report the response
         // verbatim — it already carries Message, ErrorURL, filtered-row
@@ -750,6 +809,31 @@ export class DorisClient {
       );
 
       throw new Error(finalMessage);
+    }
+  }
+
+  /**
+   * Resolve a load label's transaction status straight from the FE (MySQL
+   * protocol) — the fallback for a "Label Already Exists" response whose
+   * ExistingJobStatus we can't interpret. Returns the raw TransactionStatus
+   * (VISIBLE/COMMITTED/PREPARE/...) or "UNKNOWN" when the lookup itself fails —
+   * callers treat non-VISIBLE/COMMITTED as retryable, so an FE hiccup here just
+   * means one more backoff round, never a wrong success.
+   */
+  private async resolveLabelTxnStatus(label: string): Promise<string> {
+    try {
+      const rows = await this.query(
+        `SHOW TRANSACTION FROM ${this.config.database} WHERE LABEL = '${label.replace(/'/g, "''")}'`,
+      );
+      const status = rows?.[0]?.TransactionStatus;
+      return typeof status === "string" && status.length > 0
+        ? status
+        : "UNKNOWN";
+    } catch (e) {
+      logger.warn(
+        `SHOW TRANSACTION lookup failed for label ${label}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return "UNKNOWN";
     }
   }
 
