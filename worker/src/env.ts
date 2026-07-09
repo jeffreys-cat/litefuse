@@ -140,18 +140,22 @@ const EnvSchema = z.object({
   // T+1 repair of trace_metrics_agg from events_full (see
   // features/traceMetricsRepair): recomputes closed day-partitions so residual
   // increment duplication (job replay / OTel re-delivery) never survives past
-  // the current day. Runs ONCE per day at the configured UTC wall-clock time
-  // (partitions and start_time_date are UTC-derived, so "the day closed" is a
-  // UTC statement); a Redis lock makes it once per CLUSTER, not per worker.
-  // DAYS_BACK = how many closed days each run recomputes (1 = yesterday only;
-  // raise it to also re-cover a day whose run was missed/crashed).
+  // the current day. Runs ONCE per day (Redis lock + done-marker make it once
+  // per CLUSTER, regardless of worker replica count) at REPAIR_AT, a
+  // wall-clock time in the DORIS SERVER'S timezone (SELECT @@time_zone,
+  // resolved at runtime). Unset, it defaults to 00:00 — midnight of the
+  // database's own day. DAYS_BACK = how many closed days each run recomputes
+  // (1 = yesterday only; raise it to also re-cover a missed/crashed day).
   LITEFUSE_TRACE_METRICS_REPAIR_ENABLED: z
     .enum(["true", "false"])
     .default("true"),
   LITEFUSE_TRACE_METRICS_REPAIR_AT: z
     .string()
-    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected UTC wall-clock time as HH:MM")
-    .default("02:00"),
+    .regex(
+      /^([01]\d|2[0-3]):[0-5]\d$/,
+      "expected wall-clock time as HH:MM (interpreted in the Doris server timezone)",
+    )
+    .default("00:00"),
   LITEFUSE_TRACE_METRICS_REPAIR_DAYS_BACK: z.coerce
     .number()
     .int()

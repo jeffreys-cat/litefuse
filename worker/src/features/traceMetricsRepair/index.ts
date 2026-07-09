@@ -1,4 +1,9 @@
-import { commandDoris, logger, redis } from "@langfuse/shared/src/server";
+import {
+  commandDoris,
+  logger,
+  queryDoris,
+  redis,
+} from "@langfuse/shared/src/server";
 
 import { env } from "../../env";
 import { PeriodicExclusiveRunner } from "../../utils/PeriodicExclusiveRunner";
@@ -23,8 +28,10 @@ export const TRACE_METRICS_REPAIR_LOCK_KEY = "langfuse:trace-metrics-repair";
  * partition as normal increments, and the next repair pass folds them into
  * the exact recomputation again.
  *
- * Scheduling: ONCE per day at the operator-configured UTC wall-clock time
- * (LITEFUSE_TRACE_METRICS_REPAIR_AT, default 02:00) — NOT an interval from
+ * Scheduling: ONCE per day at a wall-clock time in the DORIS SERVER'S
+ * TIMEZONE (SELECT @@time_zone, resolved once at the first wake-up) — the
+ * operator sets LITEFUSE_TRACE_METRICS_REPAIR_AT (HH:MM); unset it defaults
+ * to 00:00, i.e. midnight of the database's own day. NOT an interval from
  * worker boot. Every worker arms a timer for the next occurrence (a boot
  * mid-day does NOT trigger a run). Once-per-CLUSTER needs two mechanisms,
  * because worker replicas neither boot together nor share a clock:
@@ -49,10 +56,14 @@ export const TRACE_METRICS_REPAIR_LOCK_KEY = "langfuse:trace-metrics-repair";
  * special-cased.
  */
 export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
-  // Epoch-ms of the next scheduled fire. execute() runs at boot (PeriodicRunner
-  // semantics) and whenever a timer expires; anything before this timestamp is
-  // a non-due wake-up and only re-arms the timer.
-  private nextFireAt: number;
+  // Epoch-ms of the next scheduled fire; 0 = schedule not armed yet (the
+  // Doris timezone hasn't been resolved). execute() runs at boot
+  // (PeriodicRunner semantics) and whenever a timer expires; anything before
+  // this timestamp is a non-due wake-up and only re-arms the timer.
+  private nextFireAt = 0;
+  // Doris server timezone (SELECT @@time_zone), resolved at the first wake-up
+  // and cached for the process lifetime.
+  private dorisTz: string | null = null;
 
   constructor() {
     super({
@@ -65,26 +76,51 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
       // rather than every replica running the recompute concurrently.
       onUnavailable: "fail",
     });
-    this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
-      env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
-      Date.now(),
-    );
   }
 
-  /** Next epoch-ms strictly after `nowMs` at which UTC wall-clock == HH:MM. */
-  static nextOccurrence(hhmm: string, nowMs: number): number {
+  /**
+   * Next epoch-ms strictly after `nowMs` at which the wall clock in `tz`
+   * reads HH:MM. `tz` is an IANA name ("Asia/Shanghai", "Etc/UTC") or a fixed
+   * offset ("+08:00") — both shapes Doris's @@time_zone can return.
+   *
+   * The computed instant is skew-independent: a replica whose clock is off by
+   * s seconds sees both `nowMs` and the formatted wall clock shifted by the
+   * same s, which cancels — all replicas agree on the fire instant (to the
+   * second; sub-second is truncated for exactly that reason), so the
+   * done-marker key derived from it matches across the fleet.
+   */
+  static nextOccurrenceInTz(hhmm: string, tz: string, nowMs: number): number {
     const [h, m] = hhmm.split(":").map(Number);
-    const now = new Date(nowMs);
-    const todayFire = Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      now.getUTCDate(),
-      h,
-      m,
-      0,
-      0,
-    );
-    return todayFire > nowMs ? todayFire : todayFire + 24 * 60 * 60 * 1000;
+    const targetSecs = h * 3600 + m * 60;
+
+    let nowSecs: number;
+    const offset = /^([+-])(\d{2}):(\d{2})$/.exec(tz);
+    if (offset) {
+      const offMs =
+        (offset[1] === "-" ? -1 : 1) *
+        (Number(offset[2]) * 3600 + Number(offset[3]) * 60) *
+        1000;
+      const d = new Date(nowMs + offMs);
+      nowSecs =
+        d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
+    } else {
+      // IANA zone via Intl (throws RangeError on an unknown zone — the caller
+      // falls back to UTC with a warning rather than not scheduling at all).
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hourCycle: "h23",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).formatToParts(new Date(nowMs));
+      const get = (t: string) =>
+        Number(parts.find((p) => p.type === t)?.value ?? 0);
+      nowSecs = (get("hour") % 24) * 3600 + get("minute") * 60 + get("second");
+    }
+
+    let deltaSecs = targetSecs - nowSecs;
+    if (deltaSecs <= 0) deltaSecs += 24 * 3600;
+    return Math.floor(nowMs / 1000) * 1000 + deltaSecs * 1000;
   }
 
   // Fallback cadence only — execute() always returns an explicit delay, so
@@ -93,25 +129,67 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
     return 60 * 60 * 1000;
   }
 
+  private computeNextFire(nowMs: number): number {
+    try {
+      return TraceMetricsRepairRunner.nextOccurrenceInTz(
+        env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
+        this.dorisTz ?? "Etc/UTC",
+        nowMs,
+      );
+    } catch (e) {
+      logger.warn(
+        `[TraceMetricsRepair] cannot interpret Doris timezone '${this.dorisTz}' (${e instanceof Error ? e.message : String(e)}); scheduling in UTC`,
+      );
+      this.dorisTz = "Etc/UTC";
+      return TraceMetricsRepairRunner.nextOccurrenceInTz(
+        env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
+        "Etc/UTC",
+        nowMs,
+      );
+    }
+  }
+
   protected async execute(): Promise<number> {
     const now = Date.now();
-    // Not due (boot-time run or timer jitter): just sleep until the scheduled
-    // time. 1s epsilon absorbs setTimeout firing marginally early.
+
+    // First wake-up (boot): resolve the Doris timezone, then arm the schedule
+    // — never run at boot. A failed resolution retries in 5 minutes (the
+    // schedule must not silently fall back to the wrong day boundary).
+    if (this.nextFireAt === 0) {
+      try {
+        const rows = await queryDoris<{ tz: string }>({
+          query: "SELECT @@time_zone AS tz",
+          tags: { feature: "tracing", type: "trace-metrics-repair" },
+        });
+        this.dorisTz = rows[0]?.tz || "Etc/UTC";
+      } catch (e) {
+        logger.warn(
+          `[TraceMetricsRepair] failed to resolve Doris timezone, retrying in 5m: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        return 5 * 60 * 1000;
+      }
+      this.nextFireAt = this.computeNextFire(now);
+      logger.info(
+        `[TraceMetricsRepair] scheduled daily at ${env.LITEFUSE_TRACE_METRICS_REPAIR_AT} ${this.dorisTz} — next run ${new Date(this.nextFireAt).toISOString()}`,
+      );
+      return this.nextFireAt - now;
+    }
+
+    // Not due (timer jitter): sleep until the scheduled time. 1s epsilon
+    // absorbs setTimeout firing marginally early.
     if (now < this.nextFireAt - 1000) {
       return this.nextFireAt - now;
     }
 
     // The occurrence this wake-up serves, BEFORE advancing — keys the
-    // done-marker, so replicas with skewed clocks agree on which day's run
-    // they are deduplicating.
-    const occurrence = new Date(this.nextFireAt).toISOString().slice(0, 10);
+    // done-marker. Minute precision (not date): fire instants are
+    // skew-independent, and minute granularity keeps two same-UTC-date
+    // occurrences distinct if the operator moves REPAIR_AT during the day.
+    const occurrence = new Date(this.nextFireAt).toISOString().slice(0, 16);
 
     // Advance the schedule BEFORE running so a failure can't hot-loop — win
     // or lose the lock, this worker's next attempt is tomorrow.
-    this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
-      env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
-      now,
-    );
+    this.nextFireAt = this.computeNextFire(now);
 
     await this.withLock(async () => {
       // Sequential-rerun guard (see class doc): a skew-late replica arriving
