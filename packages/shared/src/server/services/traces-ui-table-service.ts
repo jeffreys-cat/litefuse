@@ -754,6 +754,280 @@ const runScalarCountFastPath = async (params: {
   });
 };
 
+// --- metric-filtered / metric-sorted list fast path (agg ⋈ scalar) ---------
+// Lists that filter or sort by observation-level metrics (latency, cost,
+// tokens, level counts) used to fall to the MV path — whose live-partition
+// union-compensation re-aggregates the whole day's spans — or, for metric
+// ORDER BY, all the way to the base builder (events_full self-aggregate +
+// JOINs). Both are exactly the billions-of-spans scans this table set exists
+// to avoid. This path answers them from the small tables only:
+//   inner  m: trace_metrics_agg GROUP BY trace_id (a handful of per-day
+//             AGGREGATE-KEY rows per trace) with the metric filters as HAVING
+//             and the metric aliases projected for ORDER BY;
+//   outer  s: JOIN traces_scalar for display columns + scalar filters,
+//             ORDER BY metric alias or timestamp, LIMIT/OFFSET.
+// A trace missing from either table drops out via the inner join — the same
+// outcome the MV path's metric HAVING produces (no metrics → filtered out).
+
+// Latency/level over the agg rollup — mirrors OUTER_LATENCY/OUTER_LEVEL over
+// trace_metrics_agg's column names (min/max_* instead of the MV's ts/…_max).
+const AGG_ROLLUP_LATENCY =
+  "milliseconds_diff(CASE WHEN MAX(max_start_time) > MAX(max_end_time) THEN MAX(max_start_time) ELSE MAX(max_end_time) END, CASE WHEN MIN(min_start_time) < MIN(min_end_time) THEN MIN(min_start_time) ELSE MIN(min_end_time) END) / 1000";
+
+// Metric filter → HAVING expression over the agg rollup. Derived from the MV
+// having map: the SUM(...) selects (and OUTER_LEVEL's SUM CASE) are valid
+// verbatim over trace_metrics_agg's per-day rows — only latency references
+// MV-specific aliases and needs the agg variant.
+const tracesMetricAggHavingColumns: UiColumnMappings =
+  tracesTableMvHavingColumns
+    .filter((c) => c.tableName === "observations")
+    .map((c) =>
+      c.uiTableId === "latency" ? { ...c, select: AGG_ROLLUP_LATENCY } : c,
+    );
+
+const metricAggColumnTokens = new Set(
+  tracesMetricAggHavingColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
+);
+
+// Sortable metric columns → the inner subquery's projected alias. `level` is
+// deliberately absent (a CASE string; severity ordering isn't alphabetical) —
+// sorting by it stays on the base builder.
+const METRIC_ORDER_EXPRS: Record<string, string> = {
+  latency: "m.latency",
+  totalCost: "m.total_cost",
+  inputCost: "m.input_cost",
+  outputCost: "m.output_cost",
+  totalTokens: "m.total_tokens",
+  tokens: "m.total_tokens",
+  inputTokens: "m.input_tokens",
+  outputTokens: "m.output_tokens",
+  errorCount: "m.error_count",
+  warningCount: "m.warning_count",
+  defaultCount: "m.default_count",
+  debugCount: "m.debug_count",
+};
+
+// Eligible when a metric is actually involved (filter or ORDER BY — otherwise
+// the flat scalar path owns the query) and every other filter is one the
+// scalar side can serve. Content search needs events_full's FTS index → out.
+const canUseMetricListFastPath = (params: {
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
+}): boolean => {
+  const { filter, orderBy, searchQuery, searchType } = params;
+  if (searchQuery && (!searchType || searchType.some((t) => t !== "id")))
+    return false;
+  const metricOrder =
+    orderBy && orderBy.column !== "timestamp"
+      ? METRIC_ORDER_EXPRS[orderBy.column]
+      : undefined;
+  if (orderBy && orderBy.column !== "timestamp" && !metricOrder) return false;
+  const hasMetricFilter = filter.some((f) =>
+    metricAggColumnTokens.has(f.column),
+  );
+  if (!hasMetricFilter && !metricOrder) return false;
+  return filter.every(
+    (f) =>
+      (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
+      ((f.type === "stringOptions" || f.type === "string") &&
+        isIdFilterColumn(f.column)) ||
+      (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
+      (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
+      scalarFilterColumnTokens.has(f.column) ||
+      metricAggColumnTokens.has(f.column),
+  );
+};
+
+const buildMetricListQuery = (params: {
+  select: "rows" | "count";
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+  withPagination: boolean;
+}): { query: string; timeParams: Record<string, unknown> } => {
+  const { select, filter, orderBy, searchQuery, withPagination } = params;
+
+  // Scalar-side WHERE (bare column names resolve to s — the inner subquery
+  // only projects trace_id + metric aliases, so nothing is ambiguous).
+  const { whereParts } = buildScalarListWhere(
+    filter.filter((f) => !metricAggColumnTokens.has(f.column)),
+    searchQuery,
+  );
+
+  // Inner agg WHERE: project + the same date bounds (same {fromTs}/{toTs}
+  // placeholders — parameter substitution is by name, reuse is free).
+  const tsFilters = filter.filter((f) => f.type === "datetime");
+  const fromFilter = tsFilters.find(
+    (f) => f.operator === ">=" || f.operator === ">",
+  );
+  const toFilter = tsFilters.find(
+    (f) => f.operator === "<=" || f.operator === "<",
+  );
+  const timeParams: Record<string, unknown> = {};
+  const innerWhere = ["project_id = {projectId: String}"];
+  if (fromFilter) {
+    timeParams.fromTs = convertDateToAnalyticsDateTime(
+      fromFilter.value as Date,
+    );
+    innerWhere.push("start_time_date >= DATE({fromTs: DateTime})");
+  }
+  if (toFilter) {
+    timeParams.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
+    innerWhere.push("start_time_date <= DATE({toTs: DateTime})");
+  }
+
+  // Metric filters → HAVING over the rollup (inline-escaped, self-contained).
+  const metricFilters = filter.filter((f) =>
+    metricAggColumnTokens.has(f.column),
+  );
+  const havingRes =
+    metricFilters.length > 0
+      ? new FilterList(
+          createDorisFilterFromFilterState(
+            metricFilters,
+            tracesMetricAggHavingColumns,
+          ),
+        ).apply()
+      : undefined;
+
+  const inner = `
+      SELECT
+        trace_id,
+        ${AGG_ROLLUP_LATENCY} AS latency,
+        SUM(total_cost) AS total_cost,
+        SUM(input_cost) AS input_cost,
+        SUM(output_cost) AS output_cost,
+        SUM(input_tokens) AS input_tokens,
+        SUM(output_tokens) AS output_tokens,
+        SUM(total_tokens) AS total_tokens,
+        SUM(error_count) AS error_count,
+        SUM(warning_count) AS warning_count,
+        SUM(default_count) AS default_count,
+        SUM(debug_count) AS debug_count
+      FROM trace_metrics_agg
+      WHERE ${innerWhere.join(" AND ")}
+      GROUP BY trace_id
+      ${havingRes?.query ? `HAVING ${havingRes.query}` : ""}`;
+
+  if (select === "count") {
+    return {
+      query: `
+    SELECT count(*) AS count
+    FROM traces_scalar s
+    JOIN (${inner}
+    ) m ON m.trace_id = s.id
+    WHERE ${whereParts.join(" AND ")}
+  `,
+      timeParams,
+    };
+  }
+
+  const metricOrder =
+    orderBy && orderBy.column !== "timestamp"
+      ? METRIC_ORDER_EXPRS[orderBy.column]
+      : undefined;
+  const dir = orderBy?.order === "ASC" ? "ASC" : "DESC";
+  const orderSql = metricOrder
+    ? `ORDER BY ${metricOrder} ${dir}, s.start_time DESC`
+    : `ORDER BY s.start_time_date ${dir}, s.start_time ${dir}, s.event_ts DESC`;
+
+  return {
+    query: `
+    SELECT
+      s.id,
+      s.project_id,
+      s.start_time AS ${dq("timestamp")},
+      s.tags,
+      s.bookmarked,
+      s.name,
+      s.${dq("release")},
+      s.version,
+      s.user_id,
+      s.environment,
+      s.session_id,
+      s.${dq("public")}
+    FROM traces_scalar s
+    JOIN (${inner}
+    ) m ON m.trace_id = s.id
+    WHERE ${whereParts.join(" AND ")}
+    ${orderSql}
+    ${withPagination ? "LIMIT {limit: Int32} OFFSET {offset: Int32}" : ""}
+  `,
+    timeParams,
+  };
+};
+
+const runMetricListRowsFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderBy?: OrderByState;
+  searchQuery?: string;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<TracesTableReturnType[]> => {
+  const { projectId, filter, orderBy, limit, page, tags, searchQuery } = params;
+  const { params: scalarParams } = buildScalarListWhere(
+    filter.filter((f) => !metricAggColumnTokens.has(f.column)),
+    searchQuery,
+  );
+  const withPagination = limit !== undefined && page !== undefined;
+  const { query, timeParams } = buildMetricListQuery({
+    select: "rows",
+    filter,
+    orderBy,
+    searchQuery,
+    withPagination,
+  });
+  const queryParams: Record<string, unknown> = {
+    projectId,
+    ...scalarParams,
+    ...timeParams,
+    ...(withPagination ? { limit, offset: (limit ?? 0) * (page ?? 0) } : {}),
+  };
+  return await queryDoris<TracesTableReturnType>({
+    query,
+    params: queryParams,
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table-metric-list",
+      projectId,
+    },
+  });
+};
+
+const runMetricListCountFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  searchQuery?: string;
+  tags?: Record<string, string>;
+}): Promise<Array<{ count: string }>> => {
+  const { projectId, filter, tags, searchQuery } = params;
+  const { params: scalarParams } = buildScalarListWhere(
+    filter.filter((f) => !metricAggColumnTokens.has(f.column)),
+    searchQuery,
+  );
+  const { query, timeParams } = buildMetricListQuery({
+    select: "count",
+    filter,
+    searchQuery,
+    withPagination: false,
+  });
+  return await queryDoris<{ count: string }>({
+    query,
+    params: { projectId, ...scalarParams, ...timeParams },
+    tags: {
+      ...(tags ?? {}),
+      feature: "tracing",
+      type: "traces-table-metric-list-count",
+      projectId,
+    },
+  });
+};
+
 // A filter is MV-fast-path-routable when it maps to the aggregate: the timestamp
 // range (partition prune + MIN(start_time)), a trace_id list, tags (array_contains
 // on the rolled-up native array), per-key metadata (element_at over the rolled-up
@@ -1308,10 +1582,39 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const orderByDesc =
     orderBy?.column === "timestamp" ? orderBy.order !== "ASC" : true;
 
+  // Metric-filtered / metric-sorted lists (rows/count): agg ⋈ scalar join —
+  // the realtime rollup answers the metric side, traces_scalar the display
+  // side. Without this these queries hit the MV path (live-partition span
+  // re-aggregation) or, for metric ORDER BY, the base builder.
+  const metricListEligible =
+    (select === "rows" || select === "count") &&
+    canUseMetricListFastPath({ filter, orderBy, searchQuery, searchType });
+
+  if (select === "rows" && metricListEligible) {
+    return (await runMetricListRowsFastPath({
+      projectId,
+      filter,
+      orderBy,
+      limit,
+      page,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
+  if (select === "count" && metricListEligible) {
+    return (await runMetricListCountFastPath({
+      projectId,
+      filter,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
+
   // Flat traces_scalar path first (rows/count only): the list's columns are all
   // root-pick scalars dual-written one-row-per-trace, so scalar-routable filters
-  // skip aggregation entirely. Metric-filtered lists fall to the MV fast path;
-  // metrics queries always use the MV path (all-span aggregates).
+  // skip aggregation entirely. Metric-filtered lists take the agg⋈scalar path
+  // above; metrics queries use the agg/MV paths (all-span aggregates).
   const scalarEligible =
     (select === "rows" || select === "count") &&
     canUseScalarListFastPath({ filter, orderBy, searchQuery, searchType });
