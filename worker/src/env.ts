@@ -140,15 +140,20 @@ const EnvSchema = z.object({
   // T+1 repair of trace_metrics_agg from events_full (see
   // features/traceMetricsRepair): recomputes closed day-partitions so residual
   // increment duplication (job replay / OTel re-delivery) never survives past
-  // the current day. Runs ONCE per day (Redis lock + done-marker make it once
-  // per CLUSTER, regardless of worker replica count) at REPAIR_AT, a
-  // wall-clock time in the DORIS SERVER'S timezone (SELECT @@time_zone,
-  // resolved at runtime). Unset, it defaults to 00:00 — midnight of the
-  // database's own day. DAYS_BACK = how many closed days each run recomputes
-  // (1 = yesterday only; raise it to also re-cover a missed/crashed day).
+  // the current day. Runs ONCE per day, at-most-once per CLUSTER via an
+  // atomic claim on the Postgres cron_jobs row (durable — a duplicate
+  // full-day recompute at scale is an incident, so the design misses a day
+  // rather than ever running twice), at REPAIR_AT — a wall-clock time in the
+  // DORIS SERVER'S timezone (SELECT @@time_zone, resolved at runtime); unset
+  // it defaults to 00:00, midnight of the database's own day. DAYS_BACK = how
+  // many closed days each run recomputes (1 = yesterday only; raise it to
+  // also re-cover a missed/crashed day).
+  // DISABLED by default: operators running at large scale often own the
+  // repair themselves (their own INSERT OVERWRITE pipeline, off-peak
+  // windows); opt in explicitly when this built-in schedule fits.
   LITEFUSE_TRACE_METRICS_REPAIR_ENABLED: z
     .enum(["true", "false"])
-    .default("true"),
+    .default("false"),
   LITEFUSE_TRACE_METRICS_REPAIR_AT: z
     .string()
     .regex(
