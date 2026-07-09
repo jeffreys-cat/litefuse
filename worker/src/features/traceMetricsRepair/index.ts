@@ -1,4 +1,4 @@
-import { commandDoris, logger } from "@langfuse/shared/src/server";
+import { commandDoris, logger, redis } from "@langfuse/shared/src/server";
 
 import { env } from "../../env";
 import { PeriodicExclusiveRunner } from "../../utils/PeriodicExclusiveRunner";
@@ -26,13 +26,20 @@ export const TRACE_METRICS_REPAIR_LOCK_KEY = "langfuse:trace-metrics-repair";
  * Scheduling: ONCE per day at the operator-configured UTC wall-clock time
  * (LITEFUSE_TRACE_METRICS_REPAIR_AT, default 02:00) — NOT an interval from
  * worker boot. Every worker arms a timer for the next occurrence (a boot
- * mid-day does NOT trigger a run); at the scheduled time all workers wake
- * within milliseconds of each other and the Redis lock elects exactly one to
- * repair — the losers skip straight to tomorrow's occurrence, so the cluster
- * repairs once per day regardless of how many workers run or when they were
- * (re)started. A crash mid-repair means that day's partitions stay
- * realtime-approximate until the next scheduled run (raise DAYS_BACK to make
- * the next run re-cover them).
+ * mid-day does NOT trigger a run). Once-per-CLUSTER needs two mechanisms,
+ * because worker replicas neither boot together nor share a clock:
+ *   1. the Redis lock excludes CONCURRENT runs (replicas waking within the
+ *      same window elect one winner; losers advance to tomorrow), and
+ *   2. a per-occurrence done-marker (checked inside the lock, set after a
+ *      successful run) excludes SEQUENTIAL re-runs — with clock skew a
+ *      replica can wake after the winner already finished and released the
+ *      lock, and without the marker it would repeat the whole recompute.
+ * The lock uses onUnavailable "fail": if Redis is down at fire time, every
+ * replica skips (the day stays realtime-approximate) instead of all of them
+ * stampeding the same INSERT OVERWRITE concurrently.
+ * A crash mid-repair leaves no marker, so a later-waking replica retries the
+ * same occurrence; if none wakes, the day stays approximate until the next
+ * scheduled run (raise DAYS_BACK to make the next run re-cover it).
  *
  * Known edge (verified): if a day is entirely EMPTY in events_full, the
  * SELECT yields no rows and PARTITION(*) detects nothing — a non-empty agg
@@ -54,6 +61,9 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
       // Recomputing a day of events_full at target scale (billions of spans)
       // can take a while — hold the lock generously.
       lockTtlSeconds: 3600,
+      // Redis down at fire time → skip the day (stays realtime-approximate)
+      // rather than every replica running the recompute concurrently.
+      onUnavailable: "fail",
     });
     this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
       env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
@@ -91,14 +101,29 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
       return this.nextFireAt - now;
     }
 
-    // Due. Advance the schedule BEFORE running so a failure can't hot-loop —
-    // win or lose the lock, this worker's next attempt is tomorrow.
+    // The occurrence this wake-up serves, BEFORE advancing — keys the
+    // done-marker, so replicas with skewed clocks agree on which day's run
+    // they are deduplicating.
+    const occurrence = new Date(this.nextFireAt).toISOString().slice(0, 10);
+
+    // Advance the schedule BEFORE running so a failure can't hot-loop — win
+    // or lose the lock, this worker's next attempt is tomorrow.
     this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
       env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
       now,
     );
 
     await this.withLock(async () => {
+      // Sequential-rerun guard (see class doc): a skew-late replica arriving
+      // after the winner finished must not repeat the recompute. Checked
+      // inside the lock → no check-then-run race.
+      const markerKey = `${TRACE_METRICS_REPAIR_LOCK_KEY}:done:${occurrence}`;
+      if (await redis?.get(markerKey)) {
+        logger.info(
+          `[TraceMetricsRepair] occurrence ${occurrence} already repaired by another worker; skipping`,
+        );
+        return;
+      }
       const daysBack = env.LITEFUSE_TRACE_METRICS_REPAIR_DAYS_BACK;
       // Oldest first so a mid-run failure leaves the most-stale partition
       // repaired; today (d=0) is deliberately excluded — it is the live
@@ -150,6 +175,11 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
           `[TraceMetricsRepair] overwrote trace_metrics_agg partition ${day} from events_full in ${Date.now() - startedAt}ms`,
         );
       }
+
+      // Mark AFTER success: a crash mid-repair leaves no marker, so a
+      // later-waking replica retries this occurrence. 48h TTL comfortably
+      // outlives any clock skew while self-cleaning.
+      await redis?.set(markerKey, new Date().toISOString(), "EX", 48 * 3600);
     });
 
     return Math.max(1000, this.nextFireAt - Date.now());
