@@ -140,14 +140,18 @@ const EnvSchema = z.object({
   // T+1 repair of trace_metrics_agg from events_full (see
   // features/traceMetricsRepair): recomputes closed day-partitions so residual
   // increment duplication (job replay / OTel re-delivery) never survives past
-  // the current day. DAYS_BACK = how many closed days each pass recomputes.
+  // the current day. Runs ONCE per day at the configured UTC wall-clock time
+  // (partitions and start_time_date are UTC-derived, so "the day closed" is a
+  // UTC statement); a Redis lock makes it once per CLUSTER, not per worker.
+  // DAYS_BACK = how many closed days each run recomputes (1 = yesterday only;
+  // raise it to also re-cover a day whose run was missed/crashed).
   LITEFUSE_TRACE_METRICS_REPAIR_ENABLED: z
     .enum(["true", "false"])
     .default("true"),
-  LITEFUSE_TRACE_METRICS_REPAIR_INTERVAL_MS: z.coerce
-    .number()
-    .positive()
-    .default(6 * 60 * 60 * 1000), // 6h — re-repairing is idempotent
+  LITEFUSE_TRACE_METRICS_REPAIR_AT: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected UTC wall-clock time as HH:MM")
+    .default("02:00"),
   LITEFUSE_TRACE_METRICS_REPAIR_DAYS_BACK: z.coerce
     .number()
     .int()

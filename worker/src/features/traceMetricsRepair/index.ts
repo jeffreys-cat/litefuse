@@ -21,8 +21,18 @@ export const TRACE_METRICS_REPAIR_LOCK_KEY = "langfuse:trace-metrics-repair";
  * Idempotent and safe to re-run: spans that arrive late (a span that started
  * yesterday is exported after it ends) keep folding onto the overwritten
  * partition as normal increments, and the next repair pass folds them into
- * the exact recomputation again. Multiple workers coordinate via a Redis
- * lock; only one repairs at a time.
+ * the exact recomputation again.
+ *
+ * Scheduling: ONCE per day at the operator-configured UTC wall-clock time
+ * (LITEFUSE_TRACE_METRICS_REPAIR_AT, default 02:00) — NOT an interval from
+ * worker boot. Every worker arms a timer for the next occurrence (a boot
+ * mid-day does NOT trigger a run); at the scheduled time all workers wake
+ * within milliseconds of each other and the Redis lock elects exactly one to
+ * repair — the losers skip straight to tomorrow's occurrence, so the cluster
+ * repairs once per day regardless of how many workers run or when they were
+ * (re)started. A crash mid-repair means that day's partitions stay
+ * realtime-approximate until the next scheduled run (raise DAYS_BACK to make
+ * the next run re-cover them).
  *
  * Known edge (verified): if a day is entirely EMPTY in events_full, the
  * SELECT yields no rows and PARTITION(*) detects nothing — a non-empty agg
@@ -32,6 +42,11 @@ export const TRACE_METRICS_REPAIR_LOCK_KEY = "langfuse:trace-metrics-repair";
  * special-cased.
  */
 export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
+  // Epoch-ms of the next scheduled fire. execute() runs at boot (PeriodicRunner
+  // semantics) and whenever a timer expires; anything before this timestamp is
+  // a non-due wake-up and only re-arms the timer.
+  private nextFireAt: number;
+
   constructor() {
     super({
       name: "trace-metrics-repair",
@@ -40,13 +55,49 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
       // can take a while — hold the lock generously.
       lockTtlSeconds: 3600,
     });
+    this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
+      env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
+      Date.now(),
+    );
   }
 
+  /** Next epoch-ms strictly after `nowMs` at which UTC wall-clock == HH:MM. */
+  static nextOccurrence(hhmm: string, nowMs: number): number {
+    const [h, m] = hhmm.split(":").map(Number);
+    const now = new Date(nowMs);
+    const todayFire = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      h,
+      m,
+      0,
+      0,
+    );
+    return todayFire > nowMs ? todayFire : todayFire + 24 * 60 * 60 * 1000;
+  }
+
+  // Fallback cadence only — execute() always returns an explicit delay, so
+  // this is never used to pace the schedule.
   protected get defaultIntervalMs(): number {
-    return env.LITEFUSE_TRACE_METRICS_REPAIR_INTERVAL_MS;
+    return 60 * 60 * 1000;
   }
 
-  protected async execute(): Promise<void> {
+  protected async execute(): Promise<number> {
+    const now = Date.now();
+    // Not due (boot-time run or timer jitter): just sleep until the scheduled
+    // time. 1s epsilon absorbs setTimeout firing marginally early.
+    if (now < this.nextFireAt - 1000) {
+      return this.nextFireAt - now;
+    }
+
+    // Due. Advance the schedule BEFORE running so a failure can't hot-loop —
+    // win or lose the lock, this worker's next attempt is tomorrow.
+    this.nextFireAt = TraceMetricsRepairRunner.nextOccurrence(
+      env.LITEFUSE_TRACE_METRICS_REPAIR_AT,
+      now,
+    );
+
     await this.withLock(async () => {
       const daysBack = env.LITEFUSE_TRACE_METRICS_REPAIR_DAYS_BACK;
       // Oldest first so a mid-run failure leaves the most-stale partition
@@ -100,5 +151,7 @@ export class TraceMetricsRepairRunner extends PeriodicExclusiveRunner {
         );
       }
     });
+
+    return Math.max(1000, this.nextFireAt - Date.now());
   }
 }
