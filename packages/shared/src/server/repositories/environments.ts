@@ -10,10 +10,16 @@ export const getEnvironmentsForProject = async (
 ): Promise<{ environment: string }[]> => {
   const { projectId, fromTimestamp } = props;
 
+  // traces_scalar (one row per trace) instead of a DISTINCT over every span of
+  // every partition in events_full. Environment is a trace-scoped attribute in
+  // practice — readers COALESCE a span's empty environment to the root's — so
+  // the root rows carry the full environment set; an environment that only
+  // ever appears on child spans and never on any root would be missed (not a
+  // shape real SDK exports produce).
   const query = `
       SELECT DISTINCT environment FROM (
         SELECT DISTINCT environment
-        FROM events_full
+        FROM traces_scalar
         WHERE project_id = {projectId: String}
         ${fromTimestamp ? "AND start_time >= {fromTimestamp: DateTime}" : ""}
         UNION ALL

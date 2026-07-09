@@ -374,12 +374,34 @@ export const getTracesBySessionId = async (
   return traces;
 };
 
+// traces_scalar (one row per trace — migration 0039) exposed under
+// events_full-compatible column names, so the shared filter mappings
+// (t.start_time, t.trace_name, ...) and dorisSearchCondition (t.trace_id,
+// t.user_id, t.trace_name) apply to it unchanged. Lets the filter-option and
+// trace-counting reads below run on a table ~2 orders of magnitude smaller
+// than events_full (one row per trace vs one per span) instead of full-project
+// is_root = 1 scans across every partition.
+const TRACES_SCALAR_AS_T = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        name AS trace_name,
+        name,
+        user_id,
+        session_id,
+        environment,
+        tags,
+        start_time,
+        created_at,
+        event_ts
+      FROM traces_scalar
+    ) t`;
+
 export const hasAnyTrace = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM events_full
+    FROM traces_scalar
     WHERE project_id = {projectId: String}
-    AND is_root = 1
     LIMIT 1
   `;
 
@@ -406,13 +428,15 @@ export const getTraceCountsByProjectInCreationInterval = async ({
   start: Date;
   end: Date;
 }) => {
+  // traces_scalar: one row per trace, created_at dual-written since migration
+  // 0039's trim/audit columns (pre-existing rows need the documented backfill,
+  // which carries created_at from events_full).
   const query = `
     SELECT
       project_id,
       count(*) as count
-    FROM events_full
-    WHERE is_root = 1
-    AND created_at >= {start: DateTime}
+    FROM traces_scalar
+    WHERE created_at >= {start: DateTime}
     AND created_at < {end: DateTime}
     GROUP BY project_id
   `;
@@ -446,9 +470,8 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
   const query = `
     SELECT
       count(*) as count
-    FROM events_full
-    WHERE is_root = 1
-    AND project_id IN ({projectIds: Array(String)})
+    FROM traces_scalar
+    WHERE project_id IN ({projectIds: Array(String)})
     AND created_at >= {start: DateTime}
   `;
 
@@ -640,13 +663,15 @@ export const getTracesGroupedByName = async (
     ? new FilterList(dorisFilter).apply()
     : undefined;
 
+  // traces_scalar.name is the explicit trace_name — the same value the list's
+  // Name column shows and its filters filter on, so the dropdown options now
+  // match the list exactly (the old events_full root-span `name` could differ).
   const query = `
       select
         name as name,
         count(*) as count
-      from events_full t
+      from ${TRACES_SCALAR_AS_T}
       WHERE t.project_id = {projectId: String}
-      AND t.is_root = 1
       AND t.name IS NOT NULL
       ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
       GROUP BY name
@@ -702,9 +727,8 @@ export const getTracesGroupedBySessionId = async (
       select
         session_id as session_id,
         count(*) as count
-      from events_full t
+      from ${TRACES_SCALAR_AS_T}
       WHERE t.project_id = {projectId: String}
-      AND t.is_root = 1
       AND t.session_id IS NOT NULL
       AND t.session_id != ''
       ${tracesFilterRes?.query ? `AND ${tracesFilterRes.query}` : ""}
@@ -759,9 +783,8 @@ export const getTracesGroupedByUsers = async (
     select
       user_id as user,
       count(*) as count
-    from events_full t
+    from ${TRACES_SCALAR_AS_T}
     WHERE t.project_id = {projectId: String}
-    AND t.is_root = 1
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
@@ -812,10 +835,9 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
   // Doris uses LATERAL VIEW explode to unnest array elements (standard syntax)
   const query = `
     select distinct(tag) as value
-    from events_full t
+    from ${TRACES_SCALAR_AS_T}
     LATERAL VIEW explode(tags) tmp as tag
     WHERE t.project_id = {projectId: String}
-    AND t.is_root = 1
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
     LIMIT 1000;
   `;
