@@ -182,7 +182,7 @@ CREATE TABLE if not exists events_full (
 -- old HASH(project_id) which put a whole project in one bucket.
 UNIQUE KEY(`project_id`, `trace_id`, `start_time_date`, `span_id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
-DISTRIBUTED BY HASH(`trace_id`) BUCKETS 8
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1",
     "enable_unique_key_merge_on_write" = "true"

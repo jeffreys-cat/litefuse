@@ -45,6 +45,13 @@ vi.mock("../../env", async (importOriginal) => {
   };
 });
 
+// insert() receives a StreamLoadBodySource (chunked body) from the writer;
+// materialize it back into the exact wire string for assertions.
+const bodyToString = (body: any): string =>
+  typeof body === "string"
+    ? body
+    : Buffer.concat([...body.chunks()]).toString("utf8");
+
 const dorisClientMock = {
   insert: vi.fn(),
   streamLoad: vi.fn(),
@@ -126,8 +133,10 @@ describe("DorisWriter", () => {
     writer.addToQueue(TableName.Traces, traceData);
 
     expect(q(TableName.Traces)).toHaveLength(1);
-    // Rows are stored as their serialized JSON line, not the source object.
-    expect(JSON.parse(q(TableName.Traces)[0].line).id).toBe("1");
+    // Rows are stored as their serialized UTF-8 bytes, not the source object.
+    expect(JSON.parse(q(TableName.Traces)[0].buf.toString("utf8")).id).toBe(
+      "1",
+    );
   });
 
   it("should flush when queue reaches batch size", async () => {
@@ -339,15 +348,17 @@ describe("DorisWriter", () => {
     const mockInsert = vi
       .spyOn(dorisClientMock, "insert")
       .mockImplementation(async (_t: any, body: any) => {
-        if (String(body).includes("poison")) throw new Error("DB Error");
+        if (bodyToString(body).includes("poison")) throw new Error("DB Error");
         return undefined as any;
       });
     const poisonCalls = () =>
-      mockInsert.mock.calls.filter((c: any) => String(c[1]).includes("poison"))
-        .length;
+      mockInsert.mock.calls.filter((c: any) =>
+        bodyToString(c[1]).includes("poison"),
+      ).length;
     const goodCalls = () =>
-      mockInsert.mock.calls.filter((c: any) => String(c[1]).includes("good"))
-        .length;
+      mockInsert.mock.calls.filter((c: any) =>
+        bodyToString(c[1]).includes("good"),
+      ).length;
 
     // Park the poison batch: one attempt fails, it lands in the retry buffer.
     writer.addToQueue(TableName.Traces, trace("poison"));
@@ -596,7 +607,9 @@ describe("DorisWriter", () => {
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(q(TableName.Traces)).toHaveLength(1);
-    expect(JSON.parse(q(TableName.Traces)[0].line).id).toBe("2");
+    expect(JSON.parse(q(TableName.Traces)[0].buf.toString("utf8")).id).toBe(
+      "2",
+    );
   });
 
   it("should handle concurrent writes during high load", async () => {
@@ -737,16 +750,28 @@ describe("DorisWriter", () => {
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
 
     expect(mockInsert).toHaveBeenCalledTimes(1);
-    // insert(table, body, recordCount, options): body is a JSON array string
-    // and recordCount matches the flushed rows.
+    // insert(table, body, recordCount, options): body is a chunked
+    // StreamLoadBodySource whose materialized bytes form NDJSON — one row per
+    // line, each line newline-terminated — carrying the "ndjson" format
+    // discriminant (the client derives the body-shape flags from it), with an
+    // exact byteLength, and recordCount matches the flushed rows.
     expect(mockInsert).toHaveBeenCalledWith(
       "traces",
-      expect.any(String),
+      expect.objectContaining({
+        format: "ndjson",
+        byteLength: expect.any(Number),
+        chunks: expect.any(Function),
+      }),
       partialQueueSize,
       expect.any(Object),
     );
-    const body = (mockInsert.mock.calls[0] as any[])[1] as string;
-    expect(JSON.parse(body)).toHaveLength(partialQueueSize);
+    const bodySource = (mockInsert.mock.calls[0] as any[])[1];
+    const body = bodyToString(bodySource);
+    expect(body.endsWith("\n")).toBe(true);
+    const lines = body.slice(0, -1).split("\n");
+    expect(lines).toHaveLength(partialQueueSize);
+    for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
+    expect(bodySource.byteLength).toBe(Buffer.byteLength(body, "utf8"));
     expect(q(TableName.Traces)).toHaveLength(0);
   });
 
@@ -954,9 +979,7 @@ describe("DorisWriter", () => {
     const seed = (t: TableName) =>
       (writer as any).queue[t].push({
         createdAt: 0,
-        attempts: 1,
-        line: "{}",
-        estimatedSizeBytes: 2,
+        buf: Buffer.from("{}\n"),
       });
     seed(TableName.Traces);
     seed(TableName.EventsFull);
@@ -981,7 +1004,7 @@ describe("DorisWriter", () => {
 
     // First row while the cap is still huge — measure the real serialized size.
     await writer.addToQueue(TableName.Traces, fatTrace("0"));
-    const rowBytes = q(TableName.Traces)[0].estimatedSizeBytes;
+    const rowBytes = q(TableName.Traces)[0].buf.length;
     expect(rowBytes).toBeGreaterThan(1200);
     // Cap at 2.5 rows: a batch fits exactly 2 rows; 3 buffered rows are
     // byte-full (and batchSize=100 rows is never reached).

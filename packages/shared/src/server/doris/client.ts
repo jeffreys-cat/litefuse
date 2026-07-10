@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { randomUUID } from "crypto";
 import http from "http";
 import https from "https";
+import { Readable } from "stream";
 import mysql from "mysql2/promise";
 import { env } from "../../env";
 import { getCurrentSpan } from "../instrumentation";
@@ -58,6 +59,25 @@ export interface DorisQueryOptions {
   query_params?: Record<string, any>;
   timeout?: number;
 }
+
+/**
+ * A pre-serialized Stream Load body delivered as byte chunks instead of one
+ * string. `chunks()` must yield buffers that concatenated form the exact HTTP
+ * body; `byteLength` must equal their total size — it is sent verbatim as
+ * Content-Length (an overcount stalls the request until timeout, an undercount
+ * aborts it mid-write). Each send calls chunks() afresh, so retries never need
+ * the body to be materialized. `format` names the framing the chunks encode;
+ * streamLoadBody derives the strip_outer_array/read_json_by_line flags from it
+ * (overriding any caller options for those two), so a framing↔flags mismatch
+ * is unrepresentable. Used by the hot ingestion path (DorisWriter) so a batch
+ * is streamed row-by-row to the socket rather than concatenated into a
+ * body-sized string plus a body-sized Buffer copy.
+ */
+export type StreamLoadBodySource = {
+  format: "ndjson" | "json_array";
+  chunks: () => Iterable<Buffer>;
+  byteLength: number;
+};
 
 // Truncation for verbatim peer-response bodies embedded in error messages —
 // enough to carry a full Stream Load result JSON (Message, ErrorURL, counts)
@@ -510,11 +530,15 @@ export class DorisClient {
    */
   private async streamLoadPut(
     urlOrPath: string,
-    jsonData: string | undefined,
+    // Never a plain string: axios' default transformRequest "validates" a
+    // string body under a JSON content type by JSON.parse-ing ALL of it
+    // (stringifySafely), allocating and discarding an object graph several
+    // times the body size on every attempt. Streams pass through untouched.
+    data: Readable | undefined,
     authHeaders: Record<string, string>,
   ) {
     const isAbsolute = /^https?:\/\//i.test(urlOrPath);
-    return this.streamLoadClient.put(urlOrPath, jsonData, {
+    return this.streamLoadClient.put(urlOrPath, data, {
       headers: authHeaders,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
@@ -558,11 +582,12 @@ export class DorisClient {
   /**
    * Stream Load a pre-serialized body. `body` is the exact bytes sent to Doris
    * (a JSON array when strip_outer_array=true, or newline-delimited objects
-   * when read_json_by_line=true). `recordCount` is used only for logging.
+   * when read_json_by_line=true) — either one string or a StreamLoadBodySource
+   * streamed chunk-by-chunk. `recordCount` is used only for logging.
    */
   async streamLoadBody(
     table: string,
-    body: string,
+    body: string | StreamLoadBodySource,
     recordCount: number,
     options: DorisStreamLoadOptions = {},
   ): Promise<void> {
@@ -571,13 +596,46 @@ export class DorisClient {
       return;
     }
 
+    // Normalize a string body into the chunked shape so everything downstream
+    // (byte accounting, payload, headers) has exactly ONE path. A string
+    // carries no framing discriminant — its flags come from options/defaults.
+    const source: {
+      format?: "ndjson" | "json_array";
+      chunks: () => Iterable<Buffer>;
+      byteLength: number;
+    } =
+      typeof body === "string"
+        ? {
+            byteLength: Buffer.byteLength(body, "utf8"),
+            chunks: () => [Buffer.from(body, "utf8")],
+          }
+        : body;
+    const bodyBytes = source.byteLength;
+    // <= 0 (not === 0): a buggy producer's negative/NaN byteLength must be
+    // rejected here, never sent as a malformed Content-Length header.
+    if (!Number.isInteger(bodyBytes) || bodyBytes <= 0) {
+      logger.warn("No data provided for stream load", { table, bodyBytes });
+      return;
+    }
+
     const loadOptions = {
       format: "json",
+      // Self-consistent defaults for the legacy string path: streamLoad()
+      // serializes one JSON array, which pairs with strip_outer_array=true and
+      // read_json_by_line=false. (Both flags true is contradictory and only
+      // tolerated by Doris because a JSON.stringify array is single-line.)
       strip_outer_array: true,
-      read_json_by_line: true,
+      read_json_by_line: false,
       timeout: 600, // 10 minutes
       ...options,
     };
+    // A chunked source names its own framing — derive the two body-shape flags
+    // from it so the framing and the flags can never desync (the caller's
+    // options for these two are deliberately ignored).
+    if (source.format) {
+      loadOptions.strip_outer_array = source.format === "json_array";
+      loadOptions.read_json_by_line = source.format === "ndjson";
+    }
 
     // A caller-owned label opts into exactly-once dedup semantics (see
     // DorisStreamLoadOptions.label). Otherwise generate a per-attempt label —
@@ -599,8 +657,6 @@ export class DorisClient {
       timeout: loadOptions.timeout.toString(),
       timezone: "UTC",
     };
-
-    const jsonData = body;
 
     const url = `/api/${this.config.database}/${table}/_stream_load`;
 
@@ -679,15 +735,20 @@ export class DorisClient {
 
       logger.debug("DorisClient: Sending body PUT to BE (redirect)", {
         redirectUrl,
-        bodyBytes: Buffer.byteLength(jsonData, "utf8"),
+        bodyBytes,
       });
 
       // Body goes straight to the redirected BE, reusing the same keep-alive
-      // agent as the FE probe so we don't open one TCP per stream load.
+      // agent as the FE probe so we don't open one TCP per stream load. A
+      // fresh Readable per attempt; axios can't know a bare stream's length,
+      // so Content-Length is set manually from byteLength (exact by the
+      // source's contract). Only on this leg — the FE probe stays body-less
+      // with axios' own Content-Length: 0 (a duplicate header there rejects
+      // with 400).
       const response = await this.streamLoadPut(
         redirectUrl,
-        jsonData,
-        authHeaders,
+        Readable.from(source.chunks()),
+        { ...authHeaders, "Content-Length": String(bodyBytes) },
       ).catch((e) => tagLeg(e, "BE body PUT", redirectUrl));
 
       // Check load result. result may be a non-object (empty 200 body, plain
@@ -756,7 +817,7 @@ export class DorisClient {
         logger.debug("Stream load completed", {
           table,
           recordCount,
-          dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
+          dataSizeKB: (bodyBytes / 1024).toFixed(2),
           loadLabel,
           response: result,
         });
@@ -799,11 +860,9 @@ export class DorisClient {
       // default text log format (which drops the metadata object). Without
       // this, "[E-217]json body size ... exceed BE's conf
       // streaming_load_json_max_mb ..." and similar BE-side rejections are
-      // invisible until operators flip LITEFUSE_LOG_FORMAT=json. Size comes
-      // from the already-serialized body (no per-item re-stringify).
-      const dataSizeKB = (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(
-        2,
-      );
+      // invisible until operators flip LITEFUSE_LOG_FORMAT=json. Size was
+      // computed once up front (no re-scan of the body).
+      const dataSizeKB = (bodyBytes / 1024).toFixed(2);
       logger.error(
         `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}): ${finalMessage}`,
       );
@@ -842,14 +901,15 @@ export class DorisClient {
    * done here — it is owned entirely by the caller (DorisWriter re-queues failed
    * rows), so retry logic lives in exactly one layer. Throws on failure.
    * @param table Target table name
-   * @param body Pre-serialized Stream Load body (JSONL or JSON array)
+   * @param body Pre-serialized Stream Load body (JSONL or JSON array), as one
+   *   string or a StreamLoadBodySource streamed chunk-by-chunk
    * @param recordCount Number of rows in `body` (logging only)
    * @param options Stream load options
    * @returns Promise<void>
    */
   async insert(
     table: string,
-    body: string,
+    body: string | StreamLoadBodySource,
     recordCount: number,
     options: DorisStreamLoadOptions = {},
   ): Promise<void> {

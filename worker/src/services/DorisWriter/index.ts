@@ -10,6 +10,7 @@ import {
   recordHistogram,
   recordIncrement,
   ScoreRecordInsertType,
+  StreamLoadBodySource,
   TraceRecordInsertType,
   TraceScalarRecordInsertType,
   TraceMetricsAggRecordInsertType,
@@ -25,6 +26,31 @@ import { randomUUID } from "crypto";
 
 // Byte count → megabytes with one decimal, for gauge/backpressure log lines.
 const mb = (n: number): string => (n / 1048576).toFixed(1);
+
+// NDJSON (JSON Lines) framing for a batch, streamed as chunks. NDJSON over a
+// JSON array because the BE parses it incrementally while receiving (an array
+// body must be fully buffered on the BE — that's what streaming_load_json_max_mb
+// caps — then parsed as one document). Each QueuedRow.buf already ends with
+// its "\n" separator (appended once at enqueue), so the body is exactly one
+// chunk per row and byteLength is a plain sum — no separator arithmetic to get
+// wrong. byteLength must be EXACT (it becomes Content-Length: an overcount
+// stalls the request until timeout, an undercount aborts it mid-write). The
+// format discriminant is what the client derives the strip_outer_array/
+// read_json_by_line flags from, so framing and flags cannot desync. chunks()
+// is called afresh per send attempt, so the batch is never concatenated into
+// one body-sized allocation — the only copy in flight is the row buffers
+// themselves.
+function ndjsonBody(items: QueuedRow[]): StreamLoadBodySource {
+  let byteLength = 0;
+  for (const item of items) byteLength += item.buf.length;
+  return {
+    format: "ndjson",
+    byteLength,
+    chunks: function* () {
+      for (const item of items) yield item.buf;
+    },
+  };
+}
 
 /**
  * Buffers rows per table (a plain FIFO array per table) and writes them to
@@ -320,21 +346,26 @@ export class DorisWriter {
       }
     }
 
-    // Format + serialize exactly once, here at enqueue. The drain path just
-    // concatenates these strings, so a row is never re-formatted or
-    // re-serialized (not on flush, not on retry). estimatedSizeBytes is the
-    // exact byte length of what we send.
-    const line = JSON.stringify(formatRecordForDoris(data, tableName));
-    const estimatedSizeBytes = Buffer.byteLength(line, "utf8");
+    // Format + serialize exactly once, here at enqueue — straight to UTF-8
+    // bytes, INCLUDING the row's trailing "\n" NDJSON separator (so ndjsonBody
+    // ships one chunk per row and its Content-Length is a plain sum of
+    // buf.length). The drain path just streams these buffers, so a row is
+    // never re-formatted, re-serialized or re-encoded (not on flush, not on
+    // retry). Bytes (not a JS string) so buf.length is the EXACT wire size (a
+    // string's V8 footprint can be up to 2× its UTF-8 length once any
+    // non-Latin1 char forces two-byte storage) and the payload lives outside
+    // the V8 heap, where the GC never rescans it.
+    const buf = Buffer.from(
+      JSON.stringify(formatRecordForDoris(data, tableName)) + "\n",
+      "utf8",
+    );
     this.queue[tableName].push({
       createdAt: Date.now(),
-      attempts: 1,
-      line,
-      estimatedSizeBytes,
+      buf,
     });
     this.queueSizeBytes.set(
       tableName,
-      (this.queueSizeBytes.get(tableName) ?? 0) + estimatedSizeBytes,
+      (this.queueSizeBytes.get(tableName) ?? 0) + buf.length,
     );
     this.addCounters.set(tableName, (this.addCounters.get(tableName) ?? 0) + 1);
 
@@ -477,7 +508,7 @@ export class DorisWriter {
     let count = 0;
     let bytes = 0;
     while (count < this.batchSize && count < q.length) {
-      const next = q[count].estimatedSizeBytes;
+      const next = q[count].buf.length;
       if (count > 0 && bytes + next > this.maxBatchBytes) break;
       bytes += next;
       count++;
@@ -545,7 +576,9 @@ export class DorisWriter {
       );
       logger.error(
         `Max attempts (${this.maxAttempts}) reached for ${table} batch of ${items.length}. Dropping. cause: ${reason}`,
-        { sample: items[0]?.line.slice(0, 500) },
+        // Byte-range decode for the log sample only — may clip a trailing
+        // multi-byte char into U+FFFD, never touches what's sent to Doris.
+        { sample: items[0]?.buf.toString("utf8", 0, 500) },
       );
       return;
     }
@@ -641,12 +674,12 @@ export class DorisWriter {
             currentSpan.setAttributes({ [`${table}-length`]: items.length });
           }
 
-          // Rows are pre-serialized; wrap them in a JSON array by joining with
-          // commas — byte-identical to JSON.stringify(records), the format Doris
-          // accepts with strip_outer_array=true.
+          // Rows are pre-serialized; frame them as streamed NDJSON (see
+          // ndjsonBody) instead of concatenating a body-sized string — the
+          // batch's only in-flight copy is the row buffers themselves.
           await this.writeToDoris({
             table,
-            body: `[${items.map((item) => item.line).join(",")}]`,
+            body: ndjsonBody(items),
             recordCount: items.length,
             label,
           });
@@ -654,7 +687,7 @@ export class DorisWriter {
           // Not logged here: the client logged the detailed error-level line
           // ("Stream load failed for <table> ...") and parkForRetry's warn
           // carries the cause. One detailed line + one state line per failure.
-          const bytes = items.reduce((s, i) => s + i.estimatedSizeBytes, 0);
+          const bytes = items.reduce((s, i) => s + i.buf.length, 0);
           this.parkForRetry({
             table,
             items,
@@ -706,18 +739,15 @@ export class DorisWriter {
 
   private async writeToDoris(params: {
     table: TableName;
-    body: string;
+    body: StreamLoadBodySource;
     recordCount: number;
     label?: string;
   }): Promise<void> {
     const startTime = Date.now();
 
-    // Rows are pre-formatted + pre-serialized at enqueue and the body is a JSON
-    // array string, so it must be loaded with strip_outer_array=true. The body
-    // format and these flags have to agree: read_json_by_line=true expects a
-    // newline-delimited body instead, and mixing them makes Doris try to parse
-    // the whole array/lines as a single JSON value ("Not an json object or json
-    // array").
+    // The body carries its framing (format: "ndjson"); the client derives the
+    // matching strip_outer_array/read_json_by_line flags from that
+    // discriminant, so framing and flags cannot desync here.
     // On failure the error propagates to processBatch → parkForRetry, whose
     // warn line carries the cause; the client already logged the detailed
     // error-level line. No extra logging here (it was pure duplication).
@@ -727,8 +757,6 @@ export class DorisWriter {
       params.recordCount,
       {
         format: "json",
-        strip_outer_array: true,
-        read_json_by_line: false,
         timeout: 600, // 10 minutes
         // Stable per-batch label → exactly-once (stableLabelTables only).
         label: params.label,
@@ -836,14 +864,15 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
                 ? TraceMetricsAggRecordInsertType
                 : never;
 
-// A queued row: its final, already-formatted JSON string plus bookkeeping. We
-// keep only the string — not the source object — so the queue stays compact and
-// retries never re-format or re-serialize.
+// A queued row: its final wire bytes — the UTF-8-encoded JSON line INCLUDING
+// its trailing "\n" NDJSON separator, built once at enqueue. We keep only the
+// bytes — not the source object or a JS string — so the queue stays compact
+// (no UTF-16 inflation, payload off the V8 heap) and retries never re-format,
+// re-serialize or re-encode. buf.length IS the row's exact wire size;
+// ndjsonBody's Content-Length arithmetic is a plain sum of it.
 type QueuedRow = {
   createdAt: number;
-  attempts: number;
-  line: string;
-  estimatedSizeBytes: number;
+  buf: Buffer;
 };
 
 type DorisQueue = {

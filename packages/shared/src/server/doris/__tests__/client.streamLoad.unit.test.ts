@@ -42,6 +42,10 @@ type ReqRecord = {
   url: string;
   authorization?: string;
   label?: string;
+  contentLength?: string;
+  transferEncoding?: string;
+  stripOuterArray?: string;
+  readJsonByLine?: string;
   body: string;
 };
 
@@ -63,14 +67,24 @@ async function startServer(
   const requests: ReqRecord[] = [];
 
   const server = http.createServer((req, res) => {
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
+    // Accumulate raw buffers and decode once at the end — string-concatenating
+    // data events would corrupt a multi-byte char split across TCP chunks.
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
       const record: ReqRecord = {
         url: req.url || "",
         authorization: req.headers["authorization"] as string | undefined,
         label: req.headers["label"] as string | undefined,
-        body,
+        contentLength: req.headers["content-length"] as string | undefined,
+        transferEncoding: req.headers["transfer-encoding"] as
+          | string
+          | undefined,
+        stripOuterArray: req.headers["strip_outer_array"] as
+          | string
+          | undefined,
+        readJsonByLine: req.headers["read_json_by_line"] as string | undefined,
+        body: Buffer.concat(chunks).toString("utf8"),
       };
       requests.push(record);
       handler(req, res, record);
@@ -146,6 +160,54 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
     expect(fe.requests[0].body).toBe("");
     expect(be.requests[0].body).toBe('[{"id":"1","name":"t1"}]');
     expect(be.requests[0].label).toMatch(/^langfuse_traces_/);
+  });
+
+  it("streams a chunked StreamLoadBodySource with exact Content-Length, no chunked encoding, flags derived from format", async () => {
+    // Multi-byte content on purpose: byteLength is UTF-8 bytes, not chars —
+    // the exactness of Content-Length is what this test pins down (an
+    // overcount stalls the request until timeout, an undercount aborts it).
+    // Rows carry their trailing "\n", mirroring DorisWriter's NDJSON framing.
+    const rows = [
+      Buffer.from(JSON.stringify({ id: "1", name: "含中文", emoji: "🚀" }) + "\n"),
+      Buffer.from(JSON.stringify({ id: "2", name: "t2" }) + "\n"),
+    ];
+    const byteLength = rows.reduce((s, b) => s + b.length, 0);
+    await client.insert(
+      "traces",
+      {
+        format: "ndjson",
+        byteLength,
+        chunks: function* () {
+          for (const row of rows) yield row;
+        },
+      },
+      rows.length,
+    );
+
+    // FE probe stays body-less; only the BE leg carries the streamed payload.
+    expect(fe.requests[0].body).toBe("");
+    const expectedBody = rows.map((b) => b.toString("utf8")).join("");
+    expect(be.requests[0].body).toBe(expectedBody);
+    expect(be.requests[0].contentLength).toBe(
+      String(Buffer.byteLength(expectedBody, "utf8")),
+    );
+    // A bare Readable would otherwise fall back to Transfer-Encoding: chunked;
+    // the manual Content-Length must take effect instead.
+    expect(be.requests[0].transferEncoding).toBeUndefined();
+    // The body-shape flags must be derived from the source's format
+    // discriminant, not from caller options/defaults.
+    expect(be.requests[0].readJsonByLine).toBe("true");
+    expect(be.requests[0].stripOuterArray).toBe("false");
+  });
+
+  it("legacy string-array path keeps the self-consistent default flag pairing", async () => {
+    await client.streamLoad("traces", [{ id: "1" }, { id: "2" }]);
+    // streamLoad serializes ONE JSON array → strip_outer_array pairs with it;
+    // read_json_by_line must default to false (both-true is contradictory and
+    // only tolerated because a JSON.stringify array is single-line).
+    expect(be.requests[0].stripOuterArray).toBe("true");
+    expect(be.requests[0].readJsonByLine).toBe("false");
+    expect(be.requests[0].body).toBe('[{"id":"1"},{"id":"2"}]');
   });
 
   it("reuses TCP sockets across sequential stream loads (keep-alive)", async () => {
