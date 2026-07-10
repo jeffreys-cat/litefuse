@@ -115,7 +115,7 @@ const EnvSchema = z.object({
   LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: z.coerce
     .number()
     .positive()
-    .default(8),
+    .default(4),
   LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
     .number()
     .positive()

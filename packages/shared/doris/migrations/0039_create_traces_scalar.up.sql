@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS traces_scalar (
 ) ENGINE = OLAP
 UNIQUE KEY(`project_id`, `id`, `start_time`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
-DISTRIBUTED BY HASH(`id`) BUCKETS 8
+DISTRIBUTED BY HASH(`id`) BUCKETS 12
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1",
     "enable_unique_key_merge_on_write" = "true"

@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS trace_metrics_agg (
 ) ENGINE = OLAP
 AGGREGATE KEY(`project_id`, `trace_id`, `start_time_date`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
-DISTRIBUTED BY HASH(`trace_id`) BUCKETS 8
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1"
 );
