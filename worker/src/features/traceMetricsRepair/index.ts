@@ -244,16 +244,18 @@ export class TraceMetricsRepairRunner extends PeriodicRunner {
           .slice(0, 10);
         const startedAt = Date.now();
         // Column order MUST match the trace_metrics_agg DDL (positional
-        // INSERT). WHERE start_time_date = day prunes the events_full scan to
-        // the one partition; PARTITION(*) then overwrites only the agg
-        // partition(s) the result touches.
+        // INSERT). WHERE DATE(start_time) = day prunes the events_full scan
+        // to the one partition (events_full partitions on
+        // date_trunc(start_time,'day') and the optimizer prunes through the
+        // DATE() form — verified on 4.0.6); PARTITION(*) then overwrites only
+        // the agg partition(s) the result touches.
         await commandDoris({
           query: `
             INSERT OVERWRITE TABLE trace_metrics_agg PARTITION(*)
             SELECT
               project_id,
               trace_id,
-              start_time_date,
+              DATE(start_time) AS start_time_date,
               SUM(input_tokens_calculated)  AS input_tokens,
               SUM(output_tokens_calculated) AS output_tokens,
               SUM(total_tokens_calculated)  AS total_tokens,
@@ -272,8 +274,8 @@ export class TraceMetricsRepairRunner extends PeriodicRunner {
               MAX(event_ts)                 AS event_ts
             FROM events_full
             WHERE trace_id IS NOT NULL
-              AND start_time_date = {repairDay: String}
-            GROUP BY project_id, trace_id, start_time_date
+              AND DATE(start_time) = {repairDay: String}
+            GROUP BY project_id, trace_id, DATE(start_time)
           `,
           params: { repairDay: day },
           tags: {

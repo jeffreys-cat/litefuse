@@ -72,7 +72,7 @@ PROPERTIES (
 -- SELECT
 --   project_id,
 --   trace_id,
---   start_time_date,
+--   DATE(start_time) AS start_time_date,
 --   SUM(input_tokens_calculated)  AS input_tokens,
 --   SUM(output_tokens_calculated) AS output_tokens,
 --   SUM(total_tokens_calculated)  AS total_tokens,
@@ -91,4 +91,4 @@ PROPERTIES (
 --   MAX(event_ts)                 AS event_ts
 -- FROM events_full
 -- WHERE trace_id IS NOT NULL
--- GROUP BY project_id, trace_id, start_time_date;
+-- GROUP BY project_id, trace_id, DATE(start_time);

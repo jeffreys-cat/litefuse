@@ -593,7 +593,7 @@ export const getTraceById = async ({
   const whereSql = `
     trace_id = {traceId: String}
     AND project_id = {projectId: String}
-    ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
+    ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
     ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
   // "compact" (the traces-list cell preview) only needs the trim preview, so

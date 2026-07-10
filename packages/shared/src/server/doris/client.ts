@@ -1056,15 +1056,19 @@ const TIMESTAMP_FIELDS = [
   "max_end_time",
 ] as const;
 
-const DATE_FIELD_MAPPINGS = {
+// null = "this table needs NO derived date field" (still must be listed —
+// an unknown table name falls to the dual-column fallback branch, which would
+// synthesize stray timestamp_date/start_time_date fields).
+const DATE_FIELD_MAPPINGS: Record<
+  string,
+  { sourceField: string; dateField: string } | null
+> = {
   traces: { sourceField: "timestamp", dateField: "timestamp_date" },
   scores: { sourceField: "timestamp", dateField: "timestamp_date" },
   observations: { sourceField: "start_time", dateField: "start_time_date" },
-  // events_full uses observation-shaped timestamps (start_time + start_time_date
-  // partition key). Explicit mapping prevents formatDataForDoris from falling
-  // back to the dual-column branch (which would also synthesize a stray
-  // `timestamp_date` field that events_full doesn't have).
-  events_full: { sourceField: "start_time", dateField: "start_time_date" },
+  // events_full partitions directly on start_time (date_trunc auto partition,
+  // migration 0037) — there is no start_time_date column to derive.
+  events_full: null,
   // traces_scalar mirrors events_full's timestamp shape (root-span dual-write;
   // start_time_date derived from start_time, no stray timestamp_date).
   traces_scalar: { sourceField: "start_time", dateField: "start_time_date" },
@@ -1076,7 +1080,7 @@ const DATE_FIELD_MAPPINGS = {
     sourceField: "min_start_time",
     dateField: "start_time_date",
   },
-} as const;
+};
 
 /**
  * Convert various timestamp formats to Date object
@@ -1232,14 +1236,14 @@ export const formatRecordForDoris = <T extends Record<string, any>>(
     (formatted as any).metadata = normalizeMetadataForDoris(formatted.metadata);
   }
 
-  // Step 2: Generate date fields based on table type
-  const mapping = tableName
-    ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS]
-    : null;
-
-  if (mapping) {
-    // Table-specific date field generation
-    generateDateField(formatted, mapping.sourceField, mapping.dateField);
+  // Step 2: Generate date fields based on table type. A listed table with a
+  // null mapping (events_full) needs no derived date field; only UNKNOWN
+  // tables fall to the dual-column fallback.
+  if (tableName && tableName in DATE_FIELD_MAPPINGS) {
+    const mapping = DATE_FIELD_MAPPINGS[tableName];
+    if (mapping) {
+      generateDateField(formatted, mapping.sourceField, mapping.dateField);
+    }
   } else {
     // Fallback: generate both possible date fields
     generateDateField(formatted, "timestamp", "timestamp_date");

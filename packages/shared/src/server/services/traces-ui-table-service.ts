@@ -1034,12 +1034,23 @@ const runMetricListCountFastPath = async (params: {
 // parallel arrays), or any scalar/metric column with an aggregate expression
 // (HAVING). NOT routable: scores (separate table) or content search — those fall
 // back to the base builder.
+// HARD GATE — the MV-shaped fast paths must never run. traces_mv is retired
+// (migration 0038 is a no-op) and events_full no longer has the
+// start_time_date column these queries GROUP BY / filter on (it partitions
+// directly on start_time, migration 0037) — invoking them would be a runtime
+// SQL error, not just a slow path. Routing is scalar / agg⋈scalar / base. The
+// code below the gate is kept intact for reference per review decision
+// ("代码先留着,没人调用就行"). Type annotation (not literal) prevents TS
+// narrowing so the retained body stays type-checked, not unreachable-flagged.
+const MV_PATHS_DISABLED: boolean = true;
+
 const canUseMvListFastPath = (params: {
   filter: FilterState;
   orderBy?: OrderByState;
   searchQuery?: string;
   searchType?: TracingSearchType[];
 }): boolean => {
+  if (MV_PATHS_DISABLED) return false;
   const { filter, orderBy, searchQuery, searchType } = params;
   // ID search (trace_id / user_id / name) maps to the aggregate, so it can run
   // on the fast path. CONTENT search needs the full input/output (FTS index),
@@ -1917,7 +1928,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
           END AS aggregated_level
         FROM events_full o
         WHERE project_id = {projectId: String}
-        ${timeStampFilter ? `AND start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
+        ${timeStampFilter ? `AND start_time >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
         ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
         GROUP BY trace_id, project_id
       )`
@@ -1996,7 +2007,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       ${requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
       WHERE t.project_id = {projectId: String}
       AND t.is_root = 1
-      ${timeStampFilter ? `AND t.start_time_date >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
+      ${timeStampFilter ? `AND t.start_time >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
       ${tracesFilterRes ? `AND ${tracesFilterRes.query}` : ""}
       ${search.query}
       ${dorisOrderBy}

@@ -17,13 +17,23 @@
 
 CREATE TABLE if not exists events_full (
     -- Key identifiers (must be the leading columns, in UNIQUE KEY order:
-    -- project_id, trace_id, start_time_date, span_id)
+    -- project_id, trace_id, start_time, span_id).
+    -- start_time itself is the partition source — no derived date column. AUTO
+    -- PARTITION BY date_trunc(start_time,'day') lets the optimizer prune
+    -- partitions natively from ANY start_time predicate (plain ranges and even
+    -- DATE(start_time) = x forms — verified on 4.0.6), which eliminates the
+    -- whole class of "forgot the start_time_date mirror predicate →
+    -- full-partition scan" bugs. NOT NULL because auto partition rejects NULL
+    -- partition values (ingestion always supplies it). Values are UTC
+    -- wall-clock, so partitions are UTC days. Dedup granularity is the exact
+    -- start_time (ms): OTel re-exports of a span carry the identical SDK start
+    -- timestamp, so replays still fold under MoW.
     `project_id` varchar(64) NOT NULL,
     -- nullable to match the ingestion schema (trace_id is nullish); a key +
     -- distribution column may be NULL in Doris. In practice OTel spans always
     -- carry a trace_id, so co-location holds; rare NULLs share one bucket.
     `trace_id` varchar(64),
-    `start_time_date` Date NOT NULL,
+    `start_time` DateTime(3) NOT NULL,
     `span_id` varchar(64) NOT NULL,
 
     -- Span relationships
@@ -35,7 +45,6 @@ CREATE TABLE if not exists events_full (
     `is_root` TINYINT DEFAULT '0',
 
     -- Timestamps
-    `start_time` DateTime(3),
     `end_time` DateTime(3),
     `completion_start_time` DateTime(3),
 
@@ -180,8 +189,8 @@ CREATE TABLE if not exists events_full (
 -- trace_id is keyed + hashed so a trace's spans co-locate in one bucket (fast trace
 -- detail) and a project's data spreads across buckets (scan parallelism), unlike the
 -- old HASH(project_id) which put a whole project in one bucket.
-UNIQUE KEY(`project_id`, `trace_id`, `start_time_date`, `span_id`)
-AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
+UNIQUE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
+AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
 DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1",

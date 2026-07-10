@@ -77,7 +77,7 @@ PROPERTIES (
 --   project_id,
 --   trace_id AS id,
 --   start_time,
---   start_time_date,
+--   DATE(start_time) AS start_time_date,
 --   end_time,
 --   NULLIF(trace_name, '') AS name,
 --   NULLIF(user_id, '') AS user_id,

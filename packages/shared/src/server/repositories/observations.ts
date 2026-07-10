@@ -690,66 +690,18 @@ export const getObservationsTableWithModelData = async (
   });
 };
 
-/**
- * Partition prune for events_full reads filtered by the UI's Start Time
- * bounds. events_full is AUTO-partitioned by start_time_date, but the filter
- * only constrains start_time — the optimizer cannot derive partition bounds
- * from a different column, so without an explicit start_time_date predicate
- * every day-partition is scanned. Mirrors the time bounds onto the partition
- * column (prefix `o.`); DATE() of the same values keeps semantics identical
- * (>/>= imply >= DATE(x), </<= imply <= DATE(x)) — the precise start_time
- * predicate still does the exact filtering. The UI sends the column as
- * "startTime" (uiTableId); some callers use the display name "Start Time";
- * both accepted.
- */
-const buildObservationsPartitionPrune = (
-  filter: FilterState,
-): {
-  timeFilter: FilterState[number] | undefined;
-  toTimeFilter: FilterState[number] | undefined;
-  partitionPrune: string;
-  partitionPruneParams: Record<string, unknown>;
-} => {
-  const isStartTimeColumn = (c: string) =>
-    c === "Start Time" || c === "startTime";
-  const timeFilter = filter.find(
+// The list's Start Time lower bound (UI sends uiTableId "startTime"; some
+// callers use the display name "Start Time"). Used only to bound the scores
+// CTE — events_full itself needs no mirror predicate anymore: it partitions
+// directly on start_time (migration 0037), so any start_time predicate the
+// filter mapping emits prunes partitions natively.
+const findStartTimeLowerBound = (filter: FilterState) =>
+  filter.find(
     (f) =>
       f.type === "datetime" &&
-      isStartTimeColumn(f.column) &&
+      (f.column === "Start Time" || f.column === "startTime") &&
       (f.operator === ">=" || f.operator === ">"),
   );
-  const toTimeFilter = filter.find(
-    (f) =>
-      f.type === "datetime" &&
-      isStartTimeColumn(f.column) &&
-      (f.operator === "<=" || f.operator === "<"),
-  );
-  const partitionPrune = [
-    ...(timeFilter
-      ? ["AND o.start_time_date >= DATE({obsStartTimeFrom: DateTime})"]
-      : []),
-    ...(toTimeFilter
-      ? ["AND o.start_time_date <= DATE({obsStartTimeTo: DateTime})"]
-      : []),
-  ].join("\n        ");
-  const partitionPruneParams: Record<string, unknown> = {
-    ...(timeFilter
-      ? {
-          obsStartTimeFrom: convertDateToAnalyticsDateTime(
-            timeFilter.value as Date,
-          ),
-        }
-      : {}),
-    ...(toTimeFilter
-      ? {
-          obsStartTimeTo: convertDateToAnalyticsDateTime(
-            toTimeFilter.value as Date,
-          ),
-        }
-      : {}),
-  };
-  return { timeFilter, toTimeFilter, partitionPrune, partitionPruneParams };
-};
 
 const getObservationsTableInternal = async <T>(
   opts: ObservationTableQuery & {
@@ -827,8 +779,7 @@ const getObservationsTableInternal = async <T>(
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const { timeFilter, partitionPrune, partitionPruneParams } =
-    buildObservationsPartitionPrune(opts.filter);
+  const timeFilter = findStartTimeLowerBound(opts.filter);
 
   const hasScoresFilter = filter.some((f) =>
     f.column.toLowerCase().includes("score"),
@@ -911,7 +862,6 @@ const getObservationsTableInternal = async <T>(
                 AND t.is_root = 1
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
       WHERE ${appliedObservationsFilter.query}
-        ${partitionPrune}
                    ${search.query}
         ${dorisOrderBy}
         ${limit !== undefined && offset !== undefined ? `LIMIT ${limit} OFFSET ${offset}` : ""};`;
@@ -921,7 +871,6 @@ const getObservationsTableInternal = async <T>(
     params: {
       projectId,
       ...appliedObservationsFilter.params,
-      ...partitionPruneParams,
       ...(timeFilter
         ? {
             timeFilterValue: convertDateToAnalyticsDateTime(
@@ -978,14 +927,10 @@ export const getObservationsGroupedByModel = async (
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const { partitionPrune, partitionPruneParams } =
-    buildObservationsPartitionPrune(filter);
-
   const query = `
     SELECT o.provided_model_name as name
     FROM events_full o
     WHERE ${appliedObservationsFilter.query}
-    ${partitionPrune}
     AND o.type = 'GENERATION'
     GROUP BY o.provided_model_name
     ORDER BY count(*) DESC
@@ -996,7 +941,6 @@ export const getObservationsGroupedByModel = async (
     query,
     params: {
       ...appliedObservationsFilter.params,
-      ...partitionPruneParams,
     },
     tags: {
       feature: "tracing",
@@ -1025,14 +969,10 @@ export const getObservationsGroupedByModelId = async (
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const { partitionPrune, partitionPruneParams } =
-    buildObservationsPartitionPrune(filter);
-
   const query = `
       SELECT o.model_id as modelId
       FROM events_full o
       WHERE ${appliedObservationsFilter.query}
-      ${partitionPrune}
       AND o.type = 'GENERATION'
       GROUP BY o.model_id
       ORDER BY count() DESC
@@ -1043,7 +983,6 @@ export const getObservationsGroupedByModelId = async (
     query,
     params: {
       ...appliedObservationsFilter.params,
-      ...partitionPruneParams,
     },
     tags: {
       feature: "tracing",
@@ -1073,14 +1012,10 @@ export const getObservationsGroupedByName = async (
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const { partitionPrune, partitionPruneParams } =
-    buildObservationsPartitionPrune(filter);
-
   const query = `
       SELECT o.name as name
       FROM events_full o
       WHERE ${appliedObservationsFilter.query}
-      ${partitionPrune}
       AND o.type = 'GENERATION'
       GROUP BY o.name
       ORDER BY count() DESC
@@ -1091,7 +1026,6 @@ export const getObservationsGroupedByName = async (
     query,
     params: {
       ...appliedObservationsFilter.params,
-      ...partitionPruneParams,
     },
     tags: {
       feature: "tracing",
@@ -1136,14 +1070,10 @@ export const getObservationsGroupedByPromptName = async (
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const { partitionPrune, partitionPruneParams } =
-    buildObservationsPartitionPrune(filter);
-
   const query = `
       SELECT o.prompt_id as id
       FROM events_full o
       WHERE ${appliedObservationsFilter.query}
-      ${partitionPrune}
       AND o.type = 'GENERATION'
       AND o.prompt_id IS NOT NULL
       GROUP BY o.prompt_id
@@ -1155,7 +1085,6 @@ export const getObservationsGroupedByPromptName = async (
     query,
     params: {
       ...appliedObservationsFilter.params,
-      ...partitionPruneParams,
     },
     tags: {
       feature: "tracing",

@@ -319,9 +319,9 @@ export class IngestionService {
     ]);
 
     // Doris DateTime(3) is millisecond-precision; the upstream langfuse-main
-    // uses microseconds for ClickHouse DateTime64(6). Use ms here so
-    // start_time_date partition derivation and the column values match
-    // events_full's DateTime(3) shape (otherwise dates land in year 58000+).
+    // uses microseconds for ClickHouse DateTime64(6). Use ms here so the
+    // column values match events_full's DateTime(3) shape (otherwise dates
+    // land in year 58000+). events_full partitions directly on start_time.
     const now = this.getMillisecondTimestamp();
 
     // Flatten raw metadata first (before stringification destroys nested structure)
@@ -598,8 +598,8 @@ export class IngestionService {
       const aggRecord: TraceMetricsAggRecordInsertType = {
         project_id: eventRecord.project_id,
         trace_id: eventRecord.trace_id,
-        // UTC date of the span's start — same derivation events_full uses for
-        // its start_time_date partition key, so both tables agree on the day.
+        // UTC date of the span's start — the same UTC day date_trunc(start_time)
+        // yields for events_full's partitions, so both tables agree on the day.
         start_time_date: new Date(eventRecord.start_time)
           .toISOString()
           .slice(0, 10),
