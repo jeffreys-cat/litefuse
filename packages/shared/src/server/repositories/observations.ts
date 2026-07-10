@@ -664,6 +664,10 @@ export const getObservationsTableWithModelData = async (
         .map((o) => o.trace_id)
         .filter((o): o is string => Boolean(o)),
       opts.projectId,
+      undefined,
+      // Row decoration only needs trace scalars (name/tags/timestamp/userId);
+      // never drag the full input/output Variants for a whole page of traces.
+      { excludeFullIO: true },
     ),
   ]);
 

@@ -208,6 +208,16 @@ export const getTracesByIds = async (
   traceIds: string[],
   projectId: string,
   timestamp?: Date,
+  opts?: {
+    /**
+     * Skip the full input/output Variant columns. Callers that only decorate
+     * rows with trace scalars (name/tags/timestamp — e.g. the observations
+     * list) must set this: without it every page load dragged the FULL I/O
+     * payloads of every listed trace through the aggregate. Exports keep the
+     * default (they serialize input/output).
+     */
+    excludeFullIO?: boolean;
+  },
 ) => {
   const whereSql = `
     trace_id IN ({traceIds: Array(String)})
@@ -217,6 +227,7 @@ export const getTracesByIds = async (
   const query = buildTraceAggregationQuery({
     whereSql,
     extraOrderBy: "ORDER BY event_ts DESC",
+    excludeFullIO: opts?.excludeFullIO ?? false,
   });
 
   // metadata comes back as a native MAP (JSONEachRow → JS object);
@@ -492,11 +503,9 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
 };
 
 /**
- * Retrieves a trace record by its ID and associated project ID, with optional filtering by timestamp range.
- * If no timestamp filters are provided, runs two queries in parallel:
- * 1. One with a 7-day fromTimestamp filter (typically faster)
- * 2. One without any timestamp filters (complete but slower)
- * Returns the first non-empty result.
+ * Retrieves a trace record by its ID and associated project ID, with optional
+ * filtering by timestamp range. Hintless calls probe the last 7 days first
+ * (partition-pruned) and fall back to an unbounded query only when empty.
  */
 export const getTraceById = async ({
   traceId,
@@ -590,43 +599,62 @@ export const getTraceById = async ({
   // Phase C alignment with upstream langfuse-main's eventsTracesAggregation:
   // trace identity is derived from the set of observations sharing
   // trace_id, not from a synthetic `t-<trace_id>` row.
-  const whereSql = `
+  // Hintless callers (comments validation, peeks opened from a bare URL, ...)
+  // used to fire ONE unbounded query — a scan across every partition of the
+  // trace's inverted-index entries. Instead, probe the last 7 days first
+  // (partition-pruned natively via the start_time bound) and only fall back
+  // to the unbounded query when the trace is genuinely older.
+  const attempts: Array<{ fromTs?: Date; unbounded: boolean }> =
+    timestamp || fromTimestamp
+      ? [{ fromTs: fromTimestamp, unbounded: false }]
+      : [
+          {
+            fromTs: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+            unbounded: false,
+          },
+          { fromTs: undefined, unbounded: true },
+        ];
+
+  let records: TraceRecordReadType[] = [];
+  for (const attempt of attempts) {
+    const whereSql = `
     trace_id = {traceId: String}
     AND project_id = {projectId: String}
     ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
-    ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
+    ${attempt.fromTs ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
-  // "compact" (the traces-list cell preview) only needs the trim preview, so
-  // skip the full input/output Variant — the single-table aggregate then
-  // transparently rewrites onto traces_mv. full/truncated need the full
-  // input/output Variant, which the MV does not carry → stay on base.
-  const query = buildTraceAggregationQuery({
-    whereSql,
-    extraLimit: "LIMIT 1",
-    excludeFullIO: excludeInputOutput,
-  });
+    // "compact" (the traces-list cell preview) only needs the trim preview, so
+    // skip the full input/output Variant. full/truncated need the full
+    // input/output Variant → full aggregate.
+    const query = buildTraceAggregationQuery({
+      whereSql,
+      extraLimit: "LIMIT 1",
+      excludeFullIO: excludeInputOutput,
+    });
 
-  // metadata comes back as a native MAP (JSONEachRow → JS object);
-  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
-  const records = await queryDoris<TraceRecordReadType>({
-    query,
-    params: {
-      traceId,
-      projectId,
-      ...(timestamp
-        ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
-        : {}),
-      ...(fromTimestamp
-        ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
-        : {}),
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "byId",
-      projectId,
-    },
-  });
+    // metadata comes back as a native MAP (JSONEachRow → JS object);
+    // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
+    records = await queryDoris<TraceRecordReadType>({
+      query,
+      params: {
+        traceId,
+        projectId,
+        ...(timestamp
+          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+          : {}),
+        ...(attempt.fromTs
+          ? { fromTimestamp: convertDateToAnalyticsDateTime(attempt.fromTs) }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: attempt.unbounded ? "byId-unbounded" : "byId",
+        projectId,
+      },
+    });
+    if (records.length > 0) break;
+  }
 
   // Carry the precomputed compact preview (root span input_trim/output_trim)
   // alongside the domain object so trace.byId can serve it for verbosity
