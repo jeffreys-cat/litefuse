@@ -660,11 +660,21 @@ export const getObservationsTableWithModelData = async (
         })
       : [],
     getTracesByIds(
-      observationRecords
-        .map((o) => o.trace_id)
-        .filter((o): o is string => Boolean(o)),
+      // Dedup: a page of observations usually shares traces (10 rows over ~5
+      // traces sent each id twice into the IN list).
+      Array.from(
+        new Set(
+          observationRecords
+            .map((o) => o.trace_id)
+            .filter((o): o is string => Boolean(o)),
+        ),
+      ),
       opts.projectId,
-      undefined,
+      // Time lower bound so the lookup prunes partitions: a trace's root
+      // starts at or before its observations; the page's earliest observation
+      // start minus the standard obs→trace cushion bounds it. Without this
+      // the decoration query scanned every partition on every page load.
+      earliestTraceLowerBound(observationRecords),
       // Row decoration only needs trace scalars (name/tags/timestamp/userId);
       // never drag the full input/output Variants for a whole page of traces.
       { excludeFullIO: true },
@@ -706,6 +716,28 @@ const findStartTimeLowerBound = (filter: FilterState) =>
       (f.column === "Start Time" || f.column === "startTime") &&
       (f.operator === ">=" || f.operator === ">"),
   );
+
+// Lower bound for looking up the TRACES of a page of observations: the
+// earliest observation start on the page minus the standard obs→trace cushion
+// (a root span starts at or before its observations; 2 days matches
+// OBSERVATIONS_TO_TRACE_INTERVAL used by every other obs→trace lookup).
+// undefined when no row carries a parsable start_time — the lookup then runs
+// unbounded, as before.
+const earliestTraceLowerBound = (
+  records: Array<{ start_time?: string | Date | null }>,
+): Date | undefined => {
+  let minMs = Infinity;
+  for (const r of records) {
+    if (!r.start_time) continue;
+    const t =
+      r.start_time instanceof Date
+        ? r.start_time.getTime()
+        : parseDorisUTCDateTimeFormat(r.start_time).getTime();
+    if (!Number.isNaN(t) && t < minMs) minMs = t;
+  }
+  if (!Number.isFinite(minMs)) return undefined;
+  return new Date(minMs - 2 * 24 * 60 * 60 * 1000);
+};
 
 const getObservationsTableInternal = async <T>(
   opts: ObservationTableQuery & {
