@@ -25,63 +25,159 @@ import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
 
 /**
- * Per-trace query as a single-table conditional aggregate over events_full — no
- * ROW_NUMBER window, no self-JOIN, no double scan. Root-level fields are picked
- * from the root span and the shape matches traces_mv so it transparently rewrites
- * onto the MV (all aggregates roll up across the MV's start_time_date partitions):
- *   - root-pick fields → any_value(IF(is_root = 1, …, NULL)): any_value skips NULL
- *     (returns the root's value), is roll-up-able, and accepts every type incl.
- *     ARRAY (tags) and MAP (metadata, stays native — convertDorisToDomain parses).
- *     is_root is the precomputed root-span flag (see migration 0037).
- *   - input/output → CAST(Variant AS STRING) (full) when not excludeFullIO.
- * With excludeFullIO (verbosity "compact") only input_trim/output_trim are
- * returned and the query transparently rewrites onto traces_mv.
+ * Trace reads, post async-MV era. The traces_mv-shaped any_value aggregation
+ * over events_full is GONE — every trace read is a flat-row lookup:
+ *   - Scalars: traces_scalar (one row per trace, migration 0039), also the
+ *     AUTHORITATIVE store for the mutable flags (bookmarked/public/tags —
+ *     events_full is DUPLICATE-model, no UPDATEs).
+ *   - Full input/output (the only trace fields NOT on traces_scalar): a flat
+ *     read of the trace's root span row in events_full (is_root = 1).
+ * Consequence: a trace is only readable once its ROOT span arrived (OTel
+ * exports the root last, so an in-flight trace has no scalar row and no root
+ * row). Such traces are absent from decoration/byId until the root lands.
  */
-const buildTraceAggregationQuery = (params: {
+
+/**
+ * Shared SELECT list for flat traces_scalar reads; shape matches
+ * TraceRecordReadType / convertDorisToDomain.
+ */
+const TRACES_SCALAR_SELECT = `
+      id,
+      project_id,
+      start_time AS \`timestamp\`,
+      name,
+      user_id,
+      session_id,
+      ${dq("release")},
+      version,
+      environment,
+      bookmarked,
+      ${dq("public")},
+      tags,
+      metadata,
+      input_trim,
+      output_trim,
+      created_at,
+      updated_at,
+      event_ts`;
+
+/**
+ * Full input/output for ONE trace: point read of the root span row.
+ * ORDER BY event_ts DESC — events_full is DUPLICATE-model, a re-delivered
+ * root span lands as a second row; pick the newest copy deterministically.
+ */
+const TRACE_ROOT_IO_QUERY = `
+    SELECT
+      CAST(input AS STRING) AS input,
+      CAST(output AS STRING) AS output
+    FROM events_full
+    WHERE project_id = {projectId: String}
+    AND trace_id = {traceId: String}
+    AND is_root = 1
+    AND DATE(start_time) = DATE({rootDay: DateTime})
+    ORDER BY event_ts DESC
+    LIMIT 1
+  `;
+
+/**
+ * Batch variant: full input/output for a SET of scalar rows, merged in TS.
+ * The root span's start_time is byte-identical to the scalar row's (both
+ * dual-written from the same root record), so the scalar rows' own timestamps
+ * bound the partition range exactly. DUPLICATE model: ORDER BY event_ts DESC
+ * + first-wins keeps the newest copy of a re-delivered root.
+ */
+const attachRootIO = async (params: {
+  projectId: string;
+  records: TraceRecordReadType[];
+  tags: Record<string, string>;
+}): Promise<TraceRecordReadType[]> => {
+  const { projectId, records, tags } = params;
+  if (records.length === 0) return records;
+  const timestamps = records.map((r) => String(r.timestamp));
+  const ioRows = await queryDoris<{
+    id: string;
+    input: string | null;
+    output: string | null;
+  }>({
+    query: `
+      SELECT
+        trace_id AS id,
+        CAST(input AS STRING) AS input,
+        CAST(output AS STRING) AS output
+      FROM events_full
+      WHERE project_id = {projectId: String}
+      AND trace_id IN ({ioTraceIds: Array(String)})
+      AND is_root = 1
+      AND DATE(start_time) >= DATE({ioMinTs: DateTime})
+      AND DATE(start_time) <= DATE({ioMaxTs: DateTime})
+      ORDER BY event_ts DESC
+    `,
+    params: {
+      projectId,
+      ioTraceIds: records.map((r) => r.id),
+      ioMinTs: timestamps.reduce((a, b) => (a < b ? a : b)),
+      ioMaxTs: timestamps.reduce((a, b) => (a > b ? a : b)),
+    },
+    tags,
+  });
+  const ioById = new Map<
+    string,
+    { input: string | null; output: string | null }
+  >();
+  for (const row of ioRows) {
+    if (!ioById.has(row.id)) ioById.set(row.id, row);
+  }
+  return records.map((r) => ({
+    ...r,
+    input: ioById.get(r.id)?.input ?? null,
+    output: ioById.get(r.id)?.output ?? null,
+  }));
+};
+
+/**
+ * byId FALLBACK: the trace read flat off its root span row in events_full —
+ * used when the traces_scalar row is missing (scalar stream load lagging the
+ * events_full one, or data predating the dual-write). Mutable flags
+ * (bookmarked/public/tags) read here are the ingestion-time snapshot.
+ */
+const buildRootSpanTraceQuery = (params: {
   whereSql: string;
-  extraOrderBy?: string;
-  extraLimit?: string;
   /** Skip the full input/output Variant; only input_trim/output_trim are
    * returned. Used for verbosity "compact". */
   excludeFullIO?: boolean;
 }): string => {
-  const {
-    whereSql,
-    extraOrderBy = "",
-    extraLimit = "",
-    excludeFullIO = false,
-  } = params;
+  const { whereSql, excludeFullIO = false } = params;
   const fullIO = excludeFullIO
     ? ""
     : `
-      any_value(IF(is_root = 1, CAST(input AS STRING), NULL)) AS input,
-      any_value(IF(is_root = 1, CAST(output AS STRING), NULL)) AS output,`;
+      CAST(input AS STRING) AS input,
+      CAST(output AS STRING) AS output,`;
   return `
     SELECT
       trace_id AS id,
       project_id,
-      MIN(start_time) AS \`timestamp\`,
-      any_value(IF(is_root = 1, IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      any_value(IF(is_root = 1, NULLIF(user_id, ''), NULL)) AS user_id,
-      any_value(IF(is_root = 1, NULLIF(session_id, ''), NULL)) AS session_id,
-      any_value(IF(is_root = 1, NULLIF(${dq("release")}, ''), NULL)) AS ${dq("release")},
-      any_value(IF(is_root = 1, NULLIF(version, ''), NULL)) AS version,
-      any_value(IF(is_root = 1, NULLIF(environment, ''), NULL)) AS environment,
-      any_value(IF(is_root = 1, bookmarked, NULL)) AS bookmarked,
-      MAX(${dq("public")}) AS ${dq("public")},
-      MIN(created_at) AS created_at,
-      MAX(updated_at) AS updated_at,
-      MAX(event_ts) AS event_ts,
-      MIN(is_deleted) AS is_deleted,
-      any_value(IF(is_root = 1, tags, NULL)) AS tags,
-      any_value(IF(is_root = 1, input_trim, NULL)) AS input_trim,
-      any_value(IF(is_root = 1, output_trim, NULL)) AS output_trim,${fullIO}
-      any_value(IF(is_root = 1, metadata, NULL)) AS metadata
+      start_time AS \`timestamp\`,
+      IF(trace_name <> '', trace_name, name) AS name,
+      NULLIF(user_id, '') AS user_id,
+      NULLIF(session_id, '') AS session_id,
+      NULLIF(${dq("release")}, '') AS ${dq("release")},
+      NULLIF(version, '') AS version,
+      NULLIF(environment, '') AS environment,
+      bookmarked,
+      ${dq("public")},
+      created_at,
+      updated_at,
+      event_ts,
+      is_deleted,
+      tags,
+      input_trim,
+      output_trim,${fullIO}
+      metadata
     FROM events_full
     WHERE ${whereSql}
-    GROUP BY project_id, trace_id
-    ${extraOrderBy}
-    ${extraLimit}
+    AND is_root = 1
+    ORDER BY event_ts DESC
+    LIMIT 1
   `;
 };
 
@@ -212,28 +308,24 @@ export const getTracesByIds = async (
     /**
      * Skip the full input/output Variant columns. Callers that only decorate
      * rows with trace scalars (name/tags/timestamp — e.g. the observations
-     * list) must set this: without it every page load dragged the FULL I/O
-     * payloads of every listed trace through the aggregate. Exports keep the
-     * default (they serialize input/output).
+     * list) must set this: the lookup stays a single flat traces_scalar read.
+     * Exports keep the default (they serialize input/output → one extra
+     * batch point read of the root span rows).
      */
     excludeFullIO?: boolean;
   },
 ) => {
-  const whereSql = `
-    trace_id IN ({traceIds: Array(String)})
-    AND project_id = {projectId: String}
-    ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-  `;
-  const query = buildTraceAggregationQuery({
-    whereSql,
-    extraOrderBy: "ORDER BY event_ts DESC",
-    excludeFullIO: opts?.excludeFullIO ?? false,
-  });
-
-  // metadata comes back as a native MAP (JSONEachRow → JS object);
-  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
-  const records = await queryDoris<TraceRecordReadType>({
-    query,
+  // Flat IN lookup on the (project_id, id) key prefix of traces_scalar — no
+  // aggregation. Traces without a scalar row (root span not yet arrived) are
+  // simply absent from the result; callers decorate best-effort.
+  const scalarRows = await queryDoris<TraceRecordReadType>({
+    query: `
+      SELECT ${TRACES_SCALAR_SELECT}
+      FROM traces_scalar
+      WHERE project_id = {projectId: String}
+        AND id IN ({traceIds: Array(String)})
+        ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
+    `,
     params: {
       traceIds,
       projectId,
@@ -242,11 +334,26 @@ export const getTracesByIds = async (
     tags: {
       feature: "tracing",
       type: "trace",
-      kind: "byId",
+      kind: "byIds-scalar",
       projectId,
     },
   });
 
+  const records = opts?.excludeFullIO
+    ? scalarRows
+    : await attachRootIO({
+        projectId,
+        records: scalarRows,
+        tags: {
+          feature: "tracing",
+          type: "trace",
+          kind: "byIds-root-io",
+          projectId,
+        },
+      });
+
+  // metadata comes back as a native MAP (JSONEachRow → JS object);
+  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
   return records.map((r) => convertDorisToDomain(r));
 };
 
@@ -343,23 +450,19 @@ export const getTracesBySessionId = async (
   sessionIds: string[],
   timestamp?: Date,
 ) => {
-  // session_id is denormalized onto every observation row by
-  // createEventRecord, so filtering by session_id in the inner scan
-  // is sufficient — the aggregation collapses to one row per trace.
-  const whereSql = `
-    session_id IN ({sessionIds: Array(String)})
-    AND project_id = {projectId: String}
-    ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-  `;
-  const query = buildTraceAggregationQuery({
-    whereSql,
-    extraOrderBy: "ORDER BY event_ts DESC",
-  });
-
-  // metadata comes back as a native MAP (JSONEachRow → JS object);
-  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
-  const records = await queryDoris<TraceRecordReadType>({
-    query,
+  // Flat traces_scalar read (session_id hits its inverted index; one row per
+  // trace, no aggregation), then the full input/output Variants are merged in
+  // from a batch point read of the root span rows — the public sessions API
+  // returns full trace objects.
+  const scalarRows = await queryDoris<TraceRecordReadType>({
+    query: `
+      SELECT ${TRACES_SCALAR_SELECT}
+      FROM traces_scalar
+      WHERE project_id = {projectId: String}
+        AND session_id IN ({sessionIds: Array(String)})
+        ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
+      ORDER BY event_ts DESC
+    `,
     params: {
       sessionIds,
       projectId,
@@ -373,6 +476,19 @@ export const getTracesBySessionId = async (
     },
   });
 
+  const records = await attachRootIO({
+    projectId,
+    records: scalarRows,
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "list-root-io",
+      projectId,
+    },
+  });
+
+  // metadata comes back as a native MAP (JSONEachRow → JS object);
+  // convertDorisToDomain → parseMetadataCHRecordToDomain handles it.
   const traces = records.map((r) => convertDorisToDomain(r));
 
   traces.forEach((trace) => {
@@ -523,82 +639,87 @@ export const getTraceById = async ({
   /** When true, sets input/output columns to empty in the query to reduce database load */
   excludeInputOutput?: boolean;
 }) => {
-  // Compact fast path: verbosity "compact" (the trace-list cell preview) only
-  // needs root-pick scalars + input_trim/output_trim, all of which live on
+  // Scalar-first fast path for EVERY verbosity: all trace scalars live on
   // traces_scalar (one row per trace, dual-written at ingestion — migration
-  // 0039). (project_id, id) is the unique-key prefix and id the distribution
-  // column, so this is a single-tablet point lookup instead of the events_full
-  // aggregate. Falls back to the aggregate below when the scalar row is
-  // missing (data predating the dual-write, or a trace whose root span never
-  // arrived).
-  if (excludeInputOutput) {
-    const scalarRows = await queryDoris<TraceRecordReadType>({
-      query: `
-        SELECT
-          id,
-          project_id,
-          start_time AS ${dq("timestamp")},
-          name,
-          user_id,
-          session_id,
-          ${dq("release")},
-          version,
-          environment,
-          bookmarked,
-          ${dq("public")},
-          tags,
-          metadata,
-          input_trim,
-          output_trim,
-          created_at,
-          updated_at,
-          event_ts
-        FROM traces_scalar
-        WHERE project_id = {projectId: String}
-          AND id = {traceId: String}
-          ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
-          ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
-        LIMIT 1
-      `,
-      params: {
-        traceId,
-        projectId,
-        ...(timestamp
-          ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
-          : {}),
-        ...(fromTimestamp
-          ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
-          : {}),
-      },
-      tags: {
-        feature: "tracing",
-        type: "trace",
-        kind: "byId-scalar",
-        projectId,
-      },
-    });
-    if (scalarRows.length > 0) {
-      const scalarRes = scalarRows.map((r) => ({
-        ...convertDorisToDomain(r),
-        input_trim: r.input_trim ?? null,
-        output_trim: r.output_trim ?? null,
-      }));
-      scalarRes.forEach((trace) => {
-        recordDistribution(
-          "langfuse.query_by_id_age",
-          new Date().getTime() - trace.timestamp.getTime(),
-          {
-            table: "traces_scalar",
-          },
-        );
+  // 0039), which is also the authoritative store for the mutable flags
+  // (bookmarked/public/tags — events_full is DUPLICATE-model, no UPDATEs).
+  // (project_id, id) is the unique-key prefix and id the distribution column,
+  // so this is a single-tablet point lookup. Verbosity full/truncated then
+  // fetches the only fields NOT on traces_scalar — the full input/output
+  // Variants — via a point read of the root span row, day-pruned by the
+  // scalar row's own start_time. Falls back to the events_full aggregate
+  // below when the scalar row is missing (a trace still in flight — OTel
+  // exports the root span last — or data predating the dual-write).
+  const scalarRows = await queryDoris<TraceRecordReadType>({
+    query: `
+      SELECT ${TRACES_SCALAR_SELECT}
+      FROM traces_scalar
+      WHERE project_id = {projectId: String}
+        AND id = {traceId: String}
+        ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
+        ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
+      LIMIT 1
+    `,
+    params: {
+      traceId,
+      projectId,
+      ...(timestamp
+        ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+        : {}),
+      ...(fromTimestamp
+        ? { fromTimestamp: convertDateToAnalyticsDateTime(fromTimestamp) }
+        : {}),
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "byId-scalar",
+      projectId,
+    },
+  });
+  if (scalarRows.length > 0) {
+    const scalarRecord = { ...scalarRows[0] };
+    if (!excludeInputOutput) {
+      const ioRows = await queryDoris<{
+        input: string | null;
+        output: string | null;
+      }>({
+        query: TRACE_ROOT_IO_QUERY,
+        params: {
+          traceId,
+          projectId,
+          // The scalar row's own timestamp — exact day partition of the root
+          // span, so the Variant point read prunes to one partition.
+          rootDay: scalarRecord.timestamp,
+        },
+        tags: {
+          feature: "tracing",
+          type: "trace",
+          kind: "byId-root-io",
+          projectId,
+        },
       });
-      return scalarRes.shift();
+      scalarRecord.input = ioRows[0]?.input ?? null;
+      scalarRecord.output = ioRows[0]?.output ?? null;
     }
+    const trace = {
+      ...convertDorisToDomain(scalarRecord),
+      input_trim: scalarRecord.input_trim ?? null,
+      output_trim: scalarRecord.output_trim ?? null,
+    };
+    recordDistribution(
+      "langfuse.query_by_id_age",
+      new Date().getTime() - trace.timestamp.getTime(),
+      {
+        table: "traces_scalar",
+      },
+    );
+    return trace;
   }
 
-  // Phase C alignment with upstream langfuse-main's eventsTracesAggregation:
-  // trace identity is derived from the set of observations sharing
-  // trace_id, not from a synthetic `t-<trace_id>` row.
+  // Fallback: the scalar row is missing (scalar stream load lagging the
+  // events_full one, or data predating the dual-write) — read the trace flat
+  // off its root span row in events_full instead.
   // Hintless callers (comments validation, peeks opened from a bare URL, ...)
   // used to fire ONE unbounded query — a scan across every partition of the
   // trace's inverted-index entries. Instead, probe the last 7 days first
@@ -624,11 +745,10 @@ export const getTraceById = async ({
     ${attempt.fromTs ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
     // "compact" (the traces-list cell preview) only needs the trim preview, so
-    // skip the full input/output Variant. full/truncated need the full
-    // input/output Variant → full aggregate.
-    const query = buildTraceAggregationQuery({
+    // skip the full input/output Variant; full/truncated read the Variants
+    // straight off the root row.
+    const query = buildRootSpanTraceQuery({
       whereSql,
-      extraLimit: "LIMIT 1",
       excludeFullIO: excludeInputOutput,
     });
 
