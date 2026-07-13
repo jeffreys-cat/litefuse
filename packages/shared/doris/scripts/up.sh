@@ -48,7 +48,7 @@ echo "Connecting to Doris at ${DORIS_HTTP_PROTOCOL}://${DORIS_HOST}:${DORIS_PORT
 echo "Debug: DORIS_USER=${DORIS_USER}, DORIS_PASSWORD=${DORIS_PASSWORD}"
 
 # Build MySQL connection arguments
-MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP "
+MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP --ssl=0"
 if [ -n "${DORIS_PASSWORD}" ]; then
     MYSQL_ARGS="${MYSQL_ARGS} -p${DORIS_PASSWORD}"
 fi
