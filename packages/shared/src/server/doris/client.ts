@@ -1049,11 +1049,6 @@ const TIMESTAMP_FIELDS = [
   "completion_start_time",
   "dataset_run_created_at",
   "dataset_item_version",
-  // trace_metrics_agg MIN/MAX datetime columns (epoch-ms in the insert shape).
-  "min_start_time",
-  "max_start_time",
-  "min_end_time",
-  "max_end_time",
 ] as const;
 
 // null = "this table needs NO derived date field" (still must be listed —
@@ -1072,14 +1067,8 @@ const DATE_FIELD_MAPPINGS: Record<
   // traces_scalar mirrors events_full's timestamp shape (root-span dual-write;
   // start_time_date derived from start_time, no stray timestamp_date).
   traces_scalar: { sourceField: "start_time", dateField: "start_time_date" },
-  // trace_metrics_agg: start_time_date is provided explicitly by the
-  // dual-write; this mapping is defense-in-depth (derives it from
-  // min_start_time only when missing) and keeps the record off the fallback
-  // dual-column branch.
-  trace_metrics_agg: {
-    sourceField: "min_start_time",
-    dateField: "start_time_date",
-  },
+  // trace_metrics_agg is a sync MV on events_full (migration 0040) — never
+  // stream-loaded directly, so no mapping entry.
 };
 
 /**

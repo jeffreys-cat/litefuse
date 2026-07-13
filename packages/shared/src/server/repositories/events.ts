@@ -1272,7 +1272,10 @@ type UpdateableEventFields = {
  * E.g. `{ traceIds: [...] }` will only filter by traceIds, while
  * `{ spanIds: [...], traceIds: [...] }` will filter by both.
  *
- * Updates the observations table.
+ * @deprecated events_full is a DUPLICATE-model table (migration 0037) and
+ * Doris does not support UPDATE on duplicate tables — calling this now fails
+ * at the database. Trace-level mutable flags (bookmarked/public/tags) live in
+ * traces_scalar instead; no production call sites remain.
  */
 export const updateEvents = async (
   projectId: string,

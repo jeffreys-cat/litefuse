@@ -3,21 +3,22 @@
 --   * synthetic trace spans use span_id = 't-' || trace_id and parent_span_id = ''
 --   * observation spans use the SDK-provided id and may reference parent_observation_id
 --
--- Storage model: Unique Key + Merge-on-Write.
---   Cross-batch correctness is owned by IngestionService: full-row
---   pre-read + per-column merge before each Stream Load. Doris MoW
---   resolves any remaining conflicts by load order; that's enough given
---   the writer always sends the post-merge state. (V3 traces /
---   observation_source used the same pattern without a sequence_col
---   binding and were correct.)
+-- Storage model: Duplicate Key (append-only).
+--   The OTel write path is a stateless transform — each delivered span is
+--   loaded as one full row, no read-back or merge. Without MoW there is no
+--   key-level dedup: a re-delivered/replayed span lands as a second identical
+--   row. Accepted for this model: normal OTel delivery is once, and the
+--   duplicate-key sort columns below only define sort order / prefix seek.
+--   In exchange, synchronous (rollup) materialized views become available —
+--   trace_metrics_agg (migration 0040) is now a sync MV maintained
+--   atomically by every load instead of an ingestion dual-write.
 --
--- All non-key columns are nullable or have DEFAULT so that Stream Load with
--- `partial_update_new_key_behavior=APPEND` can insert new rows from arbitrary
--- partial event payloads.
+-- All non-key columns are nullable or have DEFAULT so that Stream Load can
+-- insert rows from arbitrary event payloads.
 
 CREATE TABLE if not exists events_full (
-    -- Key identifiers (must be the leading columns, in UNIQUE KEY order:
-    -- project_id, trace_id, start_time, span_id).
+    -- Sort-key identifiers (must be the leading columns, in DUPLICATE KEY
+    -- order: project_id, trace_id, start_time, span_id).
     -- start_time itself is the partition source — no derived date column. AUTO
     -- PARTITION BY date_trunc(start_time,'day') lets the optimizer prune
     -- partitions natively from ANY start_time predicate (plain ranges and even
@@ -25,9 +26,9 @@ CREATE TABLE if not exists events_full (
     -- whole class of "forgot the start_time_date mirror predicate →
     -- full-partition scan" bugs. NOT NULL because auto partition rejects NULL
     -- partition values (ingestion always supplies it). Values are UTC
-    -- wall-clock, so partitions are UTC days. Dedup granularity is the exact
-    -- start_time (ms): OTel re-exports of a span carry the identical SDK start
-    -- timestamp, so replays still fold under MoW.
+    -- wall-clock, so partitions are UTC days. Duplicate model: replays are NOT
+    -- folded — a re-exported span appends an identical row (see storage-model
+    -- note above).
     `project_id` varchar(64) NOT NULL,
     -- nullable to match the ingestion schema (trace_id is nullish); a key +
     -- distribution column may be NULL in Doris. In practice OTel spans always
@@ -189,10 +190,9 @@ CREATE TABLE if not exists events_full (
 -- trace_id is keyed + hashed so a trace's spans co-locate in one bucket (fast trace
 -- detail) and a project's data spreads across buckets (scan parallelism), unlike the
 -- old HASH(project_id) which put a whole project in one bucket.
-UNIQUE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
+DUPLICATE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
-DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS 90
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1",
-    "enable_unique_key_merge_on_write" = "true"
+    "replication_allocation" = "tag.location.default: 1"
 );

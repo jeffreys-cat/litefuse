@@ -13,7 +13,6 @@ import {
   StreamLoadBodySource,
   TraceRecordInsertType,
   TraceScalarRecordInsertType,
-  TraceMetricsAggRecordInsertType,
   DatasetRunItemRecordInsertType,
 } from "@langfuse/shared/src/server";
 
@@ -96,14 +95,12 @@ export class DorisWriter {
   // batch assembly, reused verbatim on every retry) → exactly-once via the FE
   // label registry (client treats "Label Already Exists"+FINISHED as success).
   // Opt-in ONLY for tables where duplicate application corrupts data
-  // (AGGREGATE-KEY SUM columns). MoW unique-key tables stay label-less: their
-  // keys make replays idempotent, and for per-attempt labels "already exists"
-  // must remain a plain failure (collision). Instance field (not module const)
-  // so tests can override. (Field initializers run at construction, so the
-  // enum below is initialized by then.)
-  stableLabelTables: ReadonlySet<TableName> = new Set([
-    TableName.TracesMetricsAgg,
-  ]);
+  // (AGGREGATE-KEY SUM columns). Currently empty: trace_metrics_agg — the
+  // only prior member — is now a synchronous MV on events_full (migration
+  // 0040), maintained by the base-table load transaction itself. Instance
+  // field (not module const) so tests can override. (Field initializers run
+  // at construction, so the enum below is initialized by then.)
+  stableLabelTables: ReadonlySet<TableName> = new Set([]);
 
   // Per-table retry buffer: each RetryEntry is one failed batch (kept intact,
   // written as a single Stream Load) carrying its own attempts + retryNotBefore.
@@ -176,7 +173,6 @@ export class DorisWriter {
       [TableName.DatasetRunItems]: [],
       [TableName.EventsFull]: [],
       [TableName.TracesScalar]: [],
-      [TableName.TracesMetricsAgg]: [],
     };
 
     this.queueSizeBytes = new Map();
@@ -189,7 +185,6 @@ export class DorisWriter {
       [TableName.DatasetRunItems]: [],
       [TableName.EventsFull]: [],
       [TableName.TracesScalar]: [],
-      [TableName.TracesMetricsAgg]: [],
     };
 
     this.start();
@@ -840,10 +835,6 @@ export enum TableName {
   // One scalar row per trace (root span), dual-written next to EventsFull.
   // Serves the flat trace-list fast path (see migration 0039).
   TracesScalar = "traces_scalar",
-  // One increment row per span, folded by the AGGREGATE KEY model into a
-  // realtime per-trace metric rollup (see migration 0040). Writes carry a
-  // stable label (stableLabelTables) — duplicate application corrupts SUMs.
-  TracesMetricsAgg = "trace_metrics_agg",
 }
 
 type RecordInsertType<T extends TableName> = T extends TableName.Scores
@@ -860,9 +851,7 @@ type RecordInsertType<T extends TableName> = T extends TableName.Scores
             ? EventRecordInsertType
             : T extends TableName.TracesScalar
               ? TraceScalarRecordInsertType
-              : T extends TableName.TracesMetricsAgg
-                ? TraceMetricsAggRecordInsertType
-                : never;
+              : never;
 
 // A queued row: its final wire bytes — the UTF-8-encoded JSON line INCLUDING
 // its trailing "\n" NDJSON separator, built once at enqueue. We keep only the

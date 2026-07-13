@@ -760,30 +760,61 @@ const runScalarCountFastPath = async (params: {
 // union-compensation re-aggregates the whole day's spans — or, for metric
 // ORDER BY, all the way to the base builder (events_full self-aggregate +
 // JOINs). Both are exactly the billions-of-spans scans this table set exists
-// to avoid. This path answers them from the small tables only:
-//   inner  m: trace_metrics_agg GROUP BY trace_id (a handful of per-day
-//             AGGREGATE-KEY rows per trace) with the metric filters as HAVING
-//             and the metric aliases projected for ORDER BY;
+// to avoid. This path answers them from the rollup only:
+//   inner  m: events_full GROUP BY trace_id with aggregate expressions that
+//             structurally match the trace_metrics_agg SYNC MV (migration
+//             0040) — Doris transparently rewrites the scan onto the rollup
+//             (a handful of per-day rows per trace), with the metric filters
+//             as HAVING and the metric aliases projected for ORDER BY;
 //   outer  s: JOIN traces_scalar for display columns + scalar filters,
 //             ORDER BY metric alias or timestamp, LIMIT/OFFSET.
-// A trace missing from either table drops out via the inner join — the same
+// A trace missing from either side drops out via the inner join — the same
 // outcome the MV path's metric HAVING produces (no metrics → filtered out).
+//
+// IMPORTANT: every aggregate below must stay expression-identical to the sync
+// MV definition in migration 0040 (SUM/MIN/MAX over the same base columns,
+// SUM(CASE WHEN level = '…' THEN 1 ELSE 0 END) for level counts, and
+// date_trunc(start_time, 'day') for day bounds) — that structural match is
+// what keeps the transparent rewrite firing instead of scanning base rows.
 
-// Latency/level over the agg rollup — mirrors OUTER_LATENCY/OUTER_LEVEL over
-// trace_metrics_agg's column names (min/max_* instead of the MV's ts/…_max).
+// Latency over the sync-MV aggregates — mirrors OUTER_LATENCY over the base
+// column MIN/MAX (each MIN/MAX(start_time/end_time) is an MV column).
 const AGG_ROLLUP_LATENCY =
-  "milliseconds_diff(CASE WHEN MAX(max_start_time) > MAX(max_end_time) THEN MAX(max_start_time) ELSE MAX(max_end_time) END, CASE WHEN MIN(min_start_time) < MIN(min_end_time) THEN MIN(min_start_time) ELSE MIN(min_end_time) END) / 1000";
+  "milliseconds_diff(CASE WHEN MAX(start_time) > MAX(end_time) THEN MAX(start_time) ELSE MAX(end_time) END, CASE WHEN MIN(start_time) < MIN(end_time) THEN MIN(start_time) ELSE MIN(end_time) END) / 1000";
 
-// Metric filter → HAVING expression over the agg rollup. Derived from the MV
-// having map: the SUM(...) selects (and OUTER_LEVEL's SUM CASE) are valid
-// verbatim over trace_metrics_agg's per-day rows — only latency references
-// MV-specific aliases and needs the agg variant.
+// Level-count SUMs in the sync-MV shape (must match migration 0040 verbatim).
+const AGG_ROLLUP_LEVEL_COUNTS: Record<string, string> = {
+  errorCount: "SUM(CASE WHEN level = 'ERROR'   THEN 1 ELSE 0 END)",
+  warningCount: "SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END)",
+  defaultCount: "SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END)",
+  debugCount: "SUM(CASE WHEN level = 'DEBUG'   THEN 1 ELSE 0 END)",
+};
+const AGG_ROLLUP_LEVEL = `CASE WHEN ${AGG_ROLLUP_LEVEL_COUNTS.errorCount} > 0 THEN 'ERROR' WHEN ${AGG_ROLLUP_LEVEL_COUNTS.warningCount} > 0 THEN 'WARNING' WHEN ${AGG_ROLLUP_LEVEL_COUNTS.defaultCount} > 0 THEN 'DEFAULT' ELSE 'DEBUG' END`;
+
+// Metric filter → HAVING expression over the single-level events_full
+// aggregate. The MV having map's selects reference per-day CTE aliases
+// (input_tokens, error_count, …); over events_full they must target the base
+// columns / level CASEs in the sync-MV shape instead.
+const AGG_ROLLUP_METRIC_EXPRS: Record<string, string> = {
+  totalCost: "SUM(total_cost)",
+  inputCost: "SUM(input_cost_calculated)",
+  outputCost: "SUM(output_cost_calculated)",
+  inputTokens: "SUM(input_tokens_calculated)",
+  outputTokens: "SUM(output_tokens_calculated)",
+  totalTokens: "SUM(total_tokens_calculated)",
+  tokens: "SUM(total_tokens_calculated)",
+  latency: AGG_ROLLUP_LATENCY,
+  level: AGG_ROLLUP_LEVEL,
+  ...AGG_ROLLUP_LEVEL_COUNTS,
+};
+
 const tracesMetricAggHavingColumns: UiColumnMappings =
   tracesTableMvHavingColumns
     .filter((c) => c.tableName === "observations")
-    .map((c) =>
-      c.uiTableId === "latency" ? { ...c, select: AGG_ROLLUP_LATENCY } : c,
-    );
+    .map((c) => ({
+      ...c,
+      select: AGG_ROLLUP_METRIC_EXPRS[c.uiTableId] ?? c.select,
+    }));
 
 const metricAggColumnTokens = new Set(
   tracesMetricAggHavingColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
@@ -857,7 +888,9 @@ const buildMetricListQuery = (params: {
   );
 
   // Inner agg WHERE: project + the same date bounds (same {fromTs}/{toTs}
-  // placeholders — parameter substitution is by name, reuse is free).
+  // placeholders — parameter substitution is by name, reuse is free). Day
+  // bounds use date_trunc(start_time, 'day') — the sync MV's key expression —
+  // so the predicate stays answerable by the rollup.
   const tsFilters = filter.filter((f) => f.type === "datetime");
   const fromFilter = tsFilters.find(
     (f) => f.operator === ">=" || f.operator === ">",
@@ -871,11 +904,15 @@ const buildMetricListQuery = (params: {
     timeParams.fromTs = convertDateToAnalyticsDateTime(
       fromFilter.value as Date,
     );
-    innerWhere.push("start_time_date >= DATE({fromTs: DateTime})");
+    innerWhere.push(
+      "date_trunc(start_time, 'day') >= date_trunc({fromTs: DateTime}, 'day')",
+    );
   }
   if (toFilter) {
     timeParams.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
-    innerWhere.push("start_time_date <= DATE({toTs: DateTime})");
+    innerWhere.push(
+      "date_trunc(start_time, 'day') <= date_trunc({toTs: DateTime}, 'day')",
+    );
   }
 
   // Metric filters → HAVING over the rollup (inline-escaped, self-contained).
@@ -896,17 +933,17 @@ const buildMetricListQuery = (params: {
       SELECT
         trace_id,
         ${AGG_ROLLUP_LATENCY} AS latency,
-        SUM(total_cost) AS total_cost,
-        SUM(input_cost) AS input_cost,
-        SUM(output_cost) AS output_cost,
-        SUM(input_tokens) AS input_tokens,
-        SUM(output_tokens) AS output_tokens,
-        SUM(total_tokens) AS total_tokens,
-        SUM(error_count) AS error_count,
-        SUM(warning_count) AS warning_count,
-        SUM(default_count) AS default_count,
-        SUM(debug_count) AS debug_count
-      FROM trace_metrics_agg
+        ${AGG_ROLLUP_METRIC_EXPRS.totalCost} AS total_cost,
+        ${AGG_ROLLUP_METRIC_EXPRS.inputCost} AS input_cost,
+        ${AGG_ROLLUP_METRIC_EXPRS.outputCost} AS output_cost,
+        ${AGG_ROLLUP_METRIC_EXPRS.inputTokens} AS input_tokens,
+        ${AGG_ROLLUP_METRIC_EXPRS.outputTokens} AS output_tokens,
+        ${AGG_ROLLUP_METRIC_EXPRS.totalTokens} AS total_tokens,
+        ${AGG_ROLLUP_LEVEL_COUNTS.errorCount} AS error_count,
+        ${AGG_ROLLUP_LEVEL_COUNTS.warningCount} AS warning_count,
+        ${AGG_ROLLUP_LEVEL_COUNTS.defaultCount} AS default_count,
+        ${AGG_ROLLUP_LEVEL_COUNTS.debugCount} AS debug_count
+      FROM events_full
       WHERE ${innerWhere.join(" AND ")}
       GROUP BY trace_id
       ${havingRes?.query ? `HAVING ${havingRes.query}` : ""}`;
@@ -1303,12 +1340,13 @@ const runMvCountFastPath = async (params: {
 };
 
 // --- trace_metrics_agg metrics fast path -----------------------------------
-// trace_metrics_agg (migration 0040) is the realtime write-side rollup: one
-// AGGREGATE-KEY row per (project, trace, day), maintained by the ingestion
-// dual-write. Reading it needs no MV rewrite and no staleness compensation —
-// unlike traces_mv, it is CURRENT for the live partition. The metrics query
-// only rolls the per-day rows up to one row per trace (SUM-of-SUM /
-// MIN-of-MIN / MAX-of-MAX — a handful of rows per trace).
+// trace_metrics_agg (migration 0040) is a SYNCHRONOUS materialized view on
+// events_full: one rollup row per (project, trace, day), maintained
+// atomically by every load transaction — CURRENT for the live partition, no
+// staleness compensation. The query below aggregates events_full in the sync
+// MV's exact expression shape so Doris transparently rewrites it onto the
+// rollup (then only rolls the per-day rows up to one row per trace —
+// SUM-of-SUM / MIN-of-MIN / MAX-of-MAX, a handful of rows per trace).
 //
 // Eligibility: an explicit trace-id list must be present. traces.metrics (the
 // only caller) always sends the page's ids, which traces.all ALREADY produced
@@ -1370,17 +1408,19 @@ const runAggMetricsFastPath = async (params: {
     queryParams.fromTs = convertDateToAnalyticsDateTime(
       fromFilter.value as Date,
     );
-    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
+    whereParts.push(
+      "date_trunc(start_time, 'day') >= date_trunc({fromTs: DateTime}, 'day')",
+    );
     havingParts.push(
-      `MIN(min_start_time) ${fromFilter.operator} {fromTs: DateTime}`,
+      `MIN(start_time) ${fromFilter.operator} {fromTs: DateTime}`,
     );
   }
   if (toFilter) {
     queryParams.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
-    whereParts.push("start_time_date <= DATE({toTs: DateTime})");
-    havingParts.push(
-      `MIN(min_start_time) ${toFilter.operator} {toTs: DateTime}`,
+    whereParts.push(
+      "date_trunc(start_time, 'day') <= date_trunc({toTs: DateTime}, 'day')",
     );
+    havingParts.push(`MIN(start_time) ${toFilter.operator} {toTs: DateTime}`);
   }
 
   const idFilter = filter.find(
@@ -1406,34 +1446,33 @@ const runAggMetricsFastPath = async (params: {
     queryParams.offset = (limit ?? 0) * (page ?? 0);
   }
 
-  // Latency/level formulas mirror OUTER_LATENCY/OUTER_LEVEL over the agg
-  // columns (identical NULL behavior: an all-open trace yields NULL latency).
+  // Latency/level formulas mirror OUTER_LATENCY/OUTER_LEVEL in the sync-MV
+  // expression shape (identical NULL behavior: an all-open trace yields NULL
+  // latency). Every aggregate matches migration 0040 verbatim so the scan
+  // transparently rewrites onto the trace_metrics_agg rollup.
   const query = `
     SELECT
       trace_id AS id,
       project_id,
-      MIN(min_start_time) AS ${dq("timestamp")},
-      milliseconds_diff(
-        CASE WHEN MAX(max_start_time) > MAX(max_end_time) THEN MAX(max_start_time) ELSE MAX(max_end_time) END,
-        CASE WHEN MIN(min_start_time) < MIN(min_end_time) THEN MIN(min_start_time) ELSE MIN(min_end_time) END
-      ) / 1000 AS latency,
-      SUM(total_cost) AS total_cost,
-      SUM(input_tokens) AS input_tokens,
-      SUM(output_tokens) AS output_tokens,
-      SUM(total_tokens) AS total_tokens,
-      SUM(input_cost) AS input_cost,
-      SUM(output_cost) AS output_cost,
-      CASE WHEN SUM(error_count) > 0 THEN 'ERROR' WHEN SUM(warning_count) > 0 THEN 'WARNING' WHEN SUM(default_count) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END AS level,
-      SUM(error_count) AS error_count,
-      SUM(warning_count) AS warning_count,
-      SUM(default_count) AS default_count,
-      SUM(debug_count) AS debug_count,
-      SUM(observation_count) AS observation_count
-    FROM trace_metrics_agg
+      MIN(start_time) AS ${dq("timestamp")},
+      ${AGG_ROLLUP_LATENCY} AS latency,
+      ${AGG_ROLLUP_METRIC_EXPRS.totalCost} AS total_cost,
+      ${AGG_ROLLUP_METRIC_EXPRS.inputTokens} AS input_tokens,
+      ${AGG_ROLLUP_METRIC_EXPRS.outputTokens} AS output_tokens,
+      ${AGG_ROLLUP_METRIC_EXPRS.totalTokens} AS total_tokens,
+      ${AGG_ROLLUP_METRIC_EXPRS.inputCost} AS input_cost,
+      ${AGG_ROLLUP_METRIC_EXPRS.outputCost} AS output_cost,
+      ${AGG_ROLLUP_LEVEL} AS level,
+      ${AGG_ROLLUP_LEVEL_COUNTS.errorCount} AS error_count,
+      ${AGG_ROLLUP_LEVEL_COUNTS.warningCount} AS warning_count,
+      ${AGG_ROLLUP_LEVEL_COUNTS.defaultCount} AS default_count,
+      ${AGG_ROLLUP_LEVEL_COUNTS.debugCount} AS debug_count,
+      SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS observation_count
+    FROM events_full
     WHERE ${whereParts.join(" AND ")}
     GROUP BY project_id, trace_id
     ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(min_start_time)) ${order}, MIN(min_start_time) ${order}, MAX(event_ts) DESC
+    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
     ${pagination}
   `;
 

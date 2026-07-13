@@ -1,94 +1,64 @@
--- trace_metrics_agg: realtime per-trace metric rollup, maintained by the
--- ingestion dual-write (IngestionService.writeEventRecord emits ONE increment
--- row per span; Doris's AGGREGATE KEY model folds them on compaction/read).
--- Replaces the traces_mv path for traces.metrics and metric-filtered list
--- queries: the async MTMV can never be fresh on the live partition (refresh =
--- re-aggregating the whole day, billions of spans), while this table is
--- maintained incrementally by the writes themselves — ~2 orders of magnitude
--- fewer rows than events_full (one folded row per trace-day vs one per span).
+-- trace_metrics_agg: realtime per-trace metric rollup, now a SYNCHRONOUS
+-- materialized view (single-table rollup) on events_full instead of a
+-- separately dual-written AGGREGATE KEY table.
 --
--- Exactly-once / drift model (decided design):
---   * Writer retries are exactly-once via STABLE stream-load labels
---     (DorisWriter.stableLabelTables — this table is the only member; the FE
---     label registry dedups a retry whose earlier attempt actually committed).
---     Verified against Doris 4.0.6: "Label Already Exists" +
---     ExistingJobStatus FINISHED, and aborted txns free their label.
---   * Residual duplication (BullMQ job replay after a worker crash; OTel
---     client re-delivery — there is NO merge layer on the OTel path) can
---     double-apply SUM columns for the CURRENT day only. Accepted: the T+1
---     repair overwrites closed partitions from events_full (MoW = exact
---     ground truth), so history is always exact; MIN/MAX columns are
---     duplication-immune at all times.
---   * NULL semantics verified on 4.0.6: SUM/MIN/MAX all IGNORE NULL inputs,
---     so spans without end_time/tokens simply contribute nothing.
+-- Requires events_full to be a DUPLICATE model table (migration 0037): Doris
+-- sync MVs with aggregate functions are only supported on duplicate tables.
+-- The MV is maintained atomically by every load transaction on events_full —
+-- always fresh, no ingestion dual-write, no stable-label exactly-once
+-- machinery, no T+1 repair job. Whatever rows land in events_full are exactly
+-- what the rollup reflects (including any duplicate-delivery rows — the
+-- duplicate-model tradeoff is owned by the base table, see 0037).
 --
--- Ops contracts:
---   * FE label_keep_max_second (default 3 days) must NOT be lowered below the
---     writer's retry window, or label dedup silently expires.
---   * Never hand-craft stream loads with the `langfuse_` label prefix.
+-- Query contract: a sync MV cannot be queried by name. Readers aggregate over
+-- events_full with EXACTLY the expression shapes below (same aggregate
+-- functions over the same expressions, grouped by project_id, trace_id,
+-- date_trunc(start_time, 'day')) and Doris transparently rewrites the scan to
+-- this rollup. Keep read-side SQL structurally in sync with this definition.
 --
--- Semantics match traces_mv / MV_INNER_AGG_SELECT (all-span aggregates; the
--- root span carries no tokens/cost so SUMs are unaffected by it; level counts
--- include the root's level exactly once, same as the MV).
-
-CREATE TABLE IF NOT EXISTS trace_metrics_agg (
-    `project_id`        varchar(64) NOT NULL,
-    `trace_id`          varchar(64) NOT NULL,
-    `start_time_date`   Date        NOT NULL,
-
-    -- SUM columns (duplication-sensitive — see drift model above)
-    `input_tokens`      BIGINT          SUM NULL,
-    `output_tokens`     BIGINT          SUM NULL,
-    `total_tokens`      BIGINT          SUM NULL,
-    `input_cost`        Decimal(38,12)  SUM NULL,
-    `output_cost`       Decimal(38,12)  SUM NULL,
-    `total_cost`        Decimal(38,12)  SUM NULL,
-    `error_count`       BIGINT          SUM NULL,
-    `warning_count`     BIGINT          SUM NULL,
-    `default_count`     BIGINT          SUM NULL,
-    `debug_count`       BIGINT          SUM NULL,
-    `observation_count` BIGINT          SUM NULL,
-
-    -- MIN/MAX columns (idempotent under any duplication; latency & the trace
-    -- time window derive from these in the read query)
-    `min_start_time`    DateTime(3)     MIN NULL,
-    `max_start_time`    DateTime(3)     MAX NULL,
-    `min_end_time`      DateTime(3)     MIN NULL,
-    `max_end_time`      DateTime(3)     MAX NULL,
-    `event_ts`          DateTime(3)     MAX NULL
-) ENGINE = OLAP
-AGGREGATE KEY(`project_id`, `trace_id`, `start_time_date`)
-AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
-DISTRIBUTED BY HASH(`trace_id`) BUCKETS 12
-PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1"
-);
-
--- Backfill / T+1 repair statement (run manually for pre-existing data; the
--- repair job runs the same shape per closed partition via INSERT OVERWRITE).
--- events_full is MoW → exact; this recomputes a partition from ground truth.
+-- Column aliases (tm_*) are REQUIRED on Doris 4.0: the FE's create-MV
+-- duplicate-name check compares every MV column name against the base
+-- table's full schema, and the Nereids CREATE MATERIALIZED VIEW no longer
+-- auto-prefixes plain columns (3.x generated mv_* names) — an unaliased key
+-- column always fails with "Duplicate column name '<col>'" (verified on
+-- 4.0.6-rc02). The alias names are storage-internal only; transparent
+-- rewrite matches on expressions, so read queries keep using the base
+-- column names.
 --
--- INSERT INTO trace_metrics_agg
--- SELECT
---   project_id,
---   trace_id,
---   DATE(start_time) AS start_time_date,
---   SUM(input_tokens_calculated)  AS input_tokens,
---   SUM(output_tokens_calculated) AS output_tokens,
---   SUM(total_tokens_calculated)  AS total_tokens,
---   SUM(input_cost_calculated)    AS input_cost,
---   SUM(output_cost_calculated)   AS output_cost,
---   SUM(total_cost)               AS total_cost,
---   SUM(CASE WHEN level = 'ERROR'   THEN 1 ELSE 0 END) AS error_count,
---   SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
---   SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS default_count,
---   SUM(CASE WHEN level = 'DEBUG'   THEN 1 ELSE 0 END) AS debug_count,
---   SUM(IF(is_root = 0, 1, 0))    AS observation_count,
---   MIN(start_time)               AS min_start_time,
---   MAX(start_time)               AS max_start_time,
---   MIN(end_time)                 AS min_end_time,
---   MAX(end_time)                 AS max_end_time,
---   MAX(event_ts)                 AS event_ts
--- FROM events_full
--- WHERE trace_id IS NOT NULL
--- GROUP BY project_id, trace_id, DATE(start_time);
+-- Semantics match the previous agg table / traces_mv (all-span aggregates;
+-- the root span carries no tokens/cost so SUMs are unaffected by it; level
+-- counts include the root's level exactly once; MIN/MAX build the trace time
+-- window; observation_count counts non-root spans).
+--
+-- Note: created on a non-empty table, the rollup build job backfills history
+-- automatically in the background (SHOW ALTER TABLE MATERIALIZED VIEW to
+-- monitor); transparent rewrite engages once the build finishes.
+
+CREATE MATERIALIZED VIEW trace_metrics_agg AS
+SELECT
+    project_id AS tm_project_id,
+    trace_id AS tm_trace_id,
+    date_trunc(start_time, 'day') AS tm_start_day,
+
+    -- SUM metric columns
+    SUM(input_tokens_calculated) AS tm_input_tokens,
+    SUM(output_tokens_calculated) AS tm_output_tokens,
+    SUM(total_tokens_calculated) AS tm_total_tokens,
+    SUM(input_cost_calculated) AS tm_input_cost,
+    SUM(output_cost_calculated) AS tm_output_cost,
+    SUM(total_cost) AS tm_total_cost,
+    SUM(CASE WHEN level = 'ERROR'   THEN 1 ELSE 0 END) AS tm_error_count,
+    SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS tm_warning_count,
+    SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS tm_default_count,
+    SUM(CASE WHEN level = 'DEBUG'   THEN 1 ELSE 0 END) AS tm_debug_count,
+    SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS tm_observation_count,
+
+    -- MIN/MAX columns (latency & the trace time window derive from these in
+    -- the read query)
+    MIN(start_time) AS tm_min_start_time,
+    MAX(start_time) AS tm_max_start_time,
+    MIN(end_time) AS tm_min_end_time,
+    MAX(end_time) AS tm_max_end_time,
+    MAX(event_ts) AS tm_max_event_ts
+FROM events_full
+GROUP BY project_id, trace_id, date_trunc(start_time, 'day');

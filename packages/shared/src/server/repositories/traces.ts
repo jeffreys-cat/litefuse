@@ -979,25 +979,8 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
       projectId,
     },
   });
-  // Mirror into trace_metrics_agg (per-trace metric rollup — migration 0040;
-  // key columns only, as the AGGREGATE model requires for DELETE).
-  await commandDoris({
-    query: `
-      DELETE FROM trace_metrics_agg
-      WHERE project_id = {projectId: String}
-      AND trace_id IN ({traceIds: Array(String)});
-    `,
-    params: {
-      projectId,
-      traceIds,
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "delete",
-      projectId,
-    },
-  });
+  // trace_metrics_agg is a sync MV on events_full (migration 0040): the
+  // events_full DELETE above maintains it — no mirror statement needed.
 };
 
 export const hasAnyTraceOlderThan = async (
@@ -1076,26 +1059,8 @@ export const deleteTracesOlderThanDays = async (
       projectId,
     },
   });
-  // Mirror into trace_metrics_agg. The AGGREGATE model only allows DELETE on
-  // key columns, so the retention bound uses the day-granular partition key
-  // (start_time_date) instead of start_time — same retention intent.
-  await commandDoris({
-    query: `
-      DELETE FROM trace_metrics_agg
-      WHERE project_id = {projectId: String}
-      AND start_time_date < DATE({cutoffDate: DateTime});
-    `,
-    params: {
-      projectId,
-      cutoffDate: convertDateToAnalyticsDateTime(beforeDate),
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "delete",
-      projectId,
-    },
-  });
+  // trace_metrics_agg is a sync MV on events_full (migration 0040): the
+  // events_full DELETE above maintains it — no mirror statement needed.
   return true;
 };
 
@@ -1139,22 +1104,8 @@ export const deleteTracesByProjectId = async (
       projectId,
     },
   });
-  // Mirror into trace_metrics_agg.
-  await commandDoris({
-    query: `
-      DELETE FROM trace_metrics_agg
-      WHERE project_id = {projectId: String};
-    `,
-    params: {
-      projectId,
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "delete",
-      projectId,
-    },
-  });
+  // trace_metrics_agg is a sync MV on events_full (migration 0040): the
+  // events_full DELETE above maintains it — no mirror statement needed.
   return true;
 };
 

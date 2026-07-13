@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS trace_metrics_agg;
+DROP MATERIALIZED VIEW IF EXISTS trace_metrics_agg ON events_full;

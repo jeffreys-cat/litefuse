@@ -831,33 +831,5 @@ export type TraceScalarRecordInsertType = z.infer<
   typeof traceScalarRecordInsertSchema
 >;
 
-// trace_metrics_agg: ONE increment row per span, folded by Doris's AGGREGATE
-// KEY model into a realtime per-(project, trace, day) metric rollup (see
-// migration 0040). SUM inputs are nullish — Doris SUM/MIN/MAX ignore NULLs
-// (verified on 4.0.6), so a span without tokens/end_time contributes nothing.
-// start_time_date is computed at the dual-write site (UTC date of the span's
-// start_time); min/max_* timestamps are epoch-ms like other *InsertType shapes.
-export const traceMetricsAggRecordInsertSchema = z.object({
-  project_id: z.string(),
-  trace_id: z.string(),
-  start_time_date: z.string(), // YYYY-MM-DD (UTC)
-  input_tokens: z.number().nullish(),
-  output_tokens: z.number().nullish(),
-  total_tokens: z.number().nullish(),
-  input_cost: z.number().nullish(),
-  output_cost: z.number().nullish(),
-  total_cost: z.number().nullish(),
-  error_count: z.number(),
-  warning_count: z.number(),
-  default_count: z.number(),
-  debug_count: z.number(),
-  observation_count: z.number(),
-  min_start_time: z.number().nullish(),
-  max_start_time: z.number().nullish(),
-  min_end_time: z.number().nullish(),
-  max_end_time: z.number().nullish(),
-  event_ts: z.number(),
-});
-export type TraceMetricsAggRecordInsertType = z.infer<
-  typeof traceMetricsAggRecordInsertSchema
->;
+// trace_metrics_agg is now a synchronous materialized view on events_full
+// (migration 0040) — no insert shape needed; the base-table load maintains it.
