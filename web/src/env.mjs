@@ -48,6 +48,10 @@ export const env = createEnv({
     LITEFUSE_TEAM_SLACK_WEBHOOK: z.string().url().optional(),
     LITEFUSE_NEW_USER_SIGNUP_WEBHOOK: z.string().url().optional(),
     LITEFUSE_ADMIN_ACCESS_WEBHOOK: z.string().url().optional(),
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+    STRIPE_PRO_MONTHLY_PRICE_ID: z.string().min(1).optional(),
+    STRIPE_PRO_YEARLY_PRICE_ID: z.string().min(1).optional(),
     // Add `.min(1) on ID and SECRET if you want to make sure they're not empty
     LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES: z.enum(["true", "false"]).optional(),
     SALT: z.string({
@@ -472,6 +476,10 @@ export const env = createEnv({
     LITEFUSE_NEW_USER_SIGNUP_WEBHOOK:
       process.env.LITEFUSE_NEW_USER_SIGNUP_WEBHOOK,
     LITEFUSE_ADMIN_ACCESS_WEBHOOK: process.env.LITEFUSE_ADMIN_ACCESS_WEBHOOK,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+    STRIPE_PRO_MONTHLY_PRICE_ID: process.env.STRIPE_PRO_MONTHLY_PRICE_ID,
+    STRIPE_PRO_YEARLY_PRICE_ID: process.env.STRIPE_PRO_YEARLY_PRICE_ID,
     SALT: process.env.SALT,
     LITEFUSE_CSP_ENFORCE_HTTPS: process.env.LITEFUSE_CSP_ENFORCE_HTTPS,
     TELEMETRY_ENABLED: process.env.TELEMETRY_ENABLED,
