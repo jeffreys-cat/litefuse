@@ -896,6 +896,17 @@ export type SsoConfig = {
   auth_provider: string;
   auth_config: unknown | null;
 };
+export type StripeWebhookEvent = {
+  id: string;
+  stripe_event_id: string;
+  event_type: string;
+  status: string;
+  payload: unknown | null;
+  error: string | null;
+  processed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+};
 export type Survey = {
   id: string;
   created_at: Generated<Timestamp>;
@@ -1022,6 +1033,7 @@ export type DB = {
   Session: Session;
   slack_integrations: SlackIntegration;
   sso_configs: SsoConfig;
+  stripe_webhook_events: StripeWebhookEvent;
   surveys: Survey;
   table_view_presets: TableViewPreset;
   trace_media: TraceMedia;

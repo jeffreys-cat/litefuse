@@ -1303,6 +1303,21 @@ model BillingMeterBackup {
   @@map("billing_meter_backups")
 }
 
+model StripeWebhookEvent {
+  id            String    @id @default(cuid())
+  stripeEventId String    @unique @map("stripe_event_id")
+  eventType     String    @map("event_type")
+  status        String
+  payload       Json?
+  error         String?
+  processedAt   DateTime? @map("processed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("stripe_webhook_events")
+}
+
 model LlmSchema {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now()) @map("created_at")
