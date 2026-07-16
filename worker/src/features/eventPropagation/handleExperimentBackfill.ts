@@ -33,7 +33,6 @@ import {
   convertDateToAnalyticsDateTime,
   flattenJsonToPathArrays,
   dorisClient,
-  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { DorisWriter } from "../../services/DorisWriter";
@@ -239,8 +238,8 @@ export async function getRelevantObservations(
 
   // events_full layout: each observation span is a row with parent_span_id
   // != '' (root spans are the trace itself, handled by getRelevantTraces).
-  // metadata is split across metadata_names / metadata_values arrays; we
-  // zip them in TS after the read and synthesize the Map shape that
+  // metadata is read via to_json(metadata) (raw MAP text does not escape inner quotes); we
+  // parse it in TS after the read and synthesize the Map shape that
   // SpanRecord exposes. Dedup-per-span via ROW_NUMBER (Doris has no
   // LIMIT N BY).
   const query = `
@@ -278,8 +277,7 @@ export async function getRelevantObservations(
         o.tool_call_names,
         o.usage_pricing_tier_id,
         o.usage_pricing_tier_name,
-        o.metadata_names AS metadata_names,
-        o.metadata_values AS metadata_values,
+        to_json(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -301,8 +299,7 @@ export async function getRelevantObservations(
   `;
 
   type RawObsRow = Omit<SpanRecord, "metadata"> & {
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   };
   const rows = await queryDoris<RawObsRow>({
     query,
@@ -317,10 +314,11 @@ export async function getRelevantObservations(
     },
   });
   return rows.map((row) => {
-    const { metadata_names, metadata_values, ...rest } = row;
+    const { metadata, ...rest } = row;
     return {
       ...rest,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     };
   });
 }
@@ -375,8 +373,7 @@ export async function getRelevantTraces(
         map() AS tool_definitions,
         [] AS tool_calls,
         [] AS tool_call_names,
-        o.metadata_names AS metadata_names,
-        o.metadata_values AS metadata_values,
+        to_json(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -398,8 +395,7 @@ export async function getRelevantTraces(
   `;
 
   type RawTraceRow = Omit<SpanRecord, "metadata"> & {
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   };
   const rows = await queryDoris<RawTraceRow>({
     query,
@@ -414,10 +410,11 @@ export async function getRelevantTraces(
     },
   });
   return rows.map((row) => {
-    const { metadata_names, metadata_values, ...rest } = row;
+    const { metadata, ...rest } = row;
     return {
       ...rest,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     };
   });
 }

@@ -8,7 +8,6 @@ import {
   dq,
   convertDorisTracesListToDomain,
   orderByToDorisSQL,
-  zipDorisMetadataArrays,
   type DateTimeFilter,
 } from "@langfuse/shared/src/server";
 import {
@@ -134,8 +133,7 @@ export const generateTracesForPublicApi = async ({
         t.input as input,
         t.output as output,
         t.session_id as session_id,
-        t.metadata_names as metadata_names,
-        t.metadata_values as metadata_values,
+        to_json(t.metadata) as metadata,
         t.user_id as user_id,
         t.${dq("release")} as ${dq("release")},
         t.version as version,
@@ -160,8 +158,7 @@ export const generateTracesForPublicApi = async ({
 
   const rawResult = await queryDoris<
     Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names: unknown;
-      metadata_values: unknown;
+      metadata: unknown;
       observations: string[];
       scores: string[];
       totalCost: number;
@@ -187,9 +184,10 @@ export const generateTracesForPublicApi = async ({
   });
 
   const result = rawResult.map(
-    ({ metadata_names, metadata_values, ...trace }) => ({
+    ({ metadata, ...trace }) => ({
       ...trace,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     }),
   );
 

@@ -8,7 +8,6 @@ import {
   convertObservation,
   convertDateToAnalyticsDateTime,
   dq,
-  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { type FilterState, observationsTableCols } from "@langfuse/shared";
 
@@ -52,8 +51,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.start_time,
       o.end_time,
       o.name,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.level,
       o.status_message,
       o.version,
@@ -105,8 +103,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
     fn: async (input) => {
       const result = await queryDoris<
         Omit<ObservationRecordReadType, "metadata"> & {
-          metadata_names: unknown;
-          metadata_values: unknown;
+          metadata: unknown;
         }
       >({
         query,
@@ -114,10 +111,13 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
         tags: input.tags,
       });
       return result.map((r) => {
-        const { metadata_names, metadata_values, ...rest } = r;
+        const { metadata, ...rest } = r;
         return convertObservation({
           ...rest,
-          metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+          metadata:
+            typeof metadata === "string"
+              ? JSON.parse(metadata)
+              : (metadata ?? {}),
         } as ObservationRecordReadType);
       });
     },

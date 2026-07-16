@@ -26,7 +26,6 @@ import {
 } from "../tableMappings";
 import { OrderByState } from "../../interfaces/orderBy";
 import { getTracesByIds } from "./traces";
-import { zipDorisMetadataArrays } from "../utils/dorisArrays";
 import {
   convertObservation,
   enrichObservationWithModelData,
@@ -159,7 +158,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
       level,
       status_message,
       version,
-      ${includeIO === true ? "input, output, metadata_names, metadata_values," : ""}
+      ${includeIO === true ? "input, output, to_json(metadata) AS metadata," : ""}
       provided_model_name,
       model_id AS internal_model_id,
       model_parameters,
@@ -204,16 +203,13 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
   });
 
   // Normalize Doris-returned string-encoded usage/cost details into the
-  // object shape the downstream converter expects, and zip
-  // metadata_names + metadata_values into the metadata Record.
+  // object shape the downstream converter expects, and parse the
+  // to_json(metadata) map projection into the metadata Record.
   records = rawRecords.map((r) => {
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata:
-        includeIO === true
-          ? zipDorisMetadataArrays(r.metadata_names, r.metadata_values)
-          : {},
+      metadata: includeIO === true ? r.metadata : {},
     };
   }) as ObservationRecordReadType[];
 
@@ -288,8 +284,7 @@ export const getObservationForTraceIdByName = async ({
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -345,7 +340,7 @@ export const getObservationForTraceIdByName = async ({
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -427,8 +422,7 @@ export const getObservationsById = async (
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -463,7 +457,7 @@ export const getObservationsById = async (
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -498,8 +492,7 @@ const getObservationByIdInternal = async ({
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -559,7 +552,7 @@ const getObservationByIdInternal = async ({
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -753,8 +746,7 @@ const getObservationsTableInternal = async <T>(
           AVG(COALESCE(CHAR_LENGTH(CAST(o.input AS STRING)), 0)) as avg_input_bytes,
           AVG(COALESCE(CHAR_LENGTH(CAST(o.output AS STRING)), 0)) as avg_output_bytes,
           AVG(
-            COALESCE(CHAR_LENGTH(CAST(o.metadata_names AS STRING)), 0) +
-            COALESCE(CHAR_LENGTH(CAST(o.metadata_values AS STRING)), 0)
+            COALESCE(CHAR_LENGTH(to_json(o.metadata)), 0)
           ) as avg_metadata_bytes
         `
         : `
@@ -797,8 +789,7 @@ const getObservationsTableInternal = async <T>(
       ${dorisSelect},
       o.input,
       o.output,
-      o.metadata_names,
-      o.metadata_values
+      to_json(o.metadata) AS metadata
     `
     : dorisSelect;
 
@@ -935,12 +926,10 @@ const getObservationsTableInternal = async <T>(
       unknown
     >;
     if (selectIOAndMetadata) {
-      preprocessed.metadata = zipDorisMetadataArrays(
-        preprocessed.metadata_names,
-        preprocessed.metadata_values,
-      );
-      delete preprocessed.metadata_names;
-      delete preprocessed.metadata_values;
+      preprocessed.metadata =
+        typeof preprocessed.metadata === "string"
+          ? JSON.parse(preprocessed.metadata)
+          : (preprocessed.metadata ?? {});
     }
     return preprocessed as T;
   });
@@ -1719,8 +1708,7 @@ export const getObservationsForBlobStorageExport = function (
         start_time,
         end_time,
         name,
-        metadata_names,
-        metadata_values,
+        to_json(metadata) AS metadata,
         level,
         status_message,
         version,
@@ -1789,8 +1777,8 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
         COALESCE(NULLIF(o.${dq("release")}, ''), t.${dq("release")}) as trace_release,
         COALESCE(o.tags, t.tags) as trace_tags,
         COALESCE(
-          element_at(o.metadata_values, array_position(o.metadata_names, '$posthog_session_id')),
-          element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id'))
+          o.metadata['$posthog_session_id'],
+          t.metadata['$posthog_session_id']
         ) as posthog_session_id
       FROM events_full o
       LEFT JOIN events_full t
@@ -1928,19 +1916,20 @@ export const getCostByEvaluatorIds = async (
 ): Promise<Array<{ evaluatorId: string; totalCost: number }>> => {
   if (evaluatorIds.length === 0) return [];
 
-  // events_full stores metadata as parallel metadata_names + metadata_values
+  // metadata is read via to_json(metadata) — the raw MAP text form does not
+  // escape inner quotes
   // arrays (no MAP), so the legacy metadata['key'] reads are rewritten as
   // element_at(values, array_position(names, key)).
   const query = `
       SELECT
-        element_at(metadata_values, array_position(metadata_names, 'job_configuration_id')) as evaluator_id,
+        metadata['job_configuration_id'] as evaluator_id,
         sum(COALESCE(total_cost, 0)) as total_cost
       FROM events_full
       WHERE project_id = {projectId: String}
-        AND element_at(metadata_values, array_position(metadata_names, 'job_configuration_id')) IN ({evaluatorIds: Array(String)})
+        AND metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
         AND type = 'GENERATION'
         AND start_time > DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-      GROUP BY element_at(metadata_values, array_position(metadata_names, 'job_configuration_id'))
+      GROUP BY metadata['job_configuration_id']
     `;
 
   const rows = await queryDoris<{

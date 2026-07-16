@@ -1868,8 +1868,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
         AVG(COALESCE(CHAR_LENGTH(CAST(t.input AS STRING)), 0)) as avg_input_bytes,
         AVG(COALESCE(CHAR_LENGTH(CAST(t.output AS STRING)), 0)) as avg_output_bytes,
         AVG(
-          COALESCE(CHAR_LENGTH(CAST(t.metadata_names AS STRING)), 0) +
-          COALESCE(CHAR_LENGTH(CAST(t.metadata_values AS STRING)), 0)
+          COALESCE(CHAR_LENGTH(to_json(t.metadata)), 0)
         ) as avg_metadata_bytes`;
       break;
     default:

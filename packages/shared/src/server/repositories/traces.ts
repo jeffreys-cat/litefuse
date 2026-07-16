@@ -54,7 +54,7 @@ const TRACES_SCALAR_SELECT = `
       bookmarked,
       ${dq("public")},
       tags,
-      metadata,
+      to_json(metadata) AS metadata,
       input_trim,
       output_trim,
       created_at,
@@ -1480,8 +1480,7 @@ export const getTracesForBlobStorageExport = function (
       name,
       environment,
       project_id,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       user_id,
       session_id,
       ${dq("release")},
@@ -1547,7 +1546,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
       t.${dq("release")} as ${dq("release")},
       t.version as version,
       t.tags as tags,
-      element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id')) as posthog_session_id,
+      t.metadata['$posthog_session_id'] as posthog_session_id,
       o.total_cost as total_cost,
       o.latency_milliseconds / 1000 as latency,
       o.observation_count as observation_count
@@ -1680,8 +1679,8 @@ export async function getAgentGraphData(params: {
             name,
             CAST(start_time AS STRING) AS start_time,
             CAST(end_time AS STRING) AS end_time,
-            element_at(metadata_values, array_position(metadata_names, 'langgraph_node')) AS node,
-            element_at(metadata_values, array_position(metadata_names, 'langgraph_step')) AS step
+            metadata['langgraph_node'] AS node,
+            metadata['langgraph_step'] AS step
           FROM
             events_full
           WHERE

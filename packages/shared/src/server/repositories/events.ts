@@ -42,7 +42,6 @@ import { UiColumnMappings } from "../../tableDefinitions";
 import { eventsTableCols } from "../../eventsTable";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import { zipDorisMetadataArrays } from "../utils/dorisArrays";
 import { convertDateToAnalyticsDateTime, dq } from "./analytics";
 import {
   dorisSearchCondition,
@@ -453,7 +452,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const dorisSelectString = selectIOAndMetadata
     ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, o.metadata_names, o.metadata_values` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, to_json(o.metadata) AS metadata` : ""}
     `
     : dorisSelect;
 
@@ -529,12 +528,10 @@ async function getObservationsFromEventsTableInternal<T>(
   if (selectIOAndMetadata && opts.select === "rows") {
     return res.map((r) => {
       const row = r as Record<string, unknown>;
-      row.metadata = zipDorisMetadataArrays(
-        row.metadata_names,
-        row.metadata_values,
-      );
-      delete row.metadata_names;
-      delete row.metadata_values;
+      row.metadata =
+        typeof row.metadata === "string"
+          ? JSON.parse(row.metadata)
+          : (row.metadata ?? {});
       return row as T;
     });
   }
@@ -695,13 +692,50 @@ export const getTraceByIdFromEventsTable = async ({
   timestamp?: Date;
   renderingProps?: RenderingProps;
 }) => {
-  const query = `
+  // Scalar point read: every selected field is a trace scalar on
+  // traces_scalar (one row per trace — migration 0039; (project_id, id) is
+  // the unique-key prefix and id the distribution column, so this is a
+  // single-tablet lookup). traces_scalar's metadata is a native Map — no
+  // metadata_names/values zip — and `name` is the explicit trace name,
+  // matching what getTraceById (the migrated sibling in traces.ts) returns.
+  // Falls back to the events_full root row when the scalar row is missing
+  // (a trace still in flight — OTel exports the root span last — or data
+  // predating the dual-write), mirroring getTraceById's fallback.
+  const scalarQuery = `
+    SELECT
+      id,
+      name,
+      user_id,
+      to_json(metadata) AS metadata,
+      ${dq("release")},
+      version,
+      project_id,
+      environment,
+      ${dq("public")},
+      bookmarked,
+      tags,
+      session_id,
+      start_time AS \`timestamp\`,
+      created_at,
+      updated_at,
+      0 as is_deleted
+    FROM traces_scalar
+    WHERE project_id = {projectId: String}
+    AND id = {traceId: String}
+    ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
+    -- start_time is part of the unique key: a root span re-delivered with a
+    -- corrected start_time yields a SECOND scalar row for the same trace, so
+    -- pick the newest deterministically (mirrors the fallback's ordering).
+    ORDER BY start_time DESC
+    LIMIT 1
+  `;
+
+  const fallbackQuery = `
     SELECT
       t.trace_id AS id,
       t.name,
       t.user_id,
-      t.metadata_names,
-      t.metadata_values,
+      to_json(t.metadata) AS metadata,
       t.${dq("release")},
       t.version,
       t.project_id,
@@ -723,20 +757,21 @@ export const getTraceByIdFromEventsTable = async ({
     LIMIT 1
   `;
 
-  const rawRecords = await queryDoris<
+  const params = {
+    projectId,
+    traceId,
+    ...(timestamp
+      ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+      : {}),
+  };
+
+  let rawRecords = await queryDoris<
     Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names?: unknown;
-      metadata_values?: unknown;
+      metadata?: unknown;
     }
   >({
-    query,
-    params: {
-      projectId,
-      traceId,
-      ...(timestamp
-        ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
-        : {}),
-    },
+    query: scalarQuery,
+    params,
     tags: {
       feature: "tracing",
       type: "trace",
@@ -744,10 +779,22 @@ export const getTraceByIdFromEventsTable = async ({
       projectId,
     },
   });
+  if (rawRecords.length === 0) {
+    rawRecords = await queryDoris({
+      query: fallbackQuery,
+      params,
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "byId",
+        projectId,
+      },
+    });
+  }
 
   const records: TraceRecordReadType[] = rawRecords.map((r) => ({
     ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+    metadata: r.metadata,
   })) as TraceRecordReadType[];
 
   const res = records.map((record) =>
@@ -763,18 +810,6 @@ export const getTraceByIdFromEventsTable = async ({
       },
     );
   });
-  if (rawRecords.length === 0) {
-    rawRecords = await queryDoris({
-      query: fallbackQuery,
-      params,
-      tags: {
-        feature: "tracing",
-        type: "trace",
-        kind: "byId",
-        projectId,
-      },
-    });
-  }
 
   return res.shift();
 };
@@ -886,8 +921,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.output,
       o.input_trim,
       o.output_trim,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
@@ -1003,13 +1037,11 @@ async function getObservationsRowsFromDoris<T>(
   });
   return res.map((r) => {
     const row = r as Record<string, unknown>;
-    if ("metadata_names" in row || "metadata_values" in row) {
-      row.metadata = zipDorisMetadataArrays(
-        row.metadata_names,
-        row.metadata_values,
-      );
-      delete row.metadata_names;
-      delete row.metadata_values;
+    if ("metadata" in row) {
+      row.metadata =
+        typeof row.metadata === "string"
+          ? JSON.parse(row.metadata)
+          : (row.metadata ?? {});
     }
     return row as T;
   });
@@ -2317,7 +2349,7 @@ export async function getAgentGraphDataFromEventsTable(params: {
 }) {
   const { projectId, traceId, chMinStartTime, chMaxStartTime } = params;
 
-  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
+  // metadata is read via to_json(metadata) — raw MAP text does not escape inner quotes.
   const query = `
     SELECT
       e.span_id AS id,
@@ -2326,8 +2358,8 @@ export async function getAgentGraphDataFromEventsTable(params: {
       e.name,
       e.start_time,
       e.end_time,
-      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_node')) AS node,
-      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_step')) AS step
+      e.metadata['langgraph_node'] AS node,
+      e.metadata['langgraph_step'] AS step
     FROM events_full e
     WHERE
       e.project_id = {projectId: String}
@@ -2454,8 +2486,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
-      e.metadata_names,
-      e.metadata_values
+      to_json(e.metadata) AS metadata
     FROM events_full e
     WHERE e.project_id = {projectId: String}
       AND e.span_id IN ({observationIds: Array(String)})
@@ -2468,8 +2499,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
     id: string;
     input: string | null;
     output: string | null;
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   }>({
     query,
     params: {
@@ -2498,7 +2528,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
         ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
         : null,
     metadata: parseMetadataCHRecordToDomain(
-      zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      typeof r.metadata === "string" ? JSON.parse(r.metadata) : (r.metadata ?? {}),
     ),
   }));
 };
@@ -2518,6 +2548,36 @@ const usersFromEventsTableColumnDefinitionsForDoris: UiColumnMappings = [
   },
 ];
 
+// traces_scalar (one row per trace — migration 0039) exposed under the
+// `o`-prefixed column names the Users-page filter mappings reference
+// (o.start_time via the "Timestamp" compat mapping, o.user_id, o.trace_name,
+// o.environment, …). The per-user queries below are trace-grained — user_id
+// is a root-span scalar — so they read this table instead of scanning
+// events_full. traces_scalar stores NULL where events_full root rows store ''
+// (name/user_id/session_id/release/version) — COALESCE back to '' so negative
+// filter operators keep matching unset rows (raw NULL predicates silently
+// drop them); "has a user" is therefore `user_id != ''`, matching the old
+// events_full guard.
+const TRACES_SCALAR_AS_O_FOR_USERS = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS name,
+        COALESCE(name, '') AS trace_name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        environment,
+        tags,
+        metadata,
+        start_time,
+        COALESCE(${dq("release")}, '') AS ${dq("release")},
+        COALESCE(version, '') AS version,
+        created_at,
+        updated_at,
+        event_ts
+      FROM traces_scalar
+    ) o`;
+
 /**
  * Get users with trace counts from events table with pagination
  * Similar to getTracesGroupedByUsers but queries the events table
@@ -2533,6 +2593,9 @@ export const getUsersFromEventsTable = async (
     tracesPrefix: "o",
   });
 
+  // usersFromEventsTable… (not the plain events defs): includes the
+  // "Timestamp" → o.start_time compat mapping the Users-page filter state
+  // sends, matching what the count/metrics siblings already accepted.
   observationsFilter.push(
     ...createDorisFilterFromFilterState(
       filter,
@@ -2578,36 +2641,6 @@ export const getUsersFromEventsTable = async (
   });
 };
 
-// traces_scalar (one row per trace — migration 0039) exposed under the
-// `o`-prefixed column names the Users-page filter mappings reference
-// (o.start_time via the "Timestamp" compat mapping, o.user_id, o.trace_name,
-// o.environment, …). The per-user queries below are trace-grained — user_id
-// is a root-span scalar — so they read this table instead of scanning
-// events_full. traces_scalar stores NULL where events_full root rows store ''
-// (name/user_id/session_id/release/version) — COALESCE back to '' so negative
-// filter operators keep matching unset rows (raw NULL predicates silently
-// drop them); "has a user" is therefore `user_id != ''`, matching the old
-// events_full guard.
-const TRACES_SCALAR_AS_O_FOR_USERS = `(
-      SELECT
-        project_id,
-        id AS trace_id,
-        COALESCE(name, '') AS name,
-        COALESCE(name, '') AS trace_name,
-        COALESCE(user_id, '') AS user_id,
-        COALESCE(session_id, '') AS session_id,
-        environment,
-        tags,
-        metadata,
-        start_time,
-        COALESCE(${dq("release")}, '') AS ${dq("release")},
-        COALESCE(version, '') AS version,
-        created_at,
-        updated_at,
-        event_ts
-      FROM traces_scalar
-    ) o`;
-
 /**
  * Get total user count from events table
  */
@@ -2620,9 +2653,6 @@ export const getUsersCountFromEventsTable = async (
     tracesPrefix: "o",
   });
 
-  // usersFromEventsTable… (not the plain events defs): includes the
-  // "Timestamp" → o.start_time compat mapping the Users-page filter state
-  // sends, matching what the count/metrics siblings already accepted.
   observationsFilter.push(
     ...createDorisFilterFromFilterState(
       filter,
@@ -2851,8 +2881,7 @@ export const getEventsForBlobStorageExport = function (
       if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.input,
       o.output,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.start_time,
       o.end_time,
       o.provided_model_name as model,
@@ -2916,8 +2945,7 @@ export const getEventsForAnalyticsIntegrations = async function* (
       o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.usage_details,
       o.cost_details,
       o.provided_model_name,
@@ -2945,10 +2973,10 @@ export const getEventsForAnalyticsIntegrations = async function* (
 
   const baseUrl = env.NEXTAUTH_URL?.replace("/api/auth", "");
   for await (const record of records) {
-    const metadata = zipDorisMetadataArrays(
-      record.metadata_names,
-      record.metadata_values,
-    );
+    const metadata =
+      typeof record.metadata === "string"
+        ? JSON.parse(record.metadata)
+        : (record.metadata ?? {});
     yield {
       timestamp: record.start_time,
       langfuse_observation_name: record.name,
@@ -3066,19 +3094,19 @@ export const getAvgCostByEvaluatorIds = async (
 > => {
   if (evaluatorIds.length === 0) return [];
 
-  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
+  // metadata is read via to_json(metadata) — raw MAP text does not escape inner quotes.
   const query = `
     SELECT
-      element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) as evaluator_id,
+      o.metadata['job_configuration_id'] as evaluator_id,
       avg(o.total_cost) as avg_cost,
       count(*) as execution_count
     FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.type = 'GENERATION'
-    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IS NOT NULL
-    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IN ({evaluatorIds: Array(String)})
+    AND o.metadata['job_configuration_id'] IS NOT NULL
+    AND o.metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
     AND o.start_time >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 7 DAY)
-    GROUP BY element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id'))
+    GROUP BY o.metadata['job_configuration_id']
   `;
 
   const rows = await queryDoris<{
@@ -3149,8 +3177,7 @@ type DorisAnalyticsObservationRecord = {
   model: string | null;
   prompt_name: string | null;
   prompt_version: number | null;
-  metadata_names: unknown;
-  metadata_values: unknown;
+  metadata: unknown;
   usage_details: Record<string, number>;
   cost_details: Record<string, number>;
   provided_model_name: string | null;

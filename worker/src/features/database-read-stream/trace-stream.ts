@@ -14,7 +14,6 @@ import {
   dorisSearchCondition,
   parseDorisUTCDateTimeFormat,
   StringFilter,
-  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { Readable } from "stream";
 import { env } from "../../env";
@@ -115,7 +114,7 @@ export const getTraceStream = async (props: {
   // params resolve in the events_full WHERE because we don't alias the
   // trace_scalars CTE inputs.
   //
-  // metadata is rebuilt at output time from metadata_names / metadata_values
+  // metadata is read via to_json(metadata) — raw MAP text does not escape inner quotes
   // parallel arrays (events_full layout) into a Doris MAP that downstream
   // export consumers can serialize.
   const query = `
@@ -173,8 +172,7 @@ export const getTraceStream = async (props: {
         tags,
         input,
         output,
-        metadata_names,
-        metadata_values
+        metadata
       FROM (
         SELECT
           trace_id,
@@ -182,8 +180,7 @@ export const getTraceStream = async (props: {
           tags,
           input,
           output,
-          metadata_names,
-          metadata_values,
+          metadata,
           ROW_NUMBER() OVER (
             PARTITION BY trace_id, project_id
             ORDER BY event_ts DESC
@@ -209,8 +206,7 @@ export const getTraceStream = async (props: {
       s.\`public\` AS \`public\`,
       r.input AS input,
       r.output AS output,
-      r.metadata_names AS metadata_names,
-      r.metadata_values AS metadata_values,
+      to_json(r.metadata) AS metadata,
       sa.scores_avg AS scores_avg,
       sa.score_categories AS score_categories,
       sa.score_categories_tuples AS score_categories_tuples
@@ -239,8 +235,7 @@ export const getTraceStream = async (props: {
     output: unknown;
     // events_full layout: metadata is split across two parallel arrays;
     // we zip them in the processor below for export.
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
     scores_avg: string | undefined;
     score_categories: string | undefined;
     score_categories_tuples: string | undefined;
@@ -315,10 +310,10 @@ export const getTraceStream = async (props: {
           output: bufferedRow.output,
           // Rebuild metadata Map from parallel arrays for downstream export
           // consumers that expect Record<string, string>.
-          metadata: zipDorisMetadataArrays(
-            bufferedRow.metadata_names,
-            bufferedRow.metadata_values,
-          ),
+          metadata:
+            typeof bufferedRow.metadata === "string"
+              ? JSON.parse(bufferedRow.metadata)
+              : (bufferedRow.metadata ?? {}),
           scores: outputScores,
           comments: traceComments,
         },
