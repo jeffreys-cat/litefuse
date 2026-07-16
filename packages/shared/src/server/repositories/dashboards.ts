@@ -11,6 +11,31 @@ import { dashboardColumnDefinitions } from "../tableMappings";
 
 export type DateTrunc = "month" | "week" | "day" | "hour" | "minute";
 
+// traces_scalar (one row per trace — migration 0039) as the trace-filter JOIN
+// target, replacing the `is_root = 1` events_full scans. Exposed under
+// events_full-compatible column names (id → trace_id) so join keys and the
+// dashboard filter mappings (t.user_id, t.name, t.tags, t.`timestamp`, …)
+// apply unchanged. traces_scalar stores NULL where events_full root rows
+// stored '' — COALESCE back to '' preserves the previous filter semantics.
+// Doris prunes unreferenced derived-table columns, so unused fields are free.
+const TRACES_SCALAR_JOIN_TARGET = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        COALESCE(\`release\`, '') AS \`release\`,
+        COALESCE(version, '') AS version,
+        environment,
+        tags,
+        start_time,
+        start_time AS \`timestamp\`,
+        bookmarked,
+        \`public\`
+      FROM traces_scalar
+    )`;
+
 const extractEnvironmentFilterFromFilters = (
   filter: FilterState,
 ): { envFilter: FilterState; remainingFilters: FilterState } => {
@@ -66,7 +91,7 @@ export const getScoreAggregate = async (
         s.source,
         s.data_type
       FROM scores s
-      ${hasTraceFilter ? `JOIN events_full t ON t.trace_id = s.trace_id AND t.project_id = s.project_id AND t.is_root = 1` : ""}
+      ${hasTraceFilter ? `JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON t.trace_id = s.trace_id AND t.project_id = s.project_id` : ""}
       WHERE s.project_id = {projectId: String}
       ${dorisFilterApplied.query ? `AND ${dorisFilterApplied.query}` : ""}
       ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -143,13 +168,13 @@ export const getObservationCostByTypeByTime = async (
           collect_list(CONCAT(cost_key, ':', CAST(cost_sum AS STRING))) AS costs
       FROM (
           SELECT 
-              ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "start_time", "start_time")},
+              ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "o.start_time", "start_time")},
               keys_exploded.cost_key as cost_key, 
               SUM(values_exploded.cost_value) AS cost_sum
           FROM events_full o
           LATERAL VIEW posexplode(map_keys(cost_details)) keys_exploded AS key_pos, cost_key
           LATERAL VIEW posexplode(map_values(cost_details)) values_exploded AS value_pos, cost_value
-          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.is_root = 1` : ""}
+          ${tracesFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -274,13 +299,13 @@ export const getObservationUsageByTypeByTime = async (
           collect_list(CONCAT(usage_key, ':', CAST(usage_sum AS STRING))) AS usages
       FROM (
           SELECT 
-              ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "start_time", "start_time")},
+              ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "o.start_time", "start_time")},
               keys_exploded.usage_key as usage_key, 
               SUM(values_exploded.usage_value) AS usage_sum
           FROM events_full o
           LATERAL VIEW posexplode(map_keys(usage_details)) keys_exploded AS key_pos, usage_key
           LATERAL VIEW posexplode(map_values(usage_details)) values_exploded AS value_pos, usage_value
-          ${tracesFilter ? `LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.is_root = 1` : ""}
+          ${tracesFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}

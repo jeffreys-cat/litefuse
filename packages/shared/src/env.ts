@@ -320,11 +320,6 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
 
-  // Legacy events table (transitional deployment)
-  LITEFUSE_LEGACY_EVENTS_TABLE_EXISTS: z
-    .enum(["true", "false"])
-    .default("true"),
-
   // Ingestion Masking (EE feature)
   LITEFUSE_INGESTION_MASKING_CALLBACK_URL: z.string().url().optional(),
   LITEFUSE_INGESTION_MASKING_CALLBACK_TIMEOUT_MS: z.coerce

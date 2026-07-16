@@ -13,7 +13,12 @@ import {
   getValidAggregationsForMeasureType,
 } from "../types";
 import { getViewDeclaration } from "@/src/features/query/dataModel";
-import { viewDeclarationsDoris } from "@/src/features/query/dataModelDoris";
+import {
+  viewDeclarationsDoris,
+  RELATION_SQL_PROJECT_ID,
+  RELATION_SQL_FROM_TIMESTAMP,
+  RELATION_SQL_TO_TIMESTAMP,
+} from "@/src/features/query/dataModelDoris";
 import {
   FilterList,
   createDorisFilterFromFilterState,
@@ -1496,6 +1501,25 @@ export class QueryBuilder {
   }
 
   /**
+   * Qualify bare `metadata['key']` map subscripts with the view's base-table
+   * alias. Used for base tables that store metadata as a native Map
+   * (traces_scalar) — the subscript syntax is valid Doris there, only the
+   * table alias is missing. Explicitly qualified references keep their prefix.
+   */
+  private qualifyMetadataMapAccess(sql: string, alias: string): string {
+    return sql.replace(/(\w+\.)?\bmetadata\s*\[/g, (match, prefix) =>
+      prefix ? match : `${alias}.metadata[`,
+    );
+  }
+
+  /**
+   * Doris DateTime(3) literal in UTC — matches DateTimeFilter's formatting.
+   */
+  private toDorisDateTime(value: Date): string {
+    return value.toISOString().replace("T", " ").replace("Z", "");
+  }
+
+  /**
    * Convert SQL functions to Doris equivalents
    */
   private convertSqlFunctionsToDoris(sql: string): string {
@@ -1608,7 +1632,10 @@ export class QueryBuilder {
 
       let select: string;
       let queryPrefix: string = this.tableAlias(view);
-      let tableName: string = actualTableName;
+      // The Doris filter factory validates tableName against the schema
+      // allowlist; the base table may be one that is not allowlisted
+      // (traces_scalar), so base-table filters register under the view alias.
+      let tableName: string = this.tableAlias(view);
       let type: string;
       let emptyEqualsNull: boolean | undefined;
 
@@ -1624,6 +1651,11 @@ export class QueryBuilder {
         if (dimension.relationTable) {
           tableName = dimension.relationTable;
           queryPrefix = dimension.relationTable;
+        }
+        // Expression selects (coalesce(...), qualified columns) embed their
+        // own table alias — a "<prefix>." prepend would produce invalid SQL.
+        if (select.includes("(") || select.includes(".")) {
+          queryPrefix = "";
         }
       } else if (filter.column === view.timeDimension) {
         select = view.timeDimension;
@@ -1763,6 +1795,7 @@ export class QueryBuilder {
     view: ViewDeclarationType,
     filterList: FilterList,
     query: QueryType,
+    projectId: string,
   ) {
     const relationJoins = [];
     for (const relationTableName of relationTables) {
@@ -1773,6 +1806,30 @@ export class QueryBuilder {
       }
 
       const relation = view.tableRelations[relationTableName];
+
+      // Derived-table relations (parenthesized SELECT, e.g. the
+      // trace_metrics_agg rewrite-shaped aggregate) carry their own bounds via
+      // the RELATION_SQL_* tokens: project id and query window are baked into
+      // the subquery. No outer time filters are added — the subquery exposes
+      // no raw time column, and rewrite-compatible bounds must stay inside in
+      // day-truncated form.
+      if (relation.name.trimStart().startsWith("(")) {
+        const derivedSql = relation.name
+          .replaceAll(RELATION_SQL_PROJECT_ID, projectId.replace(/'/g, "''"))
+          .replaceAll(
+            RELATION_SQL_FROM_TIMESTAMP,
+            this.toDorisDateTime(new Date(query.fromTimestamp)),
+          )
+          .replaceAll(
+            RELATION_SQL_TO_TIMESTAMP,
+            this.toDorisDateTime(new Date(query.toTimestamp)),
+          );
+        relationJoins.push(
+          `LEFT JOIN ${derivedSql} AS ${relationTableName} ${relation.joinConditionSql}`,
+        );
+        continue;
+      }
+
       const aliasClause =
         relation.name !== relationTableName ? ` AS ${relationTableName}` : "";
       let joinStatement = `LEFT JOIN ${relation.name}${aliasClause} ${relation.joinConditionSql}`;
@@ -1914,6 +1971,7 @@ export class QueryBuilder {
         view,
         filterList,
         query,
+        projectId,
       );
       fromClause += ` ${relationJoins.join(" ")}`;
     }
@@ -1936,11 +1994,15 @@ export class QueryBuilder {
     // Rewrite metadata['key'] style access (familiar from langfuse v3 CH)
     // to Doris's element_at(values, array_position(names, key)) idiom so
     // user-written widget SQL keeps working without per-key Doris knowledge.
+    // Other base tables (traces_scalar) store metadata as a native Map — the
+    // subscript syntax stays; only bare references get the alias prefix.
     if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
-      const rewritten = this.rewriteEventsFullMetadataAccess(
-        query.rawSqlFilter.trim(),
-        this.tableAlias(view),
-      );
+      const trimmed = query.rawSqlFilter.trim();
+      const alias = this.tableAlias(view);
+      const rewritten =
+        this.actualTableName(view) === "events_full"
+          ? this.rewriteEventsFullMetadataAccess(trimmed, alias)
+          : this.qualifyMetadataMapAccess(trimmed, alias);
       fromClause += ` AND (${rewritten})`;
     }
 

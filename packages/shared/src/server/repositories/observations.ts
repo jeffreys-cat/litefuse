@@ -1158,12 +1158,22 @@ export const getCostForTraces = async (
   timestamp: Date,
   traceIds: string[],
 ) => {
+  // Two-level trace_metrics_agg rewrite shape (sync MV, migration 0040): the
+  // inner scan is expression-identical to the MV (SUM(total_cost), key-column
+  // predicates only — project/trace/day) so Doris rewrites it onto the
+  // rollup; the outer SUM folds the per-trace rows. The time bound is
+  // day-truncated to stay answerable by the rollup's day key — a superset of
+  // the old row-level DATE_SUB bound (the IN-list already pins the traces).
   const query = `
         SELECT sum(total_cost) as total_cost
-        FROM events_full o
-        WHERE o.project_id = {projectId: String}
-        AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.start_time >= DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})
+        FROM (
+          SELECT trace_id, SUM(total_cost) AS total_cost
+          FROM events_full
+          WHERE project_id = {projectId: String}
+          AND trace_id IN ({traceIds: Array(String)})
+          AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')
+          GROUP BY project_id, trace_id
+        ) per_trace
       `;
 
   const res = await queryDoris<{ total_cost: string }>({
@@ -1462,16 +1472,24 @@ export const getLatencyAndTotalCostForObservationsByTraces = async (
   traceIds: string[],
   timestamp?: Date,
 ) => {
+  // trace_metrics_agg rewrite shape (sync MV, migration 0040): SUM/MIN/MAX
+  // are expression-identical to the MV columns (no COALESCE inside SUM — a
+  // NULL sum maps to 0 in the JS Number() conversion below, same output as
+  // the old COALESCE) and predicates only reference MV key expressions, so
+  // Doris rewrites the scan onto the rollup. milliseconds_diff is computed on
+  // top of the rolled-up MIN/MAX, mirroring the traces-list latency formula.
+  // The time bound is day-truncated (rollup's day key) — a superset of the
+  // old row-level bound; the IN-list already pins the traces.
   const query = `
       SELECT
           trace_id,
-          sum(COALESCE(total_cost, 0)) AS total_cost,
-          milliseconds_diff(max(end_time), min(start_time)) AS latency_ms
+          SUM(total_cost) AS total_cost,
+          milliseconds_diff(MAX(end_time), MIN(start_time)) AS latency_ms
       FROM events_full
       WHERE project_id = {projectId: String}
       AND trace_id IN ({traceIds: Array(String)})
-      ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-      GROUP BY trace_id
+      ${timestamp ? `AND date_trunc(start_time, 'day') >= date_trunc({timestamp: DateTime}, 'day')` : ""}
+      GROUP BY project_id, trace_id
     `;
   const rows = await queryDoris<{
     trace_id: string;

@@ -12,11 +12,7 @@ import {
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
-import {
-  StringFilter as DorisStringFilter,
-  StringOptionsFilter as DorisStringOptionsFilter,
-  DateTimeFilter as DorisDateTimeFilter,
-} from "../queries/doris-sql/doris-filter";
+import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 
 type SessionEventsBaseReturnType = {
   session_id: string;
@@ -49,19 +45,21 @@ export const getSessionTracesFromEvents = async (props: {
   projectId: string;
   sessionId: string;
 }) => {
-  // Reads synthetic trace spans (is_root = 1) from events_full.
+  // Reads traces_scalar (one row per trace — migration 0039, idx_session_id)
+  // instead of an is_root = 1 events_full scan. Deletion is physical on
+  // traces_scalar (deleteTraces removes the row), so the old is_deleted = 0
+  // predicate has no counterpart here. `name` is the explicit trace name
+  // (scalar name ← trace_name), matching what the migrated traces list shows.
   const query = `
     SELECT
-      trace_id AS id,
-      name,
+      id,
+      COALESCE(name, '') AS name,
       start_time AS \`timestamp\`,
       environment,
-      user_id
-    FROM events_full t
+      COALESCE(user_id, '') AS user_id
+    FROM traces_scalar t
     WHERE t.session_id = {sessionId: String}
       AND t.project_id = {projectId: String}
-      AND t.is_root = 1
-      AND t.is_deleted = 0
     ORDER BY start_time ASC
   `;
 
@@ -176,10 +174,6 @@ const getSessionsTableFromEventsGeneric = async <T>(
       (f.operator === ">=" || f.operator === ">"),
   ) as DorisDateTimeFilter | undefined;
 
-  const sessionIdFilter = sessionFilters.find(
-    (f) => f instanceof DorisStringOptionsFilter && f.field === "session_id",
-  ) as DorisStringOptionsFilter | undefined;
-
   // Build the base query with Doris SQL.
   let sqlSelect: string;
   switch (select) {
@@ -213,17 +207,43 @@ const getSessionsTableFromEventsGeneric = async <T>(
     ? convertDateToAnalyticsDateTime(traceTimestampFilter.value)
     : null;
 
+  // One row per trace from traces_scalar (migration 0039) under the
+  // events_full-compatible column names the session filter/orderBy mappings
+  // reference — instead of an is_root = 1 events_full scan. traces_scalar
+  // stores NULL where root rows stored '' (user_id/session_id): COALESCE back
+  // to '' so the previous semantics hold — sessionless traces still group
+  // under the '' session (the old IS NOT NULL passed '' rows) and the
+  // user_ids collect_set's "!= ''" guard keeps excluding them.
   const query = `
     SELECT ${sqlSelect}
-    FROM events_full t
+    FROM (
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(session_id, '') AS session_id,
+        COALESCE(user_id, '') AS user_id,
+        start_time,
+        tags,
+        environment,
+        bookmarked,
+        event_ts
+      FROM traces_scalar
+    ) t
     WHERE t.project_id = {projectId: String}
-      AND t.is_root = 1
       AND t.session_id IS NOT NULL
       ${traceTimestampFilterClause}
       ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}
-    GROUP BY t.session_id
+    ${
+      // count(DISTINCT session_id) must aggregate over ALL rows — combined
+      // with GROUP BY session_id it returns one row per session, each
+      // count=1, and the caller reads rows[0] (i.e. the count was always 1).
+      // Ordering/pagination are meaningless for the single count row.
+      select === "count"
+        ? ""
+        : `GROUP BY t.session_id
     ${orderByToDorisSQL(orderBy ? [orderBy] : null, sessionColsForDoris)}
-    ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+    ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}`
+    }
   `;
 
   const res = await queryDoris<T>({

@@ -905,6 +905,34 @@ export async function getScoresUiTable<
   });
 }
 
+// traces_scalar (one row per trace — migration 0039) as the trace-decoration
+// JOIN target for the score queries below, replacing the `is_root = 1`
+// events_full scans. Exposed under events_full-compatible column names
+// (id → trace_id) so join keys and the shared filter mappings (t.user_id,
+// t.name, t.tags, …) apply unchanged. traces_scalar stores NULL where
+// events_full root rows stored '' (name/user_id/session_id/release/version) —
+// COALESCE back to '' so both projections and filters keep the previous
+// semantics. metadata is a native Map here (no metadata_names/values arrays).
+// Doris prunes unreferenced derived-table columns, so unused fields are free.
+const TRACES_SCALAR_JOIN_TARGET = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        COALESCE(${dq("release")}, '') AS ${dq("release")},
+        COALESCE(version, '') AS version,
+        environment,
+        tags,
+        metadata,
+        start_time,
+        start_time AS ${dq("timestamp")},
+        bookmarked,
+        ${dq("public")}
+      FROM traces_scalar
+    )`;
+
 const getScoresUiGeneric = async <T>(props: {
   select: "count" | "rows";
   projectId: string;
@@ -1033,8 +1061,8 @@ const getScoresUiGeneric = async <T>(props: {
             ${orderBySQL}
             ${limitSQL}
         ) sm
-        LEFT JOIN events_full t
-            ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id AND t.is_root = 1
+        LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t
+            ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id
         ${traceWhere}
         ORDER BY sm.timestamp DESC
       `;
@@ -1067,7 +1095,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${hasMetadataSQL}
             ${traceSelect}
         FROM scores s
-        ${performTracesJoin ? "LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.is_root = 1" : ""}
+        ${performTracesJoin ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
         ${flatWhere}
         ${orderBySQL}
         ${limitSQL}
@@ -1375,7 +1403,7 @@ export const getNumericScoreHistogram = async (
   const query = `
       SELECT s.value
       FROM scores s
-      ${traceFilter ? `LEFT JOIN events_full t ON s.trace_id = t.trace_id AND t.project_id = s.project_id AND t.is_root = 1` : ""}
+      ${traceFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
       WHERE s.project_id = {projectId: String}
       ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
       ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
@@ -1626,9 +1654,9 @@ export const getScoresForAnalyticsIntegrations = async function* (
         t.user_id as trace_user_id,
         t.${dq("release")} as trace_release,
         t.tags as trace_tags,
-        element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id')) as posthog_session_id
+        t.metadata['$posthog_session_id'] as posthog_session_id
       FROM scores s
-      LEFT JOIN events_full t ON s.trace_id = t.trace_id AND s.project_id = t.project_id AND t.is_root = 1
+      LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND s.project_id = t.project_id
       WHERE s.project_id = {projectId: String}
       AND t.project_id = {projectId: String}
       AND s.timestamp >= {minTimestamp: DateTime}

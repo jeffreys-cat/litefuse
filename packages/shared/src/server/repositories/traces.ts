@@ -512,12 +512,16 @@ const TRACES_SCALAR_AS_T = `(
       SELECT
         project_id,
         id AS trace_id,
-        name AS trace_name,
-        name,
-        user_id,
-        session_id,
+        COALESCE(name, '') AS trace_name,
+        COALESCE(name, '') AS name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
         environment,
         tags,
+        metadata,
+        bookmarked,
+        COALESCE(\`release\`, '') AS \`release\`,
+        COALESCE(version, '') AS version,
         start_time,
         created_at,
         event_ts
@@ -656,7 +660,7 @@ export const getTraceById = async ({
       FROM traces_scalar
       WHERE project_id = {projectId: String}
         AND id = {traceId: String}
-        ${timestamp ? `AND start_time_date = DATE({timestamp: DateTime})` : ""}
+        ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
         ${fromTimestamp ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
       LIMIT 1
     `,
@@ -1013,18 +1017,20 @@ export const getTracesIdentifierForSession = async (
   projectId: string,
   sessionId: string,
 ) => {
-  // Use window function to achieve LIMIT 1 BY semantics in Doris
+  // Trace scalars only → traces_scalar (one row per trace, idx_session_id —
+  // migration 0039). COALESCE keeps the previous events_full ''-for-unset
+  // convention (traces_scalar stores NULL there); name here is the explicit
+  // trace name, matching the migrated traces list.
   const query = `
     SELECT
-      trace_id AS id,
-      user_id,
-      name,
+      id,
+      COALESCE(user_id, '') AS user_id,
+      COALESCE(name, '') AS name,
       start_time AS timestamp,
       project_id,
       environment
-    FROM events_full
-    WHERE is_root = 1
-    AND project_id = {projectId: String}
+    FROM traces_scalar
+    WHERE project_id = {projectId: String}
     AND session_id = {sessionId: String}
     ORDER BY start_time ASC;
   `;
@@ -1109,9 +1115,8 @@ export const hasAnyTraceOlderThan = async (
 ) => {
   const query = `
     SELECT 1
-    FROM events_full
-    WHERE is_root = 1
-    AND project_id = {projectId: String}
+    FROM traces_scalar
+    WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime}
     LIMIT 1
   `;
@@ -1230,13 +1235,13 @@ export const deleteTracesByProjectId = async (
 };
 
 export const hasAnyUser = async (projectId: string) => {
+  // traces_scalar stores NULL where root rows stored '' — IS NOT NULL alone
+  // is the equivalent of the old "IS NOT NULL AND != ''" pair.
   const query = `
     SELECT 1
-    FROM events_full
-    WHERE is_root = 1
-    AND project_id = {projectId: String}
+    FROM traces_scalar
+    WHERE project_id = {projectId: String}
     AND user_id IS NOT NULL
-    AND user_id != ''
     LIMIT 1
   `;
 
@@ -1255,6 +1260,33 @@ export const hasAnyUser = async (projectId: string) => {
 
   return rows.length > 0;
 };
+
+// traces_scalar exposed under events_full-compatible column names for the
+// Users-page queries below — the same pattern as TRACES_SCALAR_AS_T above,
+// extended with the remaining trace-scalar filter columns the traces UI
+// mapping can reference (version/release/metadata/bookmarked/public). One row
+// per trace, so the former `is_root = 1` events_full scans become flat reads
+// of a table that also carries idx_user_id. NULL semantics: traces_scalar
+// stores NULL where events_full root rows store '' (user_id/session_id/
+// release/version), so "trace has a user" is `user_id IS NOT NULL` here (no
+// `!= ''` needed).
+const TRACES_SCALAR_AS_T_FOR_USERS = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS trace_name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        environment,
+        tags,
+        start_time,
+        bookmarked,
+        ${dq("public")},
+        COALESCE(${dq("release")}, '') AS ${dq("release")},
+        COALESCE(version, '') AS version,
+        metadata
+      FROM traces_scalar
+    ) t`;
 
 export const getTotalUserCount = async (
   projectId: string,
@@ -1279,11 +1311,9 @@ export const getTotalUserCount = async (
 
   const query = `
     SELECT COUNT(DISTINCT t.user_id) AS totalCount
-    FROM events_full t
-    WHERE t.is_root = 1
-    AND ${tracesFilterRes.query}
+    FROM ${TRACES_SCALAR_AS_T_FOR_USERS}
+    WHERE ${tracesFilterRes.query}
     ${search.query}
-    AND t.user_id IS NOT NULL
     AND t.user_id != ''
   `;
 
@@ -1337,80 +1367,58 @@ export const getUserMetrics = async (
     (f) => f.field === "start_time" && f.operator === ">=",
   ) as DorisDateTimeFilter | undefined;
 
-  // Phase C: is_root = 1 selects each trace's root span — one
-  // row per trace, with user_id denormalized by createEventRecord.
-  // The self-join produces (root span × all spans) groups so we can
-  // pick user_id from the root while summing observation totals.
+  // Per-trace metrics come from the trace_metrics_agg rewrite shape (sync MV,
+  // migration 0040): the CTE below aggregates events_full with EXACTLY the
+  // MV's expression shapes (SUM over the precomputed *_calculated columns /
+  // total_cost, SUM(CASE WHEN is_root = 0 …), grouped by project_id,
+  // trace_id) so Doris transparently rewrites the scan onto the rollup. The
+  // CTE must contain ONLY that rewrite-shaped scan — a JOIN in the same
+  // SELECT as the GROUP BY breaks the rewrite — so user_id and the
+  // trace-level scalars (start_time window, environment, filters) join in
+  // from traces_scalar afterwards.
+  //
+  // Semantics preserved from the previous root×spans self-join:
+  //   * usage: the *_calculated columns are the ingestion-precomputed
+  //     reductions of usage_details (input/output/total) the UI sums.
+  //   * obs_count counted DISTINCT span_id over ALL spans (root included);
+  //     observation_count is non-root only, and each joined traces_scalar row
+  //     stands for exactly one root span, so COUNT(*) adds the roots back.
+  //   * the day-truncated bound keeps the CTE answerable by the rollup (its
+  //     day key) — it is a superset of the old row-level DATE_SUB bound, and
+  //     the traces_scalar join discards the extra traces.
   const query = `
-      WITH stats as (
+      WITH per_trace_metrics as (
         SELECT
-            t.user_id as user_id,
-            MAX(t.environment) as environment,
-            count(distinct o.span_id) as obs_count,
-            sum(o.total_cost) as sum_total_cost,
-            max(t.start_time) as max_timestamp,
-            min(t.start_time) as min_timestamp,
-            count(distinct t.trace_id) as trace_count,
-            sum(if(MAP_CONTAINS_KEY(o.usage_details,'input'),o.usage_details['input'],0)) as input_usage,
-            sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'),o.usage_details['output'],0)) as output_usage,
-            sum(if(MAP_CONTAINS_KEY(o.usage_details,'total'),o.usage_details['total'],0)) as total_usage
-        FROM
-            (
-                SELECT
-                    o.project_id,
-                    o.trace_id,
-                    o.usage_details,
-                    o.total_cost,
-                    o.span_id
-                FROM
-                    events_full o
-                WHERE
-                    o.project_id = {projectId: String}
-                    ${timestampFilter ? `AND o.start_time >= DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})` : ""}
-                    AND o.trace_id in (
-                        SELECT
-                            distinct trace_id
-                        from
-                            events_full t
-                        where
-                            user_id IN ({userIds: Array(String) })
-                            AND project_id = {projectId: String}
-                            AND is_root = 1
-                            ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
-                    )
-            ) as o
-            JOIN (
-                SELECT
-                    t.trace_id,
-                    t.user_id,
-                    t.project_id,
-                    t.start_time,
-                    t.environment
-                FROM
-                    events_full t
-                WHERE
-                    t.user_id IN ({userIds: Array(String) })
-                    AND t.project_id = {projectId: String}
-                    AND t.is_root = 1
-                    ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
-            ) as t on t.trace_id = o.trace_id
-            and t.project_id = o.project_id
-        group by
-            t.user_id
+            project_id,
+            trace_id,
+            SUM(total_cost) as sum_total_cost,
+            SUM(input_tokens_calculated) as input_usage,
+            SUM(output_tokens_calculated) as output_usage,
+            SUM(total_tokens_calculated) as total_usage,
+            SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) as observation_count
+        FROM events_full
+        WHERE project_id = {projectId: String}
+        ${timestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')` : ""}
+        GROUP BY project_id, trace_id
       )
       SELECT
-          input_usage,
-          output_usage,
-          total_usage,
-          obs_count,
-          trace_count,
-          user_id,
-          environment,
-          sum_total_cost,
-          max_timestamp,
-          min_timestamp
-      FROM
-          stats
+          COALESCE(SUM(m.input_usage), 0) as input_usage,
+          COALESCE(SUM(m.output_usage), 0) as output_usage,
+          COALESCE(SUM(m.total_usage), 0) as total_usage,
+          COALESCE(SUM(m.observation_count), 0) + COUNT(*) as obs_count,
+          COUNT(DISTINCT t.trace_id) as trace_count,
+          t.user_id as user_id,
+          MAX(t.environment) as environment,
+          COALESCE(SUM(m.sum_total_cost), 0) as sum_total_cost,
+          MAX(t.start_time) as max_timestamp,
+          MIN(t.start_time) as min_timestamp
+      FROM ${TRACES_SCALAR_AS_T_FOR_USERS}
+      JOIN per_trace_metrics m
+        ON m.project_id = t.project_id
+        AND m.trace_id = t.trace_id
+      WHERE t.user_id IN ({userIds: Array(String) })
+      ${tracesFilterRes.query ? `AND ${tracesFilterRes.query}` : ""}
+      GROUP BY t.user_id
     `;
 
   const rows = await queryDoris<{
@@ -1599,11 +1607,12 @@ export const getTracesForAnalyticsIntegrations = async function* (
  * We expect at most 10s of calls per day, so this is acceptable.
  */
 export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
+  // id/project only → traces_scalar; id is its distribution column, so the
+  // old unindexed cross-project events_full scan becomes a targeted read.
   const query = `
-      SELECT trace_id AS id, project_id
-      FROM events_full
-      WHERE is_root = 1
-      AND trace_id IN ({traceIds: Array(String)})
+      SELECT id, project_id
+      FROM traces_scalar
+      WHERE id IN ({traceIds: Array(String)})
       ORDER BY event_ts DESC;`;
   const records = await queryDoris<{
     id: string;
@@ -1631,10 +1640,9 @@ export const traceWithSessionIdExists = async (
   sessionId: string,
 ) => {
   const query = `
-    SELECT trace_id AS id, project_id
-    FROM events_full
-    WHERE is_root = 1
-    AND session_id = {sessionId: String}
+    SELECT id, project_id
+    FROM traces_scalar
+    WHERE session_id = {sessionId: String}
     AND project_id = {projectId: String}
     LIMIT 1
   `;
@@ -1729,16 +1737,18 @@ export const getTraceCountsByProjectAndDay = async ({
   startDate: Date;
   endDate: Date;
 }) => {
+  // Pure trace counts → traces_scalar (start_time_date is the precomputed
+  // DATE(start_time) and the partition column). The sibling
+  // getTraceCountsByProjectInCreationInterval already reads traces_scalar.
   const query = `
     SELECT
       count(*) as count,
       project_id,
-      DATE(start_time) as date
-    FROM events_full
-    WHERE is_root = 1
-    AND start_time >= {startDate: DateTime}
+      start_time_date as date
+    FROM traces_scalar
+    WHERE start_time >= {startDate: DateTime}
     AND start_time < {endDate: DateTime}
-    GROUP BY project_id, DATE(start_time)
+    GROUP BY project_id, start_time_date
   `;
 
   const rows = await queryDoris<{

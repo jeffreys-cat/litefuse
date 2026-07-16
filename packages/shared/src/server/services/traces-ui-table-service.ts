@@ -206,6 +206,20 @@ const isIdFilterColumn = (column: string): boolean =>
   column === "traceId" ||
   column === "Trace ID";
 
+// An id filter the fast paths can EXPRESS: they all compile it to
+// `id IN (...)`, which only means "any of" (stringOptions) / "=" (string).
+// Any other operator (none of, contains, !=, …) must disqualify the fast path
+// so the base builder applies it through the filter factory — compiling it to
+// IN would silently ignore or INVERT the operator.
+const isInShapedIdFilter = (f: {
+  column: string;
+  type: string;
+  operator: string;
+}): boolean =>
+  isIdFilterColumn(f.column) &&
+  ((f.type === "stringOptions" && f.operator === "any of") ||
+    (f.type === "string" && f.operator === "="));
+
 const isTagsFilterColumn = (column: string): boolean =>
   column === "tags" || column === "Tags";
 
@@ -538,8 +552,7 @@ const canUseScalarListFastPath = (params: {
   return filter.every(
     (f) =>
       (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
-      ((f.type === "stringOptions" || f.type === "string") &&
-        isIdFilterColumn(f.column)) ||
+      isInShapedIdFilter(f) ||
       (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
       (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
       scalarFilterColumnTokens.has(f.column),
@@ -574,11 +587,7 @@ const buildScalarListWhere = (
     whereParts.push(`start_time ${toFilter.operator} {toTs: DateTime}`);
   }
 
-  const idFilter = filter.find(
-    (f) =>
-      isIdFilterColumn(f.column) &&
-      (f.type === "stringOptions" || f.type === "string"),
-  );
+  const idFilter = filter.find(isInShapedIdFilter);
   if (idFilter) {
     const ids =
       idFilter.type === "stringOptions"
@@ -719,6 +728,63 @@ const runScalarRowsFastPath = async (params: {
       projectId,
     },
   });
+};
+
+// Identifiers fast path: id/projectId/timestamp are all on traces_scalar, so
+// scalar-routable filters serve select:"identifiers" as the same flat scan as
+// the rows path with a three-column projection — previously identifiers ALWAYS
+// fell through to the base events_full builder (no fast path handled it).
+const runScalarIdentifiersFastPath = async (params: {
+  projectId: string;
+  filter: FilterState;
+  orderByDesc: boolean;
+  searchQuery?: string;
+  limit?: number;
+  page?: number;
+  tags?: Record<string, string>;
+}): Promise<Array<{ id: string; projectId: string; timestamp: string }>> => {
+  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
+    params;
+
+  const { whereParts, params: filterParams } = buildScalarListWhere(
+    filter,
+    searchQuery,
+  );
+  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
+
+  const order = orderByDesc ? "DESC" : "ASC";
+  const pagination =
+    limit !== undefined && page !== undefined
+      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
+      : "";
+  if (pagination) {
+    queryParams.limit = limit;
+    queryParams.offset = (limit ?? 0) * (page ?? 0);
+  }
+
+  const query = `
+    SELECT
+      id,
+      project_id AS projectId,
+      start_time AS ${dq("timestamp")}
+    FROM traces_scalar
+    WHERE ${whereParts.join(" AND ")}
+    ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
+    ${pagination}
+  `;
+
+  return await queryDoris<{ id: string; projectId: string; timestamp: string }>(
+    {
+      query,
+      params: queryParams,
+      tags: {
+        ...(tags ?? {}),
+        feature: "tracing",
+        type: "traces-table-identifiers",
+        projectId,
+      },
+    },
+  );
 };
 
 const runScalarCountFastPath = async (params: {
@@ -862,8 +928,7 @@ const canUseMetricListFastPath = (params: {
   return filter.every(
     (f) =>
       (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
-      ((f.type === "stringOptions" || f.type === "string") &&
-        isIdFilterColumn(f.column)) ||
+      isInShapedIdFilter(f) ||
       (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
       (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
       scalarFilterColumnTokens.has(f.column) ||
@@ -1100,8 +1165,7 @@ const canUseMvListFastPath = (params: {
   return filter.every(
     (f) =>
       (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
-      ((f.type === "stringOptions" || f.type === "string") &&
-        isIdFilterColumn(f.column)) ||
+      isInShapedIdFilter(f) ||
       (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
       (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
       mvHavingColumnTokens.has(f.column),
@@ -1142,11 +1206,7 @@ const buildMvListWhereHaving = (
     havingParts.push(`MIN(ts) ${toFilter.operator} {toTs: DateTime}`);
   }
 
-  const idFilter = filter.find(
-    (f) =>
-      isIdFilterColumn(f.column) &&
-      (f.type === "stringOptions" || f.type === "string"),
-  );
+  const idFilter = filter.find(isInShapedIdFilter);
   if (idFilter) {
     const ids =
       idFilter.type === "stringOptions"
@@ -1363,19 +1423,14 @@ const canUseAggMetricsFastPath = (params: {
   const { filter, orderBy, searchQuery } = params;
   if (searchQuery) return false;
   if (orderBy && orderBy.column !== "timestamp") return false;
-  const hasIdFilter = filter.some(
-    (f) =>
-      isIdFilterColumn(f.column) &&
-      (f.type === "stringOptions" || f.type === "string"),
-  );
+  const hasIdFilter = filter.some(isInShapedIdFilter);
   if (!hasIdFilter) return false;
   // Every filter must be one traces.all could have applied when producing the
   // id list (time/id/tags/metadata/scalar/metric columns).
   return filter.every(
     (f) =>
       (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
-      ((f.type === "stringOptions" || f.type === "string") &&
-        isIdFilterColumn(f.column)) ||
+      isInShapedIdFilter(f) ||
       (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
       (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
       scalarFilterColumnTokens.has(f.column) ||
@@ -1423,11 +1478,7 @@ const runAggMetricsFastPath = async (params: {
     havingParts.push(`MIN(start_time) ${toFilter.operator} {toTs: DateTime}`);
   }
 
-  const idFilter = filter.find(
-    (f) =>
-      isIdFilterColumn(f.column) &&
-      (f.type === "stringOptions" || f.type === "string"),
-  );
+  const idFilter = filter.find(isInShapedIdFilter);
   if (idFilter) {
     queryParams.traceIds =
       idFilter.type === "stringOptions"
@@ -1661,13 +1712,25 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
   }
 
-  // Flat traces_scalar path first (rows/count only): the list's columns are all
-  // root-pick scalars dual-written one-row-per-trace, so scalar-routable filters
-  // skip aggregation entirely. Metric-filtered lists take the agg⋈scalar path
-  // above; metrics queries use the agg/MV paths (all-span aggregates).
+  // Flat traces_scalar path first (rows/count/identifiers): the list's columns
+  // are all root-pick scalars dual-written one-row-per-trace, so scalar-routable
+  // filters skip aggregation entirely. Metric-filtered lists take the agg⋈scalar
+  // path above; metrics queries use the agg/MV paths (all-span aggregates).
   const scalarEligible =
-    (select === "rows" || select === "count") &&
+    (select === "rows" || select === "count" || select === "identifiers") &&
     canUseScalarListFastPath({ filter, orderBy, searchQuery, searchType });
+
+  if (select === "identifiers" && scalarEligible) {
+    return (await runScalarIdentifiersFastPath({
+      projectId,
+      filter,
+      orderByDesc,
+      limit,
+      page,
+      tags: props.tags,
+      searchQuery,
+    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
+  }
 
   if (select === "rows" && scalarEligible) {
     return (await runScalarRowsFastPath({
