@@ -414,9 +414,17 @@ const inputTraceSchema = z.object({
   projectId: z.string(),
   timestamp: z.date().nullish(),
   fromTimestamp: z.date().nullish(),
+  // Observation-scoped routes (observations.byId) send the OBSERVATION's
+  // startTime instead of the trace timestamp; picked up below as a derived
+  // partition-pruning lower bound for the access-check trace read.
+  startTime: z.date().nullish(),
   truncated: z.boolean().default(false),
   verbosity: z.enum(["compact", "truncated", "full"]).default("full"),
 });
+
+// A trace starts no later than any of its observations and, by the repo-wide
+// TRACE_TO_OBSERVATIONS_INTERVAL convention, no more than 2 days earlier.
+const TRACE_BEFORE_OBSERVATION_MAX_MS = 2 * 24 * 60 * 60 * 1000;
 
 const enforceTraceAccess = t.middleware(async (opts) => {
   const { ctx, next } = opts;
@@ -434,8 +442,20 @@ const enforceTraceAccess = t.middleware(async (opts) => {
   const traceId = result.data.traceId;
   const projectId = result.data.projectId;
   const timestamp = result.data.timestamp;
-  const fromTimestamp = result.data.fromTimestamp;
   const verbosity = result.data.verbosity;
+  // Partition-pruning hint for the access-check trace read: without any time
+  // bound the traces_scalar point lookup probes every day partition. When the
+  // caller only knows an observation's startTime, derive a safe lower bound —
+  // the trace started at or before the observation, at most the conventional
+  // 2-day interval earlier. (NOT usable as `timestamp`: that predicate is an
+  // exact-day match and a cross-midnight trace would 404 the access check.)
+  const fromTimestamp =
+    result.data.fromTimestamp ??
+    (result.data.startTime
+      ? new Date(
+          result.data.startTime.getTime() - TRACE_BEFORE_OBSERVATION_MAX_MS,
+        )
+      : undefined);
 
   const dorisTrace = await getTraceById({
     traceId,
