@@ -764,12 +764,12 @@ const getObservationsTableInternal = async <T>(
         o.provided_cost_details as provided_cost_details,
         o.cost_details as cost_details,
         o.level as level,
-        -- environment is guaranteed non-empty on every span row (OTel
-        -- extractEnvironment falls back to 'default', IngestionService applies
-        -- ?? "default", and the column itself is DEFAULT 'default'), so no
-        -- root-span fallback is needed — keeping this t-free lets the
-        -- unfiltered rows path skip the root self-join entirely.
-        o.environment as environment,
+        -- Span-first env with root fallback: 'default' is the unset sentinel
+        -- (extractEnvironment/IngestionService/column default all emit it), so
+        -- a span that resolved to 'default' inherits the trace's canonical env
+        -- from traces_scalar. The trailing o.environment covers a missing
+        -- scalar row (in-flight trace — root not yet ingested).
+        COALESCE(NULLIF(o.environment, 'default'), t.environment, o.environment) as environment,
         o.status_message as status_message,
         o.version as version,
         o.parent_span_id as parent_observation_id,
@@ -879,14 +879,17 @@ const getObservationsTableInternal = async <T>(
     observationsTableUiColumnDefinitionsForDoris,
   );
 
-  // Root-span LEFT JOIN (is_root = 1): only added when something references
-  // t.* — trace-column filters or a t-prefixed ORDER BY. Without them it is
-  // pure overhead (the projection is o.-only), and worse: events_full is
-  // DUPLICATE-model (no key dedup, migration 0037), so a re-delivered root
-  // span would fan out — duplicating rows and inflating count(*) for every
-  // observation of that trace. When trace filters force the join, the dup
-  // exposure is the 0037-documented rare-duplicate tradeoff.
+  // Trace-values LEFT JOIN: traces_scalar (one row per trace — migration
+  // 0039) supplies the root's env/user/session/name/tags for the rows
+  // projection's env fallback and the trace-column filter mappings. MoW
+  // unique key means no duplicate-root fan-out (unlike an events_full
+  // is_root = 1 self-join on the DUPLICATE-model base), and trace_id is its
+  // distribution column. Skipped for count/largeFieldStats without trace
+  // filters — there it is pure overhead. traces_scalar stores NULL where
+  // events_full stored '' — COALESCE back so the filter mappings'
+  // ''-convention keeps matching.
   const needsRootJoin =
+    opts.select === "rows" ||
     observationsFilter.some((f) => f.table === "traces") ||
     dorisOrderBy.includes("t.");
   const query = `
@@ -895,10 +898,20 @@ const getObservationsTableInternal = async <T>(
       FROM events_full o
                ${
                  needsRootJoin
-                   ? `LEFT JOIN events_full t
+                   ? `LEFT JOIN (
+                   SELECT
+                     project_id,
+                     id AS trace_id,
+                     COALESCE(name, '') AS name,
+                     COALESCE(user_id, '') AS user_id,
+                     COALESCE(session_id, '') AS session_id,
+                     environment,
+                     tags,
+                     start_time
+                   FROM traces_scalar
+                 ) t
                  ON t.project_id = o.project_id
-                AND t.trace_id = o.trace_id
-                AND t.is_root = 1`
+                AND t.trace_id = o.trace_id`
                    : ""
                }
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
