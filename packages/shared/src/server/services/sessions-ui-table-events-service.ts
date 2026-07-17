@@ -185,9 +185,11 @@ const getSessionsTableFromEventsGeneric = async <T>(
         t.session_id,
         max(t.start_time) as max_timestamp,
         min(t.start_time) as min_timestamp,
-        collect_set(t.trace_id) AS trace_ids,
+        -- No dedup needed on trace_id: traces_scalar is MoW UNIQUE
+        -- KEY(project_id, id) — one row per trace, no joins here.
+        collect_list(t.trace_id) AS trace_ids,
         collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
-        count(DISTINCT t.trace_id) as trace_count,
+        count(*) as trace_count,
         -- group_array_union dedups inside the aggregate state, unlike
         -- collect_list which buffers every duplicate before the flatten.
         group_array_union(t.tags) AS trace_tags,

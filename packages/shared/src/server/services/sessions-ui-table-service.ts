@@ -356,9 +356,13 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 any_value(t.project_id) as project_id,
                 max(t.start_time) as max_timestamp,
                 min(t.start_time) as min_timestamp,
-                collect_list(DISTINCT t.id) AS trace_ids,
+                -- No DISTINCT needed on t.id: traces_scalar is MoW UNIQUE
+                -- KEY(project_id, id) — one row per trace — and both joins
+                -- are 1:1 (observations_agg groups by trace, scores_agg by
+                -- session), so rows never multiply.
+                collect_list(t.id) AS trace_ids,
                 collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
-                count(DISTINCT t.id) as trace_count,
+                count(*) as trace_count,
                 -- Union+dedup of the session's trace tags in one aggregate
                 -- (upstream groupUniqArrayArray equivalent). Unlike the former
                 -- LATERAL VIEW EXPLODE_OUTER CTE this adds no rows before the
