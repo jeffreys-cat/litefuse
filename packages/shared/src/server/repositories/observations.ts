@@ -874,19 +874,32 @@ const getObservationsTableInternal = async <T>(
     observationsTableUiColumnDefinitionsForDoris,
   );
 
-  // Phase C: LEFT JOIN root span of the trace (is_root = 1).
-  // Used as a COALESCE(o.x, t.x) fallback for trace-level fields when the
-  // observation row itself missed denormalization (out-of-order ingest,
-  // OTel child spans without `langfuse.trace.*`). trace_id is inverted-
-  // indexed; Doris MoW UNIQUE KEY makes this a point-lookup, < 1ms / row.
+  // Root-span LEFT JOIN (is_root = 1): supplies the COALESCE(o.x, t.x)
+  // fallbacks for trace-level fields when the observation row itself missed
+  // denormalization (out-of-order ingest, OTel child spans without
+  // `langfuse.trace.*`). Only added when something references t.* — for
+  // count/largeFieldStats without trace filters it is pure overhead, and
+  // worse: events_full is DUPLICATE-model (no key dedup, migration 0037), so
+  // a re-delivered root span would fan out and inflate count(*) for every
+  // observation of that trace. The rows path keeps the join (decoration
+  // needs it); its dup exposure is the 0037-documented rare-duplicate
+  // tradeoff.
+  const needsRootJoin =
+    opts.select === "rows" ||
+    observationsFilter.some((f) => f.table === "traces") ||
+    dorisOrderBy.includes("t.");
   const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
       FROM events_full o
-               LEFT JOIN events_full t
+               ${
+                 needsRootJoin
+                   ? `LEFT JOIN events_full t
                  ON t.project_id = o.project_id
                 AND t.trace_id = o.trace_id
-                AND t.is_root = 1
+                AND t.is_root = 1`
+                   : ""
+               }
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
       WHERE ${appliedObservationsFilter.query}
                    ${search.query}

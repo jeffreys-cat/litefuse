@@ -1147,10 +1147,16 @@ export const deleteTracesOlderThanDays = async (
     return false;
   }
 
+  // No is_root predicate: DELETE on a table with a sync MV only accepts
+  // predicates on columns that appear as plain columns in the MV definition
+  // (trace_metrics_agg has is_root only inside a SUM(CASE …) expression —
+  // "Column[is_root] not exist in index trace_metrics_agg"). Row-level
+  // start_time cutoff over ALL spans also matches what
+  // deleteObservationsOlderThanDays applies, so retention semantics stay
+  // aligned across the two.
   const query = `
     DELETE FROM events_full
-    WHERE is_root = 1
-    AND project_id = {projectId: String}
+    WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime};
   `;
   await commandDoris({
