@@ -764,12 +764,11 @@ const getObservationsTableInternal = async <T>(
         o.provided_cost_details as provided_cost_details,
         o.cost_details as cost_details,
         o.level as level,
-        -- Span-first env with root fallback: 'default' is the unset sentinel
-        -- (extractEnvironment/IngestionService/column default all emit it), so
-        -- a span that resolved to 'default' inherits the trace's canonical env
-        -- from traces_scalar. The trailing o.environment covers a missing
-        -- scalar row (in-flight trace — root not yet ingested).
-        COALESCE(NULLIF(o.environment, 'default'), t.environment, o.environment) as environment,
+        -- Upstream-aligned: an observation shows its OWN span env verbatim
+        -- (upstream v4 selects e.environment with no trace fallback —
+        -- event-query-builder.ts base field set). Keeping this t-free lets the
+        -- unfiltered rows path skip the trace join entirely.
+        o.environment as environment,
         o.status_message as status_message,
         o.version as version,
         o.parent_span_id as parent_observation_id,
@@ -880,16 +879,14 @@ const getObservationsTableInternal = async <T>(
   );
 
   // Trace-values LEFT JOIN: traces_scalar (one row per trace — migration
-  // 0039) supplies the root's env/user/session/name/tags for the rows
-  // projection's env fallback and the trace-column filter mappings. MoW
-  // unique key means no duplicate-root fan-out (unlike an events_full
-  // is_root = 1 self-join on the DUPLICATE-model base), and trace_id is its
-  // distribution column. Skipped for count/largeFieldStats without trace
-  // filters — there it is pure overhead. traces_scalar stores NULL where
-  // events_full stored '' — COALESCE back so the filter mappings'
-  // ''-convention keeps matching.
+  // 0039) serves the trace-column filter mappings only — the projection is
+  // o.-only (upstream-aligned), so the join is skipped entirely unless a
+  // filter or ORDER BY references t.*. MoW unique key means no
+  // duplicate-root fan-out (unlike an events_full is_root = 1 self-join on
+  // the DUPLICATE-model base), and trace_id is its distribution column.
+  // traces_scalar stores NULL where events_full stored '' — COALESCE back so
+  // the filter mappings' ''-convention keeps matching.
   const needsRootJoin =
-    opts.select === "rows" ||
     observationsFilter.some((f) => f.table === "traces") ||
     dorisOrderBy.includes("t.");
   const query = `
