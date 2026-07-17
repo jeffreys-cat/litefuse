@@ -764,7 +764,12 @@ const getObservationsTableInternal = async <T>(
         o.provided_cost_details as provided_cost_details,
         o.cost_details as cost_details,
         o.level as level,
-        COALESCE(NULLIF(o.environment, ''), t.environment) as environment,
+        -- environment is guaranteed non-empty on every span row (OTel
+        -- extractEnvironment falls back to 'default', IngestionService applies
+        -- ?? "default", and the column itself is DEFAULT 'default'), so no
+        -- root-span fallback is needed — keeping this t-free lets the
+        -- unfiltered rows path skip the root self-join entirely.
+        o.environment as environment,
         o.status_message as status_message,
         o.version as version,
         o.parent_span_id as parent_observation_id,
@@ -874,18 +879,14 @@ const getObservationsTableInternal = async <T>(
     observationsTableUiColumnDefinitionsForDoris,
   );
 
-  // Root-span LEFT JOIN (is_root = 1): supplies the COALESCE(o.x, t.x)
-  // fallbacks for trace-level fields when the observation row itself missed
-  // denormalization (out-of-order ingest, OTel child spans without
-  // `langfuse.trace.*`). Only added when something references t.* — for
-  // count/largeFieldStats without trace filters it is pure overhead, and
-  // worse: events_full is DUPLICATE-model (no key dedup, migration 0037), so
-  // a re-delivered root span would fan out and inflate count(*) for every
-  // observation of that trace. The rows path keeps the join (decoration
-  // needs it); its dup exposure is the 0037-documented rare-duplicate
-  // tradeoff.
+  // Root-span LEFT JOIN (is_root = 1): only added when something references
+  // t.* — trace-column filters or a t-prefixed ORDER BY. Without them it is
+  // pure overhead (the projection is o.-only), and worse: events_full is
+  // DUPLICATE-model (no key dedup, migration 0037), so a re-delivered root
+  // span would fan out — duplicating rows and inflating count(*) for every
+  // observation of that trace. When trace filters force the join, the dup
+  // exposure is the 0037-documented rare-duplicate tradeoff.
   const needsRootJoin =
-    opts.select === "rows" ||
     observationsFilter.some((f) => f.table === "traces") ||
     dorisOrderBy.includes("t.");
   const query = `
