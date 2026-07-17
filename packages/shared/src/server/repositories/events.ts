@@ -69,6 +69,7 @@ import {
   type ApiColumnMapping,
 } from "../queries/public-api-filter-builder";
 import { TracingSearchType } from "../../interfaces/search";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 
 type ObservationsTableQueryResultWitouhtTraceFields = Omit<
   ObservationsTableQueryResult,
@@ -1641,18 +1642,15 @@ export const getEventsGroupedByTraceTags = async (
 
   const appliedFilter = observationsFilter.apply();
 
-  // In Doris, we use UNNEST to explode array columns
+  // Union+dedup in a single aggregate state instead of UNNEST, which
+  // multiplied the scanned events_full rows by the tag count before DISTINCT.
   const query = `
-    SELECT DISTINCT tag
-    FROM events_full o,
-    UNNEST(o.tags) as t(tag)
+    SELECT group_array_union(o.tags) AS tags_union
+    FROM events_full o
     WHERE ${appliedFilter.query}
-    AND size(o.tags) > 0
-    ORDER BY tag ASC
-    LIMIT 1000
   `;
 
-  const res = await queryDoris<{ tag: string }>({
+  const res = await queryDoris<{ tags_union: string[] | string | null }>({
     query,
     params: {
       projectId,
@@ -1665,7 +1663,10 @@ export const getEventsGroupedByTraceTags = async (
       projectId,
     },
   });
-  return res;
+  return parseDorisStringArray(res[0]?.tags_union ?? null)
+    .sort()
+    .slice(0, 1000)
+    .map((tag) => ({ tag }));
 };
 
 /**

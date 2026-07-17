@@ -252,10 +252,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
   );
 
   // Doris version with database-specific adaptations
-  // Note: Tag aggregation is done in a separate CTE (session_tags) to avoid
-  // LATERAL VIEW EXPLODE_OUTER duplicating rows before the observations join,
-  // which would multiply cost/token metrics by the number of tags per trace.
-  // Also, usage/cost key matching uses substring matching (LIKE '%input%') instead
+  // Note: usage/cost key matching uses substring matching (LIKE '%input%') instead
   // of exact key matching, to include keys like cache_read_input_tokens and
   // cache_creation_input_tokens — mirroring upstream's positionCaseInsensitive behavior.
   const query = `
@@ -263,22 +260,24 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           -- One row per trace from traces_scalar (migration 0039 — the root
           -- span's scalars, dual-written at ingestion) instead of an
           -- is_root = 1 events_full scan.
-          -- traces_scalar stores NULL where events_full root rows stored ''
-          -- (user_id/session_id): COALESCE back to '' so the previous
-          -- semantics hold unchanged — sessionless traces still group under
-          -- the '' session (the old "session_id IS NOT NULL" passed '' rows),
-          -- and the user_ids collect_set's "!= ''" guard keeps excluding them.
+          -- Sessionless traces are excluded HERE, matching upstream (CH
+          -- session_id is Nullable and the query keeps IS NOT NULL rows).
+          -- traces_scalar stores NULL for unset ('' guarded defensively);
+          -- without this exclusion every sessionless trace collapses into a
+          -- single '' group whose collect_list(trace_ids) aggregation state
+          -- grows with the whole project — the sessions list OOMs at scale.
           -- Project start_time without aliasing to "timestamp" so the
           -- singleTraceFilter SQL (which references the bare column name
           -- start_time) works identically in this CTE body AND in the
           -- session_data WHERE clause below — both query against
           -- filtered_traces. Aliasing here previously broke the second
           -- usage with "Unknown column 'start_time'".
-          SELECT id, COALESCE(session_id, '') AS session_id, project_id,
+          SELECT id, session_id, project_id,
                  bookmarked, start_time,
                  COALESCE(user_id, '') AS user_id, tags, environment, event_ts
           FROM traces_scalar t
           WHERE t.project_id = {projectId: String}
+            AND t.session_id IS NOT NULL AND t.session_id != ''
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
         ${
@@ -319,20 +318,6 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           ),`
             : ""
         }
-        session_tags AS (
-          SELECT
-            t.session_id as tag_session_id,
-            collect_set(
-              CASE
-                WHEN tag_exploded.tag IS NOT NULL AND tag_exploded.tag != ''
-                THEN tag_exploded.tag
-                ELSE NULL
-              END
-            ) as trace_tags
-          FROM filtered_traces t
-          LATERAL VIEW EXPLODE_OUTER(t.tags) tag_exploded AS tag
-          GROUP BY t.session_id
-        ),
         ${
           requiresScoresJoin
             ? `scores_agg AS (
@@ -374,6 +359,12 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 collect_list(DISTINCT t.id) AS trace_ids,
                 collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
                 count(DISTINCT t.id) as trace_count,
+                -- Union+dedup of the session's trace tags in one aggregate
+                -- (upstream groupUniqArrayArray equivalent). Unlike the former
+                -- LATERAL VIEW EXPLODE_OUTER CTE this adds no rows before the
+                -- observations join, so it can live in this GROUP BY without
+                -- multiplying cost/token sums.
+                array_remove(group_array_union(t.tags), '') AS trace_tags,
                 any_value(t.environment) as trace_environment
                 ${
                   selectMetrics
@@ -425,9 +416,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
             GROUP BY t.session_id
         )
-                  SELECT ${sqlSelect.includes("trace_tags") ? `s.*, st.trace_tags` : sqlSelect}
+                  SELECT ${sqlSelect.includes("trace_tags") ? "s.*" : sqlSelect}
         FROM session_data s
-        LEFT JOIN session_tags st ON s.session_id = st.tag_session_id
         WHERE ${tracesFilterRes.query ? tracesFilterRes.query : "1=1"}
         ${dorisOrderBy}
         ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}

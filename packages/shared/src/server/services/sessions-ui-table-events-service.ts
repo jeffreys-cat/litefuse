@@ -188,10 +188,9 @@ const getSessionsTableFromEventsGeneric = async <T>(
         collect_set(t.trace_id) AS trace_ids,
         collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
         count(DISTINCT t.trace_id) as trace_count,
-        -- Doris collect_set/collect_list don't accept ARRAY inputs directly
-        -- (returns "unexpected type for collect"), so we collect_list to
-        -- ARRAY<ARRAY>, flatten, then distinct.
-        array_distinct(array_flatten(collect_list(t.tags))) AS trace_tags,
+        -- group_array_union dedups inside the aggregate state, unlike
+        -- collect_list which buffers every duplicate before the flatten.
+        group_array_union(t.tags) AS trace_tags,
         any_value(t.environment) as environment
       `;
       break;
@@ -209,18 +208,18 @@ const getSessionsTableFromEventsGeneric = async <T>(
 
   // One row per trace from traces_scalar (migration 0039) under the
   // events_full-compatible column names the session filter/orderBy mappings
-  // reference — instead of an is_root = 1 events_full scan. traces_scalar
-  // stores NULL where root rows stored '' (user_id/session_id): COALESCE back
-  // to '' so the previous semantics hold — sessionless traces still group
-  // under the '' session (the old IS NOT NULL passed '' rows) and the
-  // user_ids collect_set's "!= ''" guard keeps excluding them.
+  // reference — instead of an is_root = 1 events_full scan. Sessionless
+  // traces are excluded (traces_scalar stores NULL for unset, '' guarded
+  // defensively), matching upstream's IS NOT NULL on a Nullable column;
+  // without the exclusion they all collapse into a single '' group whose
+  // aggregation state grows with the whole project and OOMs at scale.
   const query = `
     SELECT ${sqlSelect}
     FROM (
       SELECT
         project_id,
         id AS trace_id,
-        COALESCE(session_id, '') AS session_id,
+        session_id,
         COALESCE(user_id, '') AS user_id,
         start_time,
         tags,
@@ -230,7 +229,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
       FROM traces_scalar
     ) t
     WHERE t.project_id = {projectId: String}
-      AND t.session_id IS NOT NULL
+      AND t.session_id IS NOT NULL AND t.session_id != ''
       ${traceTimestampFilterClause}
       ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}
     ${

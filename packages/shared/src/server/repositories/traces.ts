@@ -984,18 +984,17 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
 
   const filterRes = new FilterList(dorisFilter).apply();
 
-  // Doris uses LATERAL VIEW explode to unnest array elements (standard syntax)
+  // Union+dedup in a single aggregate state instead of LATERAL VIEW explode,
+  // which multiplied the scanned rows by the tag count before DISTINCT.
   const query = `
-    select distinct(tag) as value
+    select group_array_union(t.tags) as tags_union
     from ${TRACES_SCALAR_AS_T}
-    LATERAL VIEW explode(tags) tmp as tag
     WHERE t.project_id = {projectId: String}
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
-    LIMIT 1000;
   `;
 
   const rows = await queryDoris<{
-    value: string;
+    tags_union: string[] | string | null;
   }>({
     query: query,
     params: {
@@ -1010,7 +1009,9 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
     },
   });
 
-  return rows;
+  return parseDorisStringArray(rows[0]?.tags_union ?? null)
+    .slice(0, 1000)
+    .map((tag) => ({ value: tag }));
 };
 
 export const getTracesIdentifierForSession = async (
