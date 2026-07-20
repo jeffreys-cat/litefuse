@@ -15,11 +15,20 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     logger.error("Stripe webhook failed", error);
+    const isBadRequest =
+      (typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "BAD_REQUEST") ||
+      (typeof error === "object" &&
+        error !== null &&
+        "type" in error &&
+        error.type === "StripeSignatureVerificationError");
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Stripe webhook failed",
       },
-      { status: 400 },
+      { status: isBadRequest ? 400 : 500 },
     );
   }
 }

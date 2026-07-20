@@ -360,6 +360,7 @@ export type BillingMeterBackup = {
   org_id: string;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
+  submitted_at: Timestamp | null;
 };
 export type BlobStorageIntegration = {
   project_id: string;

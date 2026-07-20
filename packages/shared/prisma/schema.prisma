@@ -1297,6 +1297,7 @@ model BillingMeterBackup {
   // ts
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  submittedAt DateTime? @map("submitted_at")
 
   @@unique([stripeCustomerId, meterId, startTime, endTime])
   @@index([stripeCustomerId, meterId, startTime, endTime])
