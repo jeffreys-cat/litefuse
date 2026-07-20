@@ -281,19 +281,24 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     "session_id",
     "bookmarked",
   ]);
+  const filtersPushable = !tracesFilter.some(
+    (f) =>
+      !PUSHDOWN_FIELDS.has(f.field) ||
+      (f.field === "min_timestamp" &&
+        ![">", ">=", "<", "<="].includes(f.operator)),
+  );
+
   const twoPhaseEligible =
-    select === "rows" &&
-    limit !== undefined &&
-    page !== undefined &&
-    !selectMetrics &&
-    !requiresScoresJoin &&
-    (orderByTarget === undefined || orderByTarget === "min_timestamp") &&
-    !tracesFilter.some(
-      (f) =>
-        !PUSHDOWN_FIELDS.has(f.field) ||
-        (f.field === "min_timestamp" &&
-          ![">", ">=", "<", "<="].includes(f.operator)),
-    );
+    (select === "rows" &&
+      limit !== undefined &&
+      page !== undefined &&
+      !selectMetrics &&
+      !requiresScoresJoin &&
+      (orderByTarget === undefined || orderByTarget === "min_timestamp") &&
+      filtersPushable) ||
+    // count ignores ordering entirely, so only the filters must be pushable:
+    // the session count = sessions with at least one trace row in the window.
+    (select === "count" && filtersPushable);
 
   let twoPhaseQuery: string | undefined;
   if (twoPhaseEligible) {
@@ -328,7 +333,17 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         }).apply().query
       : "";
 
-    twoPhaseQuery = `
+    twoPhaseQuery =
+      select === "count"
+        ? `
+        SELECT count(DISTINCT session_id) as count
+        FROM traces_scalar
+        WHERE project_id = {projectId: String}
+          AND session_id IS NOT NULL AND session_id != ''
+          ${sharedClause ? `AND ${sharedClause}` : ""}
+          ${upperClause ? `AND ${upperClause}` : ""}
+          `
+        : `
         WITH top_sessions AS (
           SELECT session_id, MIN(start_time) AS min_timestamp
           FROM traces_scalar
