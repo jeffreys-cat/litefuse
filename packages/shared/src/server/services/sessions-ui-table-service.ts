@@ -251,11 +251,126 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     sessionColsForDoris,
   );
 
+  // Two-phase fast path (~10x on large projects, measured on a 50T env):
+  // phase 1 picks the page's session_ids with the cheapest possible
+  // aggregate (MIN(start_time) only, both time bounds pushed into the
+  // scan for partition pruning), phase 2 builds the expensive array
+  // aggregates for ONLY those sessions. Legal only when the page can be
+  // selected from per-trace predicates alone: ordering by min_timestamp
+  // and filters that apply to a trace row (time bounds, environment,
+  // session_id, bookmarked). Aggregate-level filters/orderings (user_ids,
+  // tags, metrics, scores) must see every session before paging → legacy.
+  const traceTimestampUpperFilter: DorisDateTimeFilter | undefined =
+    tracesFilter.find(
+      (f) =>
+        f.field === "min_timestamp" &&
+        (f.operator === "<=" || f.operator === "<"),
+    ) as DorisDateTimeFilter | undefined;
+
+  const orderByTarget = orderBy
+    ? sessionColsForDoris.find(
+        (c) =>
+          c.uiTableName === orderBy.column || c.uiTableId === orderBy.column,
+      )?.select
+    : undefined;
+
+  const PUSHDOWN_FIELDS = new Set([
+    "project_id",
+    "min_timestamp",
+    "environment",
+    "session_id",
+    "bookmarked",
+  ]);
+  const twoPhaseEligible =
+    select === "rows" &&
+    limit !== undefined &&
+    page !== undefined &&
+    !selectMetrics &&
+    !requiresScoresJoin &&
+    (orderByTarget === undefined || orderByTarget === "min_timestamp") &&
+    !tracesFilter.some(
+      (f) =>
+        !PUSHDOWN_FIELDS.has(f.field) ||
+        (f.field === "min_timestamp" &&
+          ![">", ">=", "<", "<="].includes(f.operator)),
+    );
+
+  let twoPhaseQuery: string | undefined;
+  if (twoPhaseEligible) {
+    // Reused verbatim in BOTH phases (values are inlined, so repetition is
+    // safe): phase 2 keeps only the lower time bound, preserving the legacy
+    // semantics that max_timestamp/trace_ids include traces after the
+    // window's end.
+    const sharedFilterList = tracesFilter.filter((f) =>
+      ["environment", "session_id", "bookmarked"].includes(f.field),
+    );
+    if (traceTimestampFilter) {
+      sharedFilterList.push(
+        new DorisDateTimeFilter({
+          table: "traces",
+          field: "start_time",
+          operator: traceTimestampFilter.operator,
+          value: traceTimestampFilter.value,
+        }),
+      );
+    }
+    const sharedClause = sharedFilterList.apply().query;
+    // Upper bound goes into phase 1's scan only. Pre-aggregation filtering
+    // is equivalent to HAVING min <= upper: a session with any row in the
+    // window has its min inside it; one with none has min above the upper
+    // bound and would be dropped anyway.
+    const upperClause = traceTimestampUpperFilter
+      ? new DorisDateTimeFilter({
+          table: "traces",
+          field: "start_time",
+          operator: traceTimestampUpperFilter.operator,
+          value: traceTimestampUpperFilter.value,
+        }).apply().query
+      : "";
+
+    twoPhaseQuery = `
+        WITH top_sessions AS (
+          SELECT session_id, MIN(start_time) AS min_timestamp
+          FROM traces_scalar
+          WHERE project_id = {projectId: String}
+            AND session_id IS NOT NULL AND session_id != ''
+            ${sharedClause ? `AND ${sharedClause}` : ""}
+            ${upperClause ? `AND ${upperClause}` : ""}
+          GROUP BY session_id
+          ${dorisOrderBy}
+          LIMIT {limit: Int32} OFFSET {offset: Int32}
+        ),
+        session_data AS (
+          -- min_timestamp reuses phase 1's value so the final sort key is
+          -- exactly the one the page was selected by.
+          SELECT
+            t.session_id,
+            any_value(t.project_id) as project_id,
+            max(t.start_time) as max_timestamp,
+            any_value(s.min_timestamp) as min_timestamp,
+            collect_list(t.id) AS trace_ids,
+            collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
+            count(*) as trace_count,
+            array_remove(group_array_union(t.tags), '') AS trace_tags,
+            any_value(t.environment) as trace_environment
+          FROM traces_scalar t
+          INNER JOIN top_sessions s ON t.session_id = s.session_id
+          WHERE t.project_id = {projectId: String}
+            ${sharedClause ? `AND ${sharedClause}` : ""}
+          GROUP BY t.session_id
+        )
+        SELECT * FROM session_data
+        ${dorisOrderBy}
+          `;
+  }
+
   // Doris version with database-specific adaptations
   // Note: usage/cost key matching uses substring matching (LIKE '%input%') instead
   // of exact key matching, to include keys like cache_read_input_tokens and
   // cache_creation_input_tokens — mirroring upstream's positionCaseInsensitive behavior.
-  const query = `
+  const query =
+    twoPhaseQuery ??
+    `
         WITH filtered_traces AS (
           -- One row per trace from traces_scalar (migration 0039 — the root
           -- span's scalars, dual-written at ingestion) instead of an
