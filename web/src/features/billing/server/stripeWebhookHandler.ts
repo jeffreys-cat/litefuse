@@ -23,6 +23,52 @@ function isDuplicateEventError(error: unknown): boolean {
   );
 }
 
+async function claimStripeEvent(event: Stripe.Event): Promise<boolean> {
+  try {
+    await prisma.stripeWebhookEvent.create({
+      data: {
+        stripeEventId: event.id,
+        eventType: event.type,
+        status: "processing",
+        payload: event as unknown as Prisma.InputJsonValue,
+      },
+    });
+    return true;
+  } catch (error) {
+    if (!isDuplicateEventError(error)) throw error;
+  }
+
+  const existing = await prisma.stripeWebhookEvent.findUniqueOrThrow({
+    where: { stripeEventId: event.id },
+  });
+  if (existing.status === "processed") return false;
+
+  // A concurrent request is already responsible for this event. Stripe may
+  // retry a delivery while the first request is still running, so only reclaim
+  // a processing event after its lease has gone stale.
+  const processingLeaseCutoff = new Date(Date.now() - 5 * 60 * 1000);
+  if (
+    existing.status === "processing" &&
+    existing.updatedAt > processingLeaseCutoff
+  ) {
+    return false;
+  }
+
+  const claimed = await prisma.stripeWebhookEvent.updateMany({
+    where: {
+      id: existing.id,
+      status: existing.status,
+      updatedAt: existing.updatedAt,
+    },
+    data: {
+      status: "processing",
+      error: null,
+      payload: event as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return claimed.count === 1;
+}
+
 function stripeId(
   value: string | { id?: string } | null | undefined,
 ): string | null {
@@ -104,24 +150,12 @@ export async function handleStripeWebhook(params: {
     env.STRIPE_WEBHOOK_SECRET!,
   );
 
-  try {
-    await prisma.stripeWebhookEvent.create({
-      data: {
-        stripeEventId: event.id,
-        eventType: event.type,
-        status: "processing",
-        payload: event as unknown as Prisma.InputJsonValue,
-      },
+  if (!(await claimStripeEvent(event))) {
+    logger.info("Skipping processed Stripe webhook event", {
+      eventId: event.id,
+      eventType: event.type,
     });
-  } catch (error) {
-    if (isDuplicateEventError(error)) {
-      logger.info("Skipping duplicate Stripe webhook event", {
-        eventId: event.id,
-        eventType: event.type,
-      });
-      return { received: true, duplicate: true };
-    }
-    throw error;
+    return { received: true, duplicate: true };
   }
 
   try {

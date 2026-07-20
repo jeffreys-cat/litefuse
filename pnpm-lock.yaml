@@ -1009,6 +1009,9 @@ importers:
       posthog-node:
         specifier: ^5.8.4
         version: 5.8.4
+      stripe:
+        specifier: ^22.3.1
+        version: 22.3.1(@types/node@24.3.0)
       tiktoken:
         specifier: ^1.0.20
         version: 1.0.20

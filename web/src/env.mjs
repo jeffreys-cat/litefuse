@@ -51,7 +51,8 @@ export const env = createEnv({
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
     STRIPE_PRO_MONTHLY_PRICE_ID: z.string().min(1).optional(),
-    STRIPE_PRO_YEARLY_PRICE_ID: z.string().min(1).optional(),
+    STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID: z.string().min(1).optional(),
+    STRIPE_USAGE_PRICE_ID: z.string().min(1).optional(),
     // Add `.min(1) on ID and SECRET if you want to make sure they're not empty
     LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES: z.enum(["true", "false"]).optional(),
     SALT: z.string({
@@ -479,7 +480,9 @@ export const env = createEnv({
     STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
     STRIPE_PRO_MONTHLY_PRICE_ID: process.env.STRIPE_PRO_MONTHLY_PRICE_ID,
-    STRIPE_PRO_YEARLY_PRICE_ID: process.env.STRIPE_PRO_YEARLY_PRICE_ID,
+    STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID:
+      process.env.STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID,
+    STRIPE_USAGE_PRICE_ID: process.env.STRIPE_USAGE_PRICE_ID,
     SALT: process.env.SALT,
     LITEFUSE_CSP_ENFORCE_HTTPS: process.env.LITEFUSE_CSP_ENFORCE_HTTPS,
     TELEMETRY_ENABLED: process.env.TELEMETRY_ENABLED,
