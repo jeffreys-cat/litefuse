@@ -463,10 +463,11 @@ describe("DorisClient.streamLoad — FE→BE redirect connection reuse", () => {
   it("stable label + Label Already Exists + FINISHED = SUCCESS (dedup, no re-park)", async () => {
     await swapBeResponse(labelAlreadyExists("FINISHED"));
     // Must RESOLVE: the earlier attempt of this batch committed; re-parking
-    // would double-apply AGGREGATE-KEY SUM columns.
+    // would double-apply AGGREGATE-KEY SUM columns. The outcome reports the
+    // dedup so exactly-once callers (otel group jobs) can branch on it.
     await expect(
       client.streamLoad("traces", [{ id: "1" }], { label: "stable-1" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ dedupedByLabel: true });
   });
 
   it("stable label + Label Already Exists + RUNNING = retryable failure", async () => {

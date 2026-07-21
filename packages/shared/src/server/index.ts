@@ -58,6 +58,7 @@ export * from "./redis/scoreDelete";
 export * from "./redis/datasetDelete";
 export * from "./redis/datasetRunItemUpsert";
 export * from "./redis/otelIngestionQueue";
+export * from "./redis/otelPendingGroups";
 export * from "./redis/batchExport";
 export * from "./redis/batchActionQueue";
 export * from "./redis/ingestionQueue";

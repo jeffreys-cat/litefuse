@@ -54,6 +54,19 @@ export interface DorisStreamLoadOptions {
   label?: string;
 }
 
+/**
+ * Result of a Stream Load attempt that did not throw.
+ * `dedupedByLabel: true` ⇔ this call did NOT load anything because the FE
+ * label registry proved an earlier attempt of the SAME label already
+ * committed (Label Already Exists + FINISHED, or SHOW TRANSACTION resolved
+ * VISIBLE/COMMITTED). Callers implementing exactly-once (otel group jobs)
+ * branch on this to decide replay behavior; all other outcomes — including
+ * empty-input early returns and Publish Timeout — report `false`.
+ */
+export interface StreamLoadOutcome {
+  dedupedByLabel: boolean;
+}
+
 export interface DorisQueryOptions {
   format?: "JSONEachRow" | "JSON";
   query_params?: Record<string, any>;
@@ -566,10 +579,10 @@ export class DorisClient {
     table: string,
     data: T[],
     options: DorisStreamLoadOptions = {},
-  ): Promise<void> {
+  ): Promise<StreamLoadOutcome> {
     if (!data || data.length === 0) {
       logger.warn("No data provided for stream load", { table });
-      return;
+      return { dedupedByLabel: false };
     }
     return this.streamLoadBody(
       table,
@@ -590,10 +603,10 @@ export class DorisClient {
     body: string | StreamLoadBodySource,
     recordCount: number,
     options: DorisStreamLoadOptions = {},
-  ): Promise<void> {
+  ): Promise<StreamLoadOutcome> {
     if (!body) {
       logger.warn("No data provided for stream load", { table });
-      return;
+      return { dedupedByLabel: false };
     }
 
     // Normalize a string body into the chunked shape so everything downstream
@@ -615,7 +628,7 @@ export class DorisClient {
     // rejected here, never sent as a malformed Content-Length header.
     if (!Number.isInteger(bodyBytes) || bodyBytes <= 0) {
       logger.warn("No data provided for stream load", { table, bodyBytes });
-      return;
+      return { dedupedByLabel: false };
     }
 
     const loadOptions = {
@@ -775,7 +788,7 @@ export class DorisClient {
           logger.info(
             `Stream load deduplicated by label (already committed): ${JSON.stringify({ table, loadLabel, message: result.Message })}`,
           );
-          return;
+          return { dedupedByLabel: true };
         }
         if (result.ExistingJobStatus === "RUNNING") {
           throw new Error(
@@ -789,11 +802,24 @@ export class DorisClient {
           logger.info(
             `Stream load deduplicated by label (SHOW TRANSACTION=${txnStatus}): ${JSON.stringify({ table, loadLabel })}`,
           );
-          return;
+          return { dedupedByLabel: true };
         }
         throw new Error(
           `Stream load label already exists, txn status ${txnStatus}; response: ${JSON.stringify(result).slice(0, RESPONSE_LOG_MAX_CHARS)}`,
         );
+      }
+
+      // Publish Timeout = the transaction IS committed (durable, cannot roll
+      // back); only the visibility publish to all replicas lagged past the
+      // publish timeout. FE keeps publishing in the background, so the data
+      // WILL become visible. Treating this as failure would retry the batch —
+      // harmless under a stable label (dedup) but a guaranteed duplicate on
+      // label-less tables — so it is success by definition here.
+      if (result?.Status === "Publish Timeout") {
+        logger.warn(
+          `Stream load committed but publish timed out (data durable, visibility lagging): ${JSON.stringify({ table, loadLabel, message: result?.Message })}`,
+        );
+        return { dedupedByLabel: false };
       }
 
       if (result?.Status !== "Success") {
@@ -822,6 +848,7 @@ export class DorisClient {
           response: result,
         });
       }
+      return { dedupedByLabel: false };
     } catch (error) {
       // Build the failure message from FACTS only, verbatim: HTTP status +
       // raw response body when the peer answered, the transport error message
@@ -884,10 +911,19 @@ export class DorisClient {
       const rows = await this.query(
         `SHOW TRANSACTION FROM ${this.config.database} WHERE LABEL = '${label.replace(/'/g, "''")}'`,
       );
-      const status = rows?.[0]?.TransactionStatus;
-      return typeof status === "string" && status.length > 0
-        ? status
-        : "UNKNOWN";
+      // A label freed by an ABORTED txn can be reused, so the transaction
+      // history may hold SEVERAL rows for the same label (e.g. an old ABORTED
+      // attempt plus the later committed one) and the FE's return order
+      // carries no contract. Scan ALL rows: any committed/visible txn under
+      // this label means the batch IS in Doris.
+      let fallback: string = "UNKNOWN";
+      for (const row of rows ?? []) {
+        const status = row?.TransactionStatus;
+        if (typeof status !== "string" || status.length === 0) continue;
+        if (status === "VISIBLE" || status === "COMMITTED") return status;
+        fallback = status;
+      }
+      return fallback;
     } catch (e) {
       logger.warn(
         `SHOW TRANSACTION lookup failed for label ${label}: ${e instanceof Error ? e.message : String(e)}`,
@@ -905,15 +941,15 @@ export class DorisClient {
    *   string or a StreamLoadBodySource streamed chunk-by-chunk
    * @param recordCount Number of rows in `body` (logging only)
    * @param options Stream load options
-   * @returns Promise<void>
+   * @returns StreamLoadOutcome (dedupedByLabel — see type doc)
    */
   async insert(
     table: string,
     body: string | StreamLoadBodySource,
     recordCount: number,
     options: DorisStreamLoadOptions = {},
-  ): Promise<void> {
-    await this.streamLoadBody(table, body, recordCount, options);
+  ): Promise<StreamLoadOutcome> {
+    return await this.streamLoadBody(table, body, recordCount, options);
   }
 
   /**

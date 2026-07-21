@@ -14,6 +14,7 @@ import {
   recordIncrement,
   redis,
   TQueueJobTypes,
+  type OtelGroupIngestionEventType,
   traceException,
   compareVersions,
   ResourceSpan,
@@ -197,14 +198,28 @@ export function checkSdkVersionRequirements(
   }
 }
 
+const isGroupPayload = (
+  p: TQueueJobTypes[QueueName.OtelIngestionQueue]["payload"],
+): p is OtelGroupIngestionEventType => "shape" in p;
+
 export const otelIngestionQueueProcessor: Processor = async (
   job: Job<TQueueJobTypes[QueueName.OtelIngestionQueue]>,
 ): Promise<void> => {
+  // Payload routing (exactly-once pipeline, Stage 4 replaces this guard with
+  // processGroupJob): group-shaped jobs must fail LOUDLY on a worker version
+  // that cannot process them — BullMQ retries/DLQ then hold the job until a
+  // capable worker picks it up — instead of being misread as a file job.
+  if (isGroupPayload(job.data.payload)) {
+    throw new Error(
+      `otel group job (${job.data.payload.shape}) not supported by this worker version — groupId=${job.data.payload.groupId}`,
+    );
+  }
+  const payload = job.data.payload;
   try {
-    const projectId = job.data.payload.authCheck.scope.projectId;
-    const publicKey = job.data.payload.data.publicKey;
-    const fileKey = job.data.payload.data.fileKey;
-    const auth = job.data.payload.authCheck;
+    const projectId = payload.authCheck.scope.projectId;
+    const publicKey = payload.data.publicKey;
+    const fileKey = payload.data.fileKey;
+    const auth = payload.authCheck;
 
     const span = getCurrentSpan();
     if (span) {
@@ -533,7 +548,7 @@ export const otelIngestionQueueProcessor: Processor = async (
     }
 
     logger.error(
-      `Failed job otel ingestion processing for ${job.data.payload.authCheck.scope.projectId}`,
+      `Failed job otel ingestion processing for ${payload.authCheck.scope.projectId}`,
       e,
     );
     traceException(e);

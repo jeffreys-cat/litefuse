@@ -46,6 +46,47 @@ export const OtelIngestionEvent = z.object({
   ingestionVersion: z.string().optional(),
 });
 
+/**
+ * One registered otel file awaiting grouping (exactly-once pipeline): the
+ * entry web RPUSHes into the per-shard pending list, carried verbatim through
+ * the grouper's staging record into the group job payload. `size`
+ * (source bytes) and `spanCount` drive group sizing; the auth/SDK metadata
+ * mirrors what the legacy per-file job payload carried.
+ */
+export const OtelPendingEntry = z.object({
+  v: z.literal(1),
+  fileKey: z.string(),
+  size: z.number(),
+  spanCount: z.number(),
+  /** Registration epoch-ms — drives the grouper's flush-timeout decision. */
+  ts: z.number(),
+  projectId: z.string(),
+  publicKey: z.string().optional(),
+  orgId: z.string().optional(),
+  sdkName: z.string().optional(),
+  sdkVersion: z.string().optional(),
+  ingestionVersion: z.string().optional(),
+  propagatedHeaders: z.record(z.string(), z.string()).optional(),
+});
+export type OtelPendingEntryType = z.infer<typeof OtelPendingEntry>;
+
+/**
+ * Group-shaped otel ingestion job (exactly-once pipeline): one job = one
+ * group = one events_full stream load batch = one deterministic label.
+ * `shape` is the version gate — workers route on it and old workers fail
+ * loudly instead of misreading the payload. jobId MUST equal groupId
+ * (= sha1 of the sorted member fileKeys) so replays dedup in BullMQ and the
+ * derived load label stays stable.
+ */
+export const OtelGroupIngestionEvent = z.object({
+  shape: z.literal("group-v1"),
+  groupId: z.string(),
+  entries: z.array(OtelPendingEntry),
+});
+export type OtelGroupIngestionEventType = z.infer<
+  typeof OtelGroupIngestionEvent
+>;
+
 export const BatchExportJobSchema = z.object({
   projectId: z.string(),
   batchExportId: z.string(),
@@ -437,7 +478,10 @@ export type TQueueJobTypes = {
   [QueueName.OtelIngestionQueue]: {
     timestamp: Date;
     id: string;
-    payload: OtelIngestionEventQueueType;
+    // Legacy per-file shape | group shape (exactly-once pipeline). Consumers
+    // route on `"shape" in payload`; producers: web adds legacy (grouping
+    // off), the grouper adds group jobs.
+    payload: OtelIngestionEventQueueType | OtelGroupIngestionEventType;
     name: QueueJobs.OtelIngestionJob;
   };
   [QueueName.IngestionQueue]: {

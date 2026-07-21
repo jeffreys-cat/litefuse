@@ -95,6 +95,13 @@ export interface StorageService {
     body: Record<string, unknown>[] | Record<string, unknown>,
   ): Promise<void>;
 
+  /**
+   * Upload a PRE-SERIALIZED JSON body. Lets callers that need the byte size
+   * (e.g. the otel registration entry) serialize exactly once instead of
+   * stringifying for measurement and again inside uploadJson.
+   */
+  uploadJsonString(path: string, body: string): Promise<void>;
+
   download(path: string): Promise<string>;
 
   listFiles(prefix: string): Promise<{ file: string; createdAt: Date }[]>;
@@ -293,10 +300,13 @@ class AzureBlobStorageService implements StorageService {
     path: string,
     body: Record<string, unknown>[],
   ): Promise<void> {
+    return this.uploadJsonString(path, JSON.stringify(body));
+  }
+
+  public async uploadJsonString(path: string, content: string): Promise<void> {
     await this.createContainerIfNotExists();
 
     const blockBlobClient = this.client.getBlockBlobClient(path);
-    const content = JSON.stringify(body);
     try {
       await blockBlobClient.upload(content, content.length);
     } catch (err) {
@@ -623,11 +633,15 @@ class S3StorageService implements StorageService {
   }
 
   public async uploadJson(path: string, body: Record<string, unknown>[]) {
+    return this.uploadJsonString(path, JSON.stringify(body));
+  }
+
+  public async uploadJsonString(path: string, content: string): Promise<void> {
     const putCommand = new PutObjectCommand(
       this.addSSEToParams({
         Bucket: this.bucketName,
         Key: path,
-        Body: JSON.stringify(body),
+        Body: content,
         ContentType: "application/json",
       }),
     );
@@ -876,9 +890,12 @@ class GoogleCloudStorageService implements StorageService {
     path: string,
     body: Record<string, unknown>[],
   ): Promise<void> {
+    return this.uploadJsonString(path, JSON.stringify(body));
+  }
+
+  public async uploadJsonString(path: string, content: string): Promise<void> {
     try {
       const file = this.bucket.file(path);
-      const content = JSON.stringify(body);
 
       await file.save(content, {
         contentType: "application/json",
