@@ -286,6 +286,16 @@ if (env.QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED === "true") {
       otelIngestionQueueProcessor,
       {
         concurrency: env.LITEFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
+        // Group jobs live long (download N files + transform + two stream
+        // loads): the BullMQ defaults are hostile to them — lockDuration 30s
+        // risks a false stall on an event-loop pause (a double-run — same
+        // label converges but wastes a full group of work), and
+        // maxStalledCount=1 sends a job whose worker died twice STRAIGHT to
+        // failed, bypassing the whole attempts/backoff envelope (the stalled
+        // counter is lifetime-cumulative and never reset; review M5).
+        maxStalledCount: 3,
+        lockDuration: 90_000,
+        stalledInterval: 60_000,
       },
     );
   });

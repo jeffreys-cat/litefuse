@@ -4,6 +4,7 @@ import {
   recordHistogram,
 } from "@langfuse/shared/src/server";
 import { getQueue } from "@langfuse/shared/src/server";
+import { redriveOtelFailedJobs } from "./otelDlqRedrive";
 
 export class DlqRetryService {
   private static retryQueues = [
@@ -58,6 +59,16 @@ export class DlqRetryService {
           );
         }
       }
+    }
+
+    // Otel ingestion shards (exactly-once pipeline) use their own redrive:
+    // remove+re-add (job.retry() would leave attempts exhausted — one bare
+    // attempt per cycle), age guard against the FE label retention window,
+    // and a PG poison ledger before any job leaves automatic recovery.
+    try {
+      await redriveOtelFailedJobs();
+    } catch (error) {
+      logger.error("Failed to redrive otel failed jobs:", error);
     }
   }
 }

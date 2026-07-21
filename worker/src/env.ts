@@ -96,6 +96,17 @@ const EnvSchema = z.object({
   // fan-out = N workers × this value — design §5.3).
   LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: z.coerce.number().positive().default(4),
   LITEFUSE_OTEL_LOAD_CONCURRENCY: z.coerce.number().positive().default(4),
+  // DLQ redrive (design §3.4). LABEL_KEEP_MS must mirror the Doris FE's
+  // label_keep_max_second (default 3 days): a job older than the label
+  // retention window CANNOT be redriven — its dedup label has been purged,
+  // a blind replay would double-load — it must go to the poison ledger /
+  // reconciliation path instead (age guard).
+  LITEFUSE_OTEL_LABEL_KEEP_MS: z.coerce
+    .number()
+    .positive()
+    .default(3 * 24 * 60 * 60 * 1000),
+  LITEFUSE_OTEL_DLQ_MAX_REDRIVES: z.coerce.number().positive().default(5),
+  LITEFUSE_OTEL_DLQ_BATCH_LIMIT: z.coerce.number().positive().default(500),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()

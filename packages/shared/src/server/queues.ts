@@ -476,6 +476,9 @@ export type TQueueJobTypes = {
     name: QueueJobs.BatchExportJob;
   };
   [QueueName.OtelIngestionQueue]: {
+    // First-enqueue time. PRESERVED verbatim across DLQ redrives (the
+    // redrive re-adds the same envelope) — the age guard reads it to refuse
+    // replays older than the FE label retention window.
     timestamp: Date;
     id: string;
     // Legacy per-file shape | group shape (exactly-once pipeline). Consumers
@@ -483,6 +486,8 @@ export type TQueueJobTypes = {
     // off), the grouper adds group jobs.
     payload: OtelIngestionEventQueueType | OtelGroupIngestionEventType;
     name: QueueJobs.OtelIngestionJob;
+    /** DLQ redrive count (absent until the first redrive). */
+    redrives?: number;
   };
   [QueueName.IngestionQueue]: {
     timestamp: Date;
