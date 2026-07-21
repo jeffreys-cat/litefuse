@@ -1,4 +1,12 @@
-import { describe, it, expect, afterAll, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+  type TestContext,
+} from "vitest";
 import Redis from "ioredis";
 import { randomUUID } from "crypto";
 
@@ -42,18 +50,27 @@ const redis = new Redis({
   retryStrategy: () => null,
 });
 
-// Probe at module load (top-level await) — describe.skipIf needs the answer
-// at collection time, before any beforeAll would run.
+// Availability probe runs in beforeAll (tsc compiles tests as CJS — no
+// top-level await); unavailable Redis skips at RUNTIME via ctx.skip().
 let redisUp = false;
-try {
-  await redis.connect();
-  redisUp = (await redis.ping()) === "PONG";
-} catch {
-  redisUp = false;
-}
+beforeAll(async () => {
+  try {
+    await redis.connect();
+    redisUp = (await redis.ping()) === "PONG";
+  } catch {
+    redisUp = false;
+  }
+});
 afterAll(async () => {
   redis.disconnect();
 });
+
+/** it(), but runtime-skipped when the dev Redis is unreachable. */
+const itR = (name: string, fn: () => Promise<void>) =>
+  it(name, async (ctx: TestContext) => {
+    if (!redisUp) return ctx.skip();
+    await fn();
+  });
 
 // Throwaway shard per test for isolation; tracked for cleanup.
 const shards: string[] = [];
@@ -103,9 +120,9 @@ const cutAsLeader = async (shard: string, opts: Partial<typeof BIG> = {}) => {
   return cutOtelGroup({ redis, shard, token, ...BIG, ...opts });
 };
 
-describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
+describe("otelPendingGroups (real Redis Lua)", () => {
   describe("registerOtelFile (idempotent registration)", () => {
-    it("registers once and absorbs duplicate registrations", async () => {
+    itR("registers once and absorbs duplicate registrations", async () => {
       const shard = freshShard();
       const e = entry();
       expect(
@@ -120,7 +137,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
   });
 
   describe("cutOtelGroup", () => {
-    it("cuts the whole head into one group with deterministic identity", async () => {
+    itR("cuts the whole head into one group with deterministic identity", async () => {
       const shard = freshShard();
       const entries = [entry(), entry(), entry()];
       for (const e of entries) {
@@ -152,7 +169,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       expect(await otelPendingDepth({ redis, shard })).toBe(0);
     });
 
-    it("stops at the byte target and leaves the tail in pending", async () => {
+    itR("stops at the byte target and leaves the tail in pending", async () => {
       const shard = freshShard();
       const e1 = entry({ size: 600 });
       const e2 = entry({ size: 600 });
@@ -170,7 +187,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       expect(await otelPendingDepth({ redis, shard })).toBe(1);
     });
 
-    it("dedups a fileKey that slipped into the list twice", async () => {
+    itR("dedups a fileKey that slipped into the list twice", async () => {
       const shard = freshShard();
       const e = entry();
       // Bypass idempotent registration to simulate the raw double-RPUSH.
@@ -187,7 +204,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       expect(await otelPendingDepth({ redis, shard })).toBe(0);
     });
 
-    it("quarantines undecodable entries instead of stalling the shard", async () => {
+    itR("quarantines undecodable entries instead of stalling the shard", async () => {
       const shard = freshShard();
       const good = entry();
       await redis.rpush(otelPendingListKey(shard), "not-json{{{");
@@ -199,7 +216,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       expect(await otelPendingDepth({ redis, shard })).toBe(0);
     });
 
-    it("is fenced: a stale token writes NOTHING", async () => {
+    itR("is fenced: a stale token writes NOTHING", async () => {
       const shard = freshShard();
       await registerOtelFile({ redis, shard, entry: entry(), ttlMs: 60_000 });
       const owner = randomUUID();
@@ -223,14 +240,14 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
     });
 
-    it("returns null on an empty list", async () => {
+    itR("returns null on an empty list", async () => {
       const shard = freshShard();
       expect(await cutAsLeader(shard)).toBeNull();
     });
   });
 
   describe("recovery primitives", () => {
-    it("reconcile removes manifest members still sitting in pending", async () => {
+    itR("reconcile removes manifest members still sitting in pending", async () => {
       const shard = freshShard();
       const e1 = entry();
       const e2 = entry();
@@ -252,7 +269,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       ).toBe(0);
     });
 
-    it("dangling staged member (no manifest) reads as null", async () => {
+    itR("dangling staged member (no manifest) reads as null", async () => {
       const shard = freshShard();
       await redis.sadd(otelStagedSetKey(shard), "ghost-group");
       expect(
@@ -264,7 +281,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
       ).toBeNull();
     });
 
-    it("clearOtelStagingManifest drops manifest and index entry", async () => {
+    itR("clearOtelStagingManifest drops manifest and index entry", async () => {
       const shard = freshShard();
       await registerOtelFile({ redis, shard, entry: entry(), ttlMs: 60_000 });
       const cut = await cutAsLeader(shard);
@@ -281,7 +298,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
   });
 
   describe("lease", () => {
-    it("single owner, fence-safe renewal", async () => {
+    itR("single owner, fence-safe renewal", async () => {
       const shard = freshShard();
       const a = randomUUID();
       const b = randomUUID();
@@ -301,7 +318,7 @@ describe.skipIf(!redisUp)("otelPendingGroups (real Redis Lua)", () => {
   });
 
   describe("monitoring probes", () => {
-    it("oldest-age: null when empty, ~age when populated, MAX for poison head", async () => {
+    itR("oldest-age: null when empty, ~age when populated, MAX for poison head", async () => {
       const shard = freshShard();
       expect(await otelPendingOldestAgeMs({ redis, shard })).toBeNull();
 

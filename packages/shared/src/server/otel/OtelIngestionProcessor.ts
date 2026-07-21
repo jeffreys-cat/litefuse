@@ -27,6 +27,7 @@ import { LangfuseOtelSpanAttributes } from "./attributes";
 import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
 import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
+import { registerOtelFile } from "../redis/otelPendingGroups";
 import { isValidDateString, flattenJsonToPathArrays } from "./utils";
 
 // Type definitions for internal processor state
@@ -177,18 +178,68 @@ export class OtelIngestionProcessor {
   }
 
   /**
-   * Uploads a batch of resourceSpans to blob storage and adds a job to process them
-   * into the otel-ingestion-queue.
+   * Persists a batch of resourceSpans to blob storage, then hands it to the
+   * ingestion pipeline. Two modes (exactly-once design §3.1):
+   *
+   *   - LITEFUSE_OTEL_GROUPING_ENABLED=false (legacy): one BullMQ job per
+   *     file, enqueued directly.
+   *   - =true: idempotent registration into a per-shard pending list — the
+   *     worker-side grouper packs registered files into group jobs. The
+   *     registration Lua admits a fileKey at most once per TTL window, so a
+   *     client-level command resend cannot double-register. Any failure
+   *     throws → the route answers 5xx → the SDK re-sends (declared EO
+   *     boundary; a re-send is a NEW fileKey).
+   *
+   * The S3 upload always happens first — data durability precedes every
+   * pointer, in both modes.
    */
   async publishToOtelIngestionQueue(resourceSpans: ResourceSpan[]) {
     const fileKey = `${env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}otel/${this.projectId}/${this.getCurrentTimePath()}/${randomUUID()}.json`;
 
-    // Upload to S3
+    // Serialize exactly once: the same string is uploaded AND (grouping mode)
+    // byte-measured for the registration entry.
+    const body = JSON.stringify(resourceSpans);
     await getS3EventStorageClient(
       env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
-    ).uploadJson(fileKey, resourceSpans as Record<string, unknown>[]);
+    ).uploadJsonString(fileKey, body);
 
-    // Add queue job
+    if (env.LITEFUSE_OTEL_GROUPING_ENABLED === "true") {
+      if (!redis) {
+        throw new Error(
+          "Redis not available — cannot register otel file for grouping",
+        );
+      }
+      // Random shard spread, deliberately independent of REDIS_CLUSTER_ENABLED
+      // (the legacy job path only spreads in cluster mode; the pending lists
+      // must spread wherever more than one shard is configured).
+      const shardNames = OtelIngestionQueue.getShardNames();
+      const shard =
+        shardNames[Math.floor(Math.random() * shardNames.length)] as string;
+      await registerOtelFile({
+        redis,
+        shard,
+        ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
+        entry: {
+          v: 1,
+          fileKey,
+          size: Buffer.byteLength(body, "utf8"),
+          spanCount: this.getTotalSpanCount(resourceSpans),
+          ts: Date.now(),
+          projectId: this.projectId,
+          publicKey: this.publicKey,
+          orgId: this.orgId,
+          sdkName: this.sdkName,
+          sdkVersion: this.sdkVersion,
+          ingestionVersion: this.ingestionVersion,
+          propagatedHeaders: this.propagatedHeaders,
+        },
+      });
+      // true (newly registered) and false (already registered inside the TTL
+      // window) are BOTH success for the caller — that's the idempotency.
+      return;
+    }
+
+    // Legacy path: one BullMQ job per file.
     const queue = OtelIngestionQueue.getInstance({});
     return queue
       ? queue.add(QueueJobs.OtelIngestionJob, {
