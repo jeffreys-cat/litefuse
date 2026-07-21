@@ -90,6 +90,12 @@ const EnvSchema = z.object({
     .positive()
     .default(10_000),
   LITEFUSE_OTEL_GROUPER_TICK_MS: z.coerce.number().positive().default(200),
+  // Self-contained group job (design §3.3): per-worker semaphores.
+  // TRANSFORM bounds concurrent S3 download + JSON.parse (event-loop/heap
+  // protection); LOAD bounds concurrent stream loads (global tablet-writer
+  // fan-out = N workers × this value — design §5.3).
+  LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: z.coerce.number().positive().default(4),
+  LITEFUSE_OTEL_LOAD_CONCURRENCY: z.coerce.number().positive().default(4),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()

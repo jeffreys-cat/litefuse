@@ -202,6 +202,44 @@ const immutableEntityKeys: {
   ],
 };
 
+/**
+ * Root span → traces_scalar row (flat trace-list fast path, migration 0039),
+ * or null for non-root / trace-less records. Field semantics aligned with
+ * the list expectations: name is the explicit trace_name (no span-name
+ * fallback, per design) and empty-string scalars become NULL. Shared by the
+ * legacy per-file write path (writeEventRecord) and the exactly-once group
+ * job's self-contained scalar load.
+ */
+export const toTraceScalarRecord = (
+  eventRecord: EventRecordInsertType,
+): TraceScalarRecordInsertType | null => {
+  if (eventRecord.is_root !== 1 || !eventRecord.trace_id) return null;
+  return {
+    project_id: eventRecord.project_id,
+    id: eventRecord.trace_id,
+    start_time: eventRecord.start_time,
+    end_time: eventRecord.end_time ?? null,
+    name: eventRecord.trace_name || null,
+    user_id: eventRecord.user_id || null,
+    session_id: eventRecord.session_id || null,
+    release: eventRecord.release || null,
+    version: eventRecord.version || null,
+    environment: eventRecord.environment ?? "default",
+    bookmarked: eventRecord.bookmarked ?? false,
+    public: eventRecord.public ?? false,
+    tags: eventRecord.tags ?? [],
+    metadata: eventRecord.metadata ?? {},
+    // Precomputed compact previews + audit timestamps: let the
+    // verbosity="compact" byId point read be served entirely from
+    // traces_scalar (convertDorisToDomain needs created_at/updated_at).
+    input_trim: eventRecord.input_trim ?? null,
+    output_trim: eventRecord.output_trim ?? null,
+    created_at: eventRecord.created_at,
+    updated_at: eventRecord.updated_at,
+    event_ts: eventRecord.event_ts,
+  };
+};
+
 export class IngestionService {
   private promptService: PromptService;
 
@@ -549,34 +587,9 @@ export class IngestionService {
     // Dual-write the root span's scalar fields as the trace's one row in
     // traces_scalar (flat trace-list fast path, migration 0039). Every merged
     // re-write of the root row lands here too, so MoW keeps the scalar row
-    // current. Field semantics aligned with traces_mv / list expectations:
-    // name is the explicit trace_name (no span-name fallback, per design), and
-    // empty-string scalars become NULL to match the MV's NULLIF(x, '').
-    if (eventRecord.is_root === 1 && eventRecord.trace_id) {
-      const scalarRecord: TraceScalarRecordInsertType = {
-        project_id: eventRecord.project_id,
-        id: eventRecord.trace_id,
-        start_time: eventRecord.start_time,
-        end_time: eventRecord.end_time ?? null,
-        name: eventRecord.trace_name || null,
-        user_id: eventRecord.user_id || null,
-        session_id: eventRecord.session_id || null,
-        release: eventRecord.release || null,
-        version: eventRecord.version || null,
-        environment: eventRecord.environment ?? "default",
-        bookmarked: eventRecord.bookmarked ?? false,
-        public: eventRecord.public ?? false,
-        tags: eventRecord.tags ?? [],
-        metadata: eventRecord.metadata ?? {},
-        // Precomputed compact previews + audit timestamps: let the
-        // verbosity="compact" byId point read be served entirely from
-        // traces_scalar (convertDorisToDomain needs created_at/updated_at).
-        input_trim: eventRecord.input_trim ?? null,
-        output_trim: eventRecord.output_trim ?? null,
-        created_at: eventRecord.created_at,
-        updated_at: eventRecord.updated_at,
-        event_ts: eventRecord.event_ts,
-      };
+    // current.
+    const scalarRecord = toTraceScalarRecord(eventRecord);
+    if (scalarRecord) {
       await this.dorisWriter.addToQueue(TableName.TracesScalar, scalarRecord);
       recordIncrement("langfuse.ingestion.write", 1, {
         object: "event",
