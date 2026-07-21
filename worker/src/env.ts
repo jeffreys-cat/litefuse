@@ -69,6 +69,27 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(5),
+  // Otel grouper (exactly-once pipeline, design §3.2). Group sizing is a
+  // production tuning knob (design §6.4): target SOURCE bytes must leave
+  // headroom under BE streaming_load_json_max_mb after the transform
+  // inflation ratio (measured in load tests).
+  LITEFUSE_OTEL_GROUP_TARGET_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(64 * 1024 * 1024),
+  LITEFUSE_OTEL_GROUP_TARGET_ROWS: z.coerce
+    .number()
+    .positive()
+    .default(100_000),
+  LITEFUSE_OTEL_GROUP_MAX_FILES: z.coerce.number().positive().default(1_000),
+  // Flush timeout: a below-target group ships once its oldest entry waited
+  // this long — bounds ingest latency at low traffic.
+  LITEFUSE_OTEL_GROUP_FLUSH_MS: z.coerce.number().positive().default(1_000),
+  LITEFUSE_OTEL_GROUPER_LOCK_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(10_000),
+  LITEFUSE_OTEL_GROUPER_TICK_MS: z.coerce.number().positive().default(200),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()

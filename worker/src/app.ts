@@ -72,6 +72,7 @@ import {
 } from "./features/batch-data-retention-cleaner";
 import { MediaRetentionCleaner } from "./features/media-retention-cleaner";
 import { BatchTraceDeletionCleaner } from "./features/batch-trace-deletion-cleaner";
+import { OtelGrouper } from "./features/otelGrouper";
 import { BatchProjectMediaCleaner } from "./features/batch-project-media-cleaner";
 import { BatchProjectBlobCleaner } from "./features/batch-project-blob-cleaner";
 
@@ -272,6 +273,10 @@ if (env.QUEUE_CONSUMER_BATCH_ACTION_QUEUE_IS_ENABLED === "true") {
   );
 }
 
+// Otel grouper (exactly-once pipeline) — started with the otel consumer gate
+// below, stopped in shutdown.ts.
+export let otelGrouper: OtelGrouper | null = null;
+
 if (env.QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED === "true") {
   // Register workers for all ingestion queue shards
   const shardNames = OtelIngestionQueue.getShardNames();
@@ -284,6 +289,14 @@ if (env.QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED === "true") {
       },
     );
   });
+
+  // Otel grouper (exactly-once pipeline): resident candidate loop, elects a
+  // per-shard leader via Redis lease. Deliberately tied to the CONSUMER gate,
+  // NOT to LITEFUSE_OTEL_GROUPING_ENABLED (web registration switch) — after
+  // a rollback flips registration off, the resident grouper still drains the
+  // pending backlog instead of stranding it (design §3.2 / review B2).
+  otelGrouper = new OtelGrouper();
+  void otelGrouper.start();
 }
 
 if (env.QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED === "true") {

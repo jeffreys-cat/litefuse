@@ -99,10 +99,21 @@ return 0
  * quarantine depth metric) instead of failing the script — a poison head
  * entry must never stall the shard.
  *
+ * The DISPATCH GATE lives inside the script too (the caller just invokes it
+ * every tick): the cut happens only when the head window is "ripe" — byte or
+ * row target reached, window full, a poison entry present (must be
+ * quarantined promptly), or the oldest valid entry has waited past the flush
+ * timeout. Otherwise the script returns nil WITHOUT any write. Keeping the
+ * gate atomic with the cut means "what to cut" and "whether to cut" can
+ * never desync, and the timeout needs no reproducibility — the decision is
+ * persisted the instant it is made.
+ *
  * KEYS[1]=lock  KEYS[2]=pending  KEYS[3]=staged set  KEYS[4]=quarantine
  * ARGV[1]=lock token  ARGV[2]=target source bytes  ARGV[3]=target span rows
  * ARGV[4]=max files per group  ARGV[5]=staging key prefix (same hash tag)
- * Returns nil (fenced / empty / nothing valid) or {groupId, manifestJson}.
+ * ARGV[6]=now epoch-ms  ARGV[7]=flush timeout ms
+ * Returns nil (fenced / empty / not ripe / nothing valid) or
+ * {groupId, manifestJson}.
  */
 const CUT_GROUP_LUA = `
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
@@ -115,9 +126,13 @@ if #entries == 0 then
 end
 local targetBytes = tonumber(ARGV[2])
 local targetRows = tonumber(ARGV[3])
+local nowMs = tonumber(ARGV[6])
+local flushMs = tonumber(ARGV[7])
 local window = 0
 local bytes = 0
 local rows = 0
+local sawBad = false
+local oldestTs = nil
 local seen = {}
 local fileKeys = {}
 local raws = {}
@@ -132,12 +147,34 @@ for i, raw in ipairs(entries) do
       raws[#raws + 1] = raw
       bytes = bytes + entry.size
       rows = rows + (tonumber(entry.spanCount) or 0)
+      if oldestTs == nil or (tonumber(entry.ts) or nowMs) < oldestTs then
+        oldestTs = tonumber(entry.ts) or nowMs
+      end
     end
   else
-    redis.call('RPUSH', KEYS[4], raw)
+    sawBad = true
   end
   if bytes >= targetBytes or rows >= targetRows then
     break
+  end
+end
+-- Dispatch gate: cut only when ripe. NO writes before this point.
+local timedOut = oldestTs ~= nil and (nowMs - oldestTs) >= flushMs
+local ripe = bytes >= targetBytes or rows >= targetRows
+  or window >= maxFiles or sawBad or timedOut
+if not ripe then
+  return nil
+end
+-- Quarantine pass (writes start here): move undecodable entries aside so the
+-- LTRIM below can consume the whole window without losing them.
+if sawBad then
+  for i = 1, window do
+    local raw = entries[i]
+    local ok, entry = pcall(cjson.decode, raw)
+    if not (ok and type(entry) == 'table' and type(entry.fileKey) == 'string'
+          and type(entry.size) == 'number') then
+      redis.call('RPUSH', KEYS[4], raw)
+    end
   end
 end
 if #fileKeys == 0 then
@@ -202,6 +239,8 @@ type PipelineCommands = RedisHandle & {
     targetRows: number,
     maxFiles: number,
     stagingPrefix: string,
+    nowMs: number,
+    flushMs: number,
   ): Promise<[string, string] | null>;
   otelReconcile(pendingKey: string, ...raws: string[]): Promise<number>;
   otelRenewLease(lockKey: string, token: string, ttlMs: number): Promise<number>;
@@ -276,8 +315,9 @@ const parseManifest = (
 
 /**
  * Atomically cut the next group from the shard's pending list (see
- * CUT_GROUP_LUA). Returns null when fenced (lost the lease), the list is
- * empty, or the head window held nothing valid.
+ * CUT_GROUP_LUA — the dispatch gate is inside). Returns null when fenced
+ * (lost the lease), the list is empty, the head window is not ripe yet, or
+ * it held nothing valid. Call it every tick; the script decides.
  */
 export const cutOtelGroup = async (params: {
   redis: RedisHandle;
@@ -286,8 +326,12 @@ export const cutOtelGroup = async (params: {
   targetBytes: number;
   targetRows: number;
   maxFiles: number;
+  /** Flush timeout: cut a below-target group once its oldest entry waited this long. */
+  flushMs: number;
+  now?: number;
 }): Promise<OtelGroupCut | null> => {
-  const { redis, shard, token, targetBytes, targetRows, maxFiles } = params;
+  const { redis, shard, token, targetBytes, targetRows, maxFiles, flushMs } =
+    params;
   const result = await ensureCommands(redis).otelCutGroup(
     otelGrouperLockKey(shard),
     otelPendingListKey(shard),
@@ -298,6 +342,8 @@ export const cutOtelGroup = async (params: {
     targetRows,
     maxFiles,
     otelStagingKeyPrefix(shard),
+    params.now ?? Date.now(),
+    flushMs,
   );
   if (!result) return null;
   const [groupId, manifest] = result;

@@ -110,7 +110,14 @@ const entry = (
   ...overrides,
 });
 
-const BIG = { targetBytes: 1 << 30, targetRows: 1 << 30, maxFiles: 100 };
+// flushMs: 0 → the dispatch gate always passes (tests drive ripeness
+// explicitly where it matters).
+const BIG = {
+  targetBytes: 1 << 30,
+  targetRows: 1 << 30,
+  maxFiles: 100,
+  flushMs: 0,
+};
 
 const cutAsLeader = async (shard: string, opts: Partial<typeof BIG> = {}) => {
   const token = randomUUID();
@@ -243,6 +250,31 @@ describe("otelPendingGroups (real Redis Lua)", () => {
     itR("returns null on an empty list", async () => {
       const shard = freshShard();
       expect(await cutAsLeader(shard)).toBeNull();
+    });
+
+    itR("dispatch gate: below-target fresh entries are NOT cut", async () => {
+      const shard = freshShard();
+      await registerOtelFile({
+        redis,
+        shard,
+        entry: entry({ size: 10, ts: Date.now() }),
+        ttlMs: 60_000,
+      });
+      // Fresh + tiny + high flush timeout → not ripe → nil, zero writes.
+      const cut = await cutAsLeader(shard, { flushMs: 60_000 });
+      expect(cut).toBeNull();
+      expect(await otelPendingDepth({ redis, shard })).toBe(1);
+      expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
+    });
+
+    itR("dispatch gate: flush timeout ripens a below-target group", async () => {
+      const shard = freshShard();
+      const e = entry({ size: 10, ts: Date.now() - 5_000 });
+      await registerOtelFile({ redis, shard, entry: e, ttlMs: 60_000 });
+      // Oldest entry has waited 5s > flushMs 1s → ripe despite tiny size.
+      const cut = await cutAsLeader(shard, { flushMs: 1_000 });
+      expect(cut!.entries.map((x) => x.fileKey)).toEqual([e.fileKey]);
+      expect(await otelPendingDepth({ redis, shard })).toBe(0);
     });
   });
 
