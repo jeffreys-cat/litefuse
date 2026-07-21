@@ -332,6 +332,36 @@ export class OtelGrouper {
       oldestAge ?? 0,
       { shard },
     );
+
+    // Queue-side health (design §6.3): wait depth = consumption keeping up;
+    // failed depth + oldest failed age = the DLQ/age-guard chain's SLA input
+    // (failed_oldest_age alert must fire well before the label retention
+    // window closes the redrive path). Only for REAL configured shards — the
+    // tests' throwaway shard names must not summon queue connections.
+    if (!OtelIngestionQueue.getShardNames().includes(shard)) return;
+    try {
+      const queue = OtelIngestionQueue.getInstance({ shardName: shard });
+      if (!queue) return;
+      const counts = await queue.getJobCounts("wait", "failed");
+      recordGauge("langfuse.otel_queue.wait_depth", counts.wait ?? 0, {
+        shard,
+      });
+      recordGauge("langfuse.otel_queue.failed_depth", counts.failed ?? 0, {
+        shard,
+      });
+      const oldestFailed = await queue.getJobs(["failed"], 0, 0, true);
+      recordGauge(
+        "langfuse.otel_queue.failed_oldest_age_ms",
+        oldestFailed[0]?.timestamp
+          ? Date.now() - oldestFailed[0].timestamp
+          : 0,
+        { shard },
+      );
+    } catch (e) {
+      logger.debug(
+        `[OtelGrouper] queue gauge emit failed for ${shard}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   private async publishToQueue(
