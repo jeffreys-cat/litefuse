@@ -284,6 +284,10 @@ export class OtelGrouper {
           redis,
           shard,
           rawEntries: manifest.rawEntries,
+          // Head-window bound for the residue scan (see RECONCILE_LUA):
+          // members can only live within the cut window, so recovery cost is
+          // independent of the pending backlog depth.
+          windowSize: this.cfg.maxFiles,
         });
         recordIncrement("langfuse.otel_grouper.republished", 1, { shard });
         await this.publish(shard, manifest);

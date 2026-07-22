@@ -191,14 +191,40 @@ return { groupId, manifest }
 
 /**
  * Reconcile after a cut-script error (isolation-without-rollback may have
- * left manifest members still sitting in the pending list): remove each raw
- * entry from the list by exact value. Idempotent — LREM of an absent value
- * is a no-op. KEYS[1]=pending  ARGV=raw entry strings.
+ * left manifest members still sitting in the pending list): remove each
+ * manifest member from the list. Idempotent — absent members are no-ops.
+ *
+ * HEAD-WINDOW invariant (the whole cost model): manifest members can only
+ * ever live in the FIRST windowSize positions of the list —
+ *   (a) the cut selected them from the head window (≤ maxFiles entries),
+ *   (b) new registrations only RPUSH to the tail (LPUSH is never used),
+ *   (c) removals only shift the remaining members left — including a
+ *       partially-crashed prior reconcile: the leftover members are still a
+ *       head prefix.
+ * So the scan is LRANGE over that window + per-hit LREM (which also
+ * terminates inside the window) — total cost is O(windowSize²) worst-case
+ * and INDEPENDENT of the pending depth. The naive per-member LREM scan was
+ * O(members × depth): an all-miss reconcile (LTRIM already ran — the common
+ * crash shape) against a deep backlog (grouper outage) could block Redis
+ * for seconds inside one atomic script.
+ *
+ * KEYS[1]=pending  ARGV[1]=windowSize  ARGV[2..]=raw manifest entries.
+ * Ops note: windowSize is max(current maxFiles, member count) — do not
+ * LOWER LITEFUSE_OTEL_GROUP_MAX_FILES while a leftover manifest from a
+ * larger window might exist (members beyond the new window would be missed
+ * and re-grouped).
  */
 const RECONCILE_LUA = `
+local members = {}
+for i = 2, #ARGV do
+  members[ARGV[i]] = true
+end
+local window = redis.call('LRANGE', KEYS[1], 0, tonumber(ARGV[1]) - 1)
 local removed = 0
-for i = 1, #ARGV do
-  removed = removed + redis.call('LREM', KEYS[1], 1, ARGV[i])
+for _, raw in ipairs(window) do
+  if members[raw] then
+    removed = removed + redis.call('LREM', KEYS[1], 1, raw)
+  end
 end
 return removed
 `;
@@ -240,7 +266,11 @@ type PipelineCommands = RedisHandle & {
     nowMs: number,
     flushMs: number,
   ): Promise<[string, string] | null>;
-  otelReconcile(pendingKey: string, ...raws: string[]): Promise<number>;
+  otelReconcile(
+    pendingKey: string,
+    windowSize: number,
+    ...raws: string[]
+  ): Promise<number>;
   otelRenewLease(lockKey: string, token: string, ttlMs: number): Promise<number>;
 };
 
@@ -352,16 +382,21 @@ export const cutOtelGroup = async (params: {
  * Converge the pending list to the cut-completed state after a cut-script
  * error: remove every manifest member still sitting in the list. Must run —
  * for every leftover staging manifest — before the next cut is allowed.
+ * `windowSize` bounds the head-window scan (see RECONCILE_LUA): pass the
+ * grouper's maxFiles; it is floored at the member count so a manifest can
+ * never outsize its own scan window.
  */
 export const reconcileOtelPending = async (params: {
   redis: RedisHandle;
   shard: string;
   rawEntries: string[];
+  windowSize: number;
 }): Promise<number> => {
-  const { redis, shard, rawEntries } = params;
+  const { redis, shard, rawEntries, windowSize } = params;
   if (rawEntries.length === 0) return 0;
   return ensureCommands(redis).otelReconcile(
     otelPendingListKey(shard),
+    Math.max(windowSize, rawEntries.length),
     ...rawEntries,
   );
 };

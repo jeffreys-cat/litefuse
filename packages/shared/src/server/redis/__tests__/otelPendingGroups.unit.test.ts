@@ -289,13 +289,51 @@ describe("otelPendingGroups (real Redis Lua)", () => {
         redis,
         shard,
         rawEntries: raws,
+        windowSize: 100,
       });
       expect(removed).toBe(2);
       expect(await otelPendingDepth({ redis, shard })).toBe(0);
       // Idempotent: a second reconcile is a no-op.
       expect(
-        await reconcileOtelPending({ redis, shard, rawEntries: raws }),
+        await reconcileOtelPending({
+          redis,
+          shard,
+          rawEntries: raws,
+          windowSize: 100,
+        }),
       ).toBe(0);
+    });
+
+    itR("reconcile scans ONLY the head window — deep backlog stays untouched", async () => {
+      const shard = freshShard();
+      // Residue prefix (2 members) + a deep tail of unrelated new arrivals.
+      const m1 = entry();
+      const m2 = entry();
+      const raws = [JSON.stringify(m1), JSON.stringify(m2)];
+      const tail = Array.from({ length: 500 }, () => JSON.stringify(entry()));
+      await redis.rpush(otelPendingListKey(shard), ...raws, ...tail);
+
+      const removed = await reconcileOtelPending({
+        redis,
+        shard,
+        rawEntries: raws,
+        windowSize: 10, // tiny window: proves the tail is never scanned
+      });
+      expect(removed).toBe(2);
+      expect(await otelPendingDepth({ redis, shard })).toBe(500);
+
+      // All-miss reconcile (the common crash shape: LTRIM already ran) against
+      // the same deep list: bounded head scan, zero removals, tail intact.
+      const missRaws = [JSON.stringify(entry()), JSON.stringify(entry())];
+      expect(
+        await reconcileOtelPending({
+          redis,
+          shard,
+          rawEntries: missRaws,
+          windowSize: 10,
+        }),
+      ).toBe(0);
+      expect(await otelPendingDepth({ redis, shard })).toBe(500);
     });
 
     itR("reading an absent manifest returns null (concurrent-clear race)", async () => {
