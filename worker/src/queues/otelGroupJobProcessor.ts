@@ -351,10 +351,23 @@ export const buildGroupJobDeps = (params: {
     transformFile: params.transformFile,
     // Every load goes through the per-worker load semaphore: global in-flight
     // loads = N workers × LITEFUSE_OTEL_LOAD_CONCURRENCY (design §5.3).
-    streamLoadBody: (table, body, recordCount, options) =>
-      groupJobLoadLimiter(() =>
-        client.streamLoadBody(table, body, recordCount, options),
-      ),
+    // Semaphore WAIT is measured separately — it is included in the caller's
+    // per-load duration, so without this a saturated semaphore is
+    // indistinguishable from a slow Doris (high ms, low MB/s) in the
+    // [OtelGroupJob] line.
+    streamLoadBody: async (table, body, recordCount, options) => {
+      const enqueued = Date.now();
+      return groupJobLoadLimiter(() => {
+        const waitedMs = Date.now() - enqueued;
+        recordHistogram("langfuse.otel_group.load_semaphore_wait_ms", waitedMs);
+        if (waitedMs > 1_000) {
+          logger.warn(
+            `[OtelGroupJob] load semaphore wait ${waitedMs}ms for ${table} (pending=${groupJobLoadLimiter.pendingCount}) — LITEFUSE_OTEL_LOAD_CONCURRENCY saturated; per-load ms in the job line includes this wait`,
+          );
+        }
+        return client.streamLoadBody(table, body, recordCount, options);
+      });
+    },
     ledgerExists: async (groupId) => {
       const rows = await client.query(
         `SELECT 1 AS e FROM blob_storage_file_log WHERE event_id = '${groupId.replace(/'/g, "''")}' AND entity_type = 'otel-file' LIMIT 1`,
