@@ -23,6 +23,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
+import { groupJobLoadLimiter } from "../../queues/otelGroupJobProcessor";
 
 type RedisHandle = Redis | Cluster;
 
@@ -212,6 +213,20 @@ export class OtelGrouper {
     // leader must surface as a rising gauge, not as gauge absence).
     const emitGauges =
       this.tickCount % Math.max(1, Math.round(5_000 / this.cfg.tickMs)) === 0;
+    if (emitGauges) {
+      // In-flight stream loads of THIS worker's group path (process-wide,
+      // not per shard): active = loads on the wire, pending = queued on the
+      // semaphore. The group-path counterpart of DorisWriter's
+      // "pool loads=x/y waiters=n" gauge line.
+      recordGauge(
+        "langfuse.otel_group.loads_active",
+        groupJobLoadLimiter.activeCount,
+      );
+      recordGauge(
+        "langfuse.otel_group.loads_pending",
+        groupJobLoadLimiter.pendingCount,
+      );
+    }
     for (const shard of this.shardNames) {
       if (this.stopped) return;
       try {
@@ -456,7 +471,7 @@ export class OtelGrouper {
           ? ` wait=${wait} failed=${failed}${(failed ?? 0) > 0 ? `(oldest ${(failedOldestMs / 3600_000).toFixed(1)}h)` : ""}`
           : "";
       logger.info(
-        `[OtelGrouper.health] shard=${shard} leader=${this.held.has(shard)} pending=${depth}(oldest ${oldestSec}s) staging=${staged.length} quarantine=${quarantine}${queuePart}`,
+        `[OtelGrouper.health] shard=${shard} leader=${this.held.has(shard)} pending=${depth}(oldest ${oldestSec}s) staging=${staged.length} quarantine=${quarantine}${queuePart} loads=${groupJobLoadLimiter.activeCount}/${env.LITEFUSE_OTEL_LOAD_CONCURRENCY}${groupJobLoadLimiter.pendingCount > 0 ? `(+${groupJobLoadLimiter.pendingCount} queued)` : ""}`,
       );
     }
   }
