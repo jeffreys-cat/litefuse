@@ -35,12 +35,15 @@ export const otelPendingListKey = (shard: string) =>
   `${shardTag(shard)}:otel-pending`;
 export const otelGrouperLockKey = (shard: string) =>
   `${shardTag(shard)}:otel-grouper-lock`;
-export const otelStagedSetKey = (shard: string) =>
-  `${shardTag(shard)}:otel-staged`;
-export const otelStagingKeyPrefix = (shard: string) =>
-  `${shardTag(shard)}:otel-staging:`;
-export const otelStagingKey = (shard: string, groupId: string) =>
-  `${otelStagingKeyPrefix(shard)}${groupId}`;
+/**
+ * Staging is ONE hash per shard: field = groupId, value = manifest JSON.
+ * Directory and content are the same structure, so "register the group" and
+ * "persist its manifest" are a single HSET (command-level atomic — no
+ * dangling directory entry can exist) and cleanup is a single HDEL. HKEYS
+ * is the recovery scan.
+ */
+export const otelStagingHashKey = (shard: string) =>
+  `${shardTag(shard)}:otel-staging`;
 export const otelQuarantineKey = (shard: string) =>
   `${shardTag(shard)}:otel-quarantine`;
 export const otelRegisteredKey = (shard: string, fileKey: string) =>
@@ -84,14 +87,12 @@ return 0
  * groupId → persist the staging manifest → SADD staged index → LTRIM.
  *
  * Ordering inside the script is normative (design §3.2):
- *   - SADD staged BEFORE SET staging: a partial failure leaves a dangling
- *     staged member with no manifest — recovery treats nil-manifest as
- *     "already handled" (SREM+skip), no duplication side. The reverse order
- *     could leave an orphan manifest that no scan ever finds.
- *   - staging (manifest) BEFORE LTRIM: a partial failure between them leaves
- *     the members BOTH in the manifest and in the list — the reconcile step
- *     (LREM by exact raw entry) converges to the cut-completed state. The
- *     reverse order would drop members with no manifest = loss.
+ *   - staging HSET (directory + manifest in ONE command — no dangling
+ *     directory state is representable) BEFORE LTRIM: a partial failure
+ *     between them leaves the members BOTH in the manifest and in the list —
+ *     the reconcile step (LREM by exact raw entry) converges to the
+ *     cut-completed state. The reverse order would drop members with no
+ *     manifest = loss.
  *   - Redis Lua is isolation-without-rollback: an error mid-script KEEPS the
  *     writes already made; callers must run reconcile before cutting again.
  *
@@ -108,10 +109,9 @@ return 0
  * never desync, and the timeout needs no reproducibility — the decision is
  * persisted the instant it is made.
  *
- * KEYS[1]=lock  KEYS[2]=pending  KEYS[3]=staged set  KEYS[4]=quarantine
+ * KEYS[1]=lock  KEYS[2]=pending  KEYS[3]=staging hash  KEYS[4]=quarantine
  * ARGV[1]=lock token  ARGV[2]=target source bytes  ARGV[3]=target span rows
- * ARGV[4]=max files per group  ARGV[5]=staging key prefix (same hash tag)
- * ARGV[6]=now epoch-ms  ARGV[7]=flush timeout ms
+ * ARGV[4]=max files per group  ARGV[5]=now epoch-ms  ARGV[6]=flush timeout ms
  * Returns nil (fenced / empty / not ripe / nothing valid) or
  * {groupId, manifestJson}.
  */
@@ -126,8 +126,8 @@ if #entries == 0 then
 end
 local targetBytes = tonumber(ARGV[2])
 local targetRows = tonumber(ARGV[3])
-local nowMs = tonumber(ARGV[6])
-local flushMs = tonumber(ARGV[7])
+local nowMs = tonumber(ARGV[5])
+local flushMs = tonumber(ARGV[6])
 local window = 0
 local bytes = 0
 local rows = 0
@@ -184,8 +184,7 @@ end
 table.sort(fileKeys)
 local groupId = redis.sha1hex(table.concat(fileKeys, ','))
 local manifest = '[' .. table.concat(raws, ',') .. ']'
-redis.call('SADD', KEYS[3], groupId)
-redis.call('SET', ARGV[5] .. groupId, manifest)
+redis.call('HSET', KEYS[3], groupId, manifest)
 redis.call('LTRIM', KEYS[2], window, -1)
 return { groupId, manifest }
 `;
@@ -232,13 +231,12 @@ type PipelineCommands = RedisHandle & {
   otelCutGroup(
     lockKey: string,
     pendingKey: string,
-    stagedKey: string,
+    stagingHashKey: string,
     quarantineKey: string,
     token: string,
     targetBytes: number,
     targetRows: number,
     maxFiles: number,
-    stagingPrefix: string,
     nowMs: number,
     flushMs: number,
   ): Promise<[string, string] | null>;
@@ -335,13 +333,12 @@ export const cutOtelGroup = async (params: {
   const result = await ensureCommands(redis).otelCutGroup(
     otelGrouperLockKey(shard),
     otelPendingListKey(shard),
-    otelStagedSetKey(shard),
+    otelStagingHashKey(shard),
     otelQuarantineKey(shard),
     token,
     targetBytes,
     targetRows,
     maxFiles,
-    otelStagingKeyPrefix(shard),
     params.now ?? Date.now(),
     flushMs,
   );
@@ -403,18 +400,19 @@ export const renewOtelGrouperLease = async (params: {
   return res === 1;
 };
 
-/** List the groupIds with (possibly dangling) staging manifests. */
+/** List the groupIds with staging manifests (HKEYS — the recovery scan). */
 export const scanStagedOtelGroups = async (params: {
   redis: RedisHandle;
   shard: string;
 }): Promise<string[]> => {
-  return params.redis.smembers(otelStagedSetKey(params.shard));
+  return params.redis.hkeys(otelStagingHashKey(params.shard));
 };
 
 /**
- * Read one staging manifest. Returns null for a DANGLING staged member (the
- * manifest key is gone — SADD-before-SET partial failure, or a concurrent
- * clear): callers must SREM the member and skip, never treat it as an error.
+ * Read one staging manifest. Returns null when the field is gone — with the
+ * single-hash design the only benign cause is a concurrent clear between the
+ * caller's HKEYS and this HGET (the group was already published); callers
+ * just skip it.
  */
 export const readOtelStagingManifest = async (params: {
   redis: RedisHandle;
@@ -422,14 +420,14 @@ export const readOtelStagingManifest = async (params: {
   groupId: string;
 }): Promise<OtelGroupCut | null> => {
   const { redis, shard, groupId } = params;
-  const manifest = await redis.get(otelStagingKey(shard, groupId));
+  const manifest = await redis.hget(otelStagingHashKey(shard), groupId);
   if (manifest == null) return null;
   try {
     const { entries, rawEntries } = parseManifest(manifest);
     return { groupId, entries, rawEntries };
   } catch (e) {
     // A manifest that no longer parses is a bug, but it must not wedge the
-    // recovery scan: surface loudly and let the operator inspect the key.
+    // recovery scan: surface loudly and let the operator inspect the field.
     logger.error(
       `otel staging manifest unparsable (groupId=${groupId}, shard=${shard}): ${e instanceof Error ? e.message : String(e)}`,
     );
@@ -437,15 +435,16 @@ export const readOtelStagingManifest = async (params: {
   }
 };
 
-/** Drop a staging manifest after its group job was durably queued. */
+/**
+ * Drop a staging manifest after its group job was durably queued. Single
+ * HDEL — directory entry and content vanish together, no two-step window.
+ */
 export const clearOtelStagingManifest = async (params: {
   redis: RedisHandle;
   shard: string;
   groupId: string;
 }): Promise<void> => {
-  const { redis, shard, groupId } = params;
-  await redis.del(otelStagingKey(shard, groupId));
-  await redis.srem(otelStagedSetKey(shard), groupId);
+  await params.redis.hdel(otelStagingHashKey(params.shard), params.groupId);
 };
 
 /** Depth probes for monitoring (pending backlog / quarantine). */

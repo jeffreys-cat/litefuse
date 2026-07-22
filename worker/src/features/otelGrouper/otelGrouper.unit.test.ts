@@ -17,8 +17,7 @@ import {
   scanStagedOtelGroups,
   otelPendingDepth,
   otelPendingListKey,
-  otelStagingKey,
-  otelStagedSetKey,
+  otelStagingHashKey,
   otelQuarantineKey,
   otelGrouperLockKey,
   computeGroupId,
@@ -71,13 +70,11 @@ afterEach(async () => {
 const freshShard = () => {
   const shard = `otel-grouper-test-${randomUUID().slice(0, 8)}`;
   cleanups.push(async () => {
-    const staged = await redis.smembers(otelStagedSetKey(shard));
     await redis.del(
       otelPendingListKey(shard),
-      otelStagedSetKey(shard),
+      otelStagingHashKey(shard),
       otelQuarantineKey(shard),
       otelGrouperLockKey(shard),
-      ...staged.map((g) => otelStagingKey(shard, g)),
     );
     const regKeys = await redis.keys(`${shard}:otel-reg:*`);
     if (regKeys.length > 0) await redis.del(...regKeys);
@@ -202,8 +199,7 @@ describe("OtelGrouper orchestration (real Redis)", () => {
     const e2 = entry();
     const raws = [JSON.stringify(e1), JSON.stringify(e2)];
     const groupId = computeGroupId([e1.fileKey, e2.fileKey]);
-    await redis.sadd(otelStagedSetKey(shard), groupId);
-    await redis.set(otelStagingKey(shard, groupId), `[${raws.join(",")}]`);
+    await redis.hset(otelStagingHashKey(shard), groupId, `[${raws.join(",")}]`);
     await redis.rpush(otelPendingListKey(shard), ...raws);
 
     const { grouper, published } = makeGrouper(shard);
@@ -224,20 +220,26 @@ describe("OtelGrouper orchestration (real Redis)", () => {
     expect(await otelPendingDepth({ redis, shard })).toBe(0);
   });
 
-  itR("cleans a dangling staged member (no manifest)", async () => {
+  itR("unparsable manifest is surfaced but never wedges the recovery scan", async () => {
     const shard = freshShard();
-    await redis.sadd(otelStagedSetKey(shard), "ghost");
+    await redis.hset(otelStagingHashKey(shard), "broken-group", "not-json{{{");
+    await registerOtelFile({
+      redis,
+      shard,
+      entry: entry({ size: 3000 }),
+      ttlMs: 60_000,
+    });
 
     const { grouper, published } = makeGrouper(shard);
     await grouper.start();
 
+    // Normal cutting continues despite the poisonous manifest field.
     await vi.waitFor(
-      async () => {
-        expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
+      () => {
+        expect(published.length).toBeGreaterThanOrEqual(1);
       },
       { timeout: 3_000 },
     );
-    expect(published).toHaveLength(0);
   });
 
   itR("defers to a foreign lease holder, takes over after release", async () => {

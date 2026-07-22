@@ -23,8 +23,7 @@ import {
   otelQuarantineDepth,
   otelPendingOldestAgeMs,
   otelPendingListKey,
-  otelStagingKey,
-  otelStagedSetKey,
+  otelStagingHashKey,
   otelQuarantineKey,
   otelGrouperLockKey,
   otelRegisteredKey,
@@ -82,13 +81,11 @@ const freshShard = () => {
 afterEach(async () => {
   if (!redisUp) return;
   for (const shard of shards.splice(0)) {
-    const staged = await redis.smembers(otelStagedSetKey(shard));
     const keys = [
       otelPendingListKey(shard),
-      otelStagedSetKey(shard),
+      otelStagingHashKey(shard),
       otelQuarantineKey(shard),
       otelGrouperLockKey(shard),
-      ...staged.map((g) => otelStagingKey(shard, g)),
     ];
     // registered keys are content-addressed; flush by scanning our namespace.
     const regPattern = `${otelRegisteredKey(shard, "x").split(":otel-reg:")[0]}:otel-reg:*`;
@@ -301,14 +298,13 @@ describe("otelPendingGroups (real Redis Lua)", () => {
       ).toBe(0);
     });
 
-    itR("dangling staged member (no manifest) reads as null", async () => {
+    itR("reading an absent manifest returns null (concurrent-clear race)", async () => {
       const shard = freshShard();
-      await redis.sadd(otelStagedSetKey(shard), "ghost-group");
       expect(
         await readOtelStagingManifest({
           redis,
           shard,
-          groupId: "ghost-group",
+          groupId: "already-cleared-group",
         }),
       ).toBeNull();
     });

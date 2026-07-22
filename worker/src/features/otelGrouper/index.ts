@@ -249,8 +249,8 @@ export class OtelGrouper {
    * Republish leftover staging manifests. Runs EVERY leader tick: covers the
    * grouper crash between cut and publish, a publish failure on a healthy
    * leader, and (via reconcile) the partial-cut residue of a mid-script
-   * error. A dangling staged member without a manifest means the SADD-before-
-   * SET partial failure or a concurrent clear — SREM and move on.
+   * error. A nil manifest for a scanned groupId only means a concurrent
+   * clear between HKEYS and HGET (already published) — skip.
    */
   private async recoverStaged(shard: string): Promise<void> {
     const redis = this.redis!;
@@ -262,13 +262,7 @@ export class OtelGrouper {
           shard,
           groupId,
         });
-        if (!manifest) {
-          await clearOtelStagingManifest({ redis, shard, groupId });
-          recordIncrement("langfuse.otel_grouper.dangling_cleaned", 1, {
-            shard,
-          });
-          continue;
-        }
+        if (!manifest) continue;
         // Self-heal the isolation-without-rollback case (manifest written,
         // LTRIM never ran): idempotent LREM of every manifest member.
         await reconcileOtelPending({
