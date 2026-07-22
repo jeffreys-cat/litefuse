@@ -200,7 +200,14 @@ return { groupId, manifest }
  *   (b) new registrations only RPUSH to the tail (LPUSH is never used),
  *   (c) removals only shift the remaining members left — including a
  *       partially-crashed prior reconcile: the leftover members are still a
- *       head prefix.
+ *       head prefix,
+ *   (d) reviewed non-threats: the reconciliation tool's re-injection RPUSHes
+ *       a NEWLY-built entry (fresh ts) — different bytes, never an LREM
+ *       target here; at most ONE manifest can have in-list residue at a time
+ *       (recovery-before-cut + dirty-tick); FIFO puts the oldest entries at
+ *       the head anyway. Out of contract: manual RPUSH of duplicate bytes,
+ *       and LOWERING maxFiles while a leftover manifest from a larger window
+ *       might exist.
  * So the scan is LRANGE over that window + per-hit LREM (which also
  * terminates inside the window) — total cost is O(windowSize²) worst-case
  * and INDEPENDENT of the pending depth. The naive per-member LREM scan was
@@ -271,7 +278,11 @@ type PipelineCommands = RedisHandle & {
     windowSize: number,
     ...raws: string[]
   ): Promise<number>;
-  otelRenewLease(lockKey: string, token: string, ttlMs: number): Promise<number>;
+  otelRenewLease(
+    lockKey: string,
+    token: string,
+    ttlMs: number,
+  ): Promise<number>;
 };
 
 const ensureCommands = (redis: RedisHandle): PipelineCommands => {

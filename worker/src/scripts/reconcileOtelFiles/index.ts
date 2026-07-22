@@ -35,6 +35,8 @@ import {
   logger,
   registerOtelFile,
   otelRegisteredKey,
+  scanStagedOtelGroups,
+  otelPendingOldestAgeMs,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
@@ -98,6 +100,34 @@ const main = async () => {
     sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
   );
 
+  // ⓪ Execute-mode preflight: re-injection is only safe against a HEALTHY
+  // pipeline. Two disaster shapes make it double-load instead (invariant
+  // review, case 8):
+  //   - an over-age file whose ORIGINAL entry still sits in pending (grouper
+  //     dead for days) → re-injection puts the same fileKey in the list
+  //     twice → two groups → two labels;
+  //   - a staging manifest stuck for days → re-injected members land in a
+  //     new group, then the revived recovery republishes the old manifest.
+  // Guards: every shard must have (a) no leftover staging manifests and
+  // (b) no pending entry older than the re-inject threshold (oldest-age <
+  // threshold ⇒ no over-age file can still be queued).
+  if (EXECUTE) {
+    for (const shard of shards) {
+      const staged = await scanStagedOtelGroups({ redis, shard });
+      if (staged.length > 0) {
+        throw new Error(
+          `[reconcile] preflight failed: shard ${shard} has ${staged.length} leftover staging manifest(s) — the pipeline is not healthy; drain recovery first (re-injection against a stuck pipeline double-loads)`,
+        );
+      }
+      const oldestAge = await otelPendingOldestAgeMs({ redis, shard });
+      if (oldestAge != null && oldestAge >= OLDER_THAN_MS) {
+        throw new Error(
+          `[reconcile] preflight failed: shard ${shard} pending backlog is older (${Math.round(oldestAge / 3600_000)}h) than the re-inject threshold — over-age files may still be queued; drain the grouper first`,
+        );
+      }
+    }
+  }
+
   // ① S3 inventory inside the window.
   const prefix = `${sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}otel/`;
   const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
@@ -114,7 +144,9 @@ const main = async () => {
     select: { fileKeys: true },
   });
   const poisoned = new Set<string>(
-    poisonRows.flatMap((r) => (Array.isArray(r.fileKeys) ? (r.fileKeys as string[]) : [])),
+    poisonRows.flatMap((r) =>
+      Array.isArray(r.fileKeys) ? (r.fileKeys as string[]) : [],
+    ),
   );
 
   // ③ Ledger membership, batched IN queries (multiple rows per fileKey are
