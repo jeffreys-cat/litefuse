@@ -175,7 +175,8 @@ export class OtelGrouper {
     this.tickCount++;
     // Gauges from EVERY candidate every ~5s (leadership-independent — a dead
     // leader must surface as a rising gauge, not as gauge absence).
-    const emitGauges = this.tickCount % Math.max(1, Math.round(5_000 / this.cfg.tickMs)) === 0;
+    const emitGauges =
+      this.tickCount % Math.max(1, Math.round(5_000 / this.cfg.tickMs)) === 0;
     for (const shard of this.shardNames) {
       if (this.stopped) return;
       try {
@@ -193,7 +194,12 @@ export class OtelGrouper {
     const redis = this.redis!;
     if (!(await this.acquireOrRenew(shard))) return; // not the leader
 
-    await this.recoverStaged(shard);
+    // Recovery must COMPLETE before the next cut: a leftover manifest whose
+    // members still sit in pending (mid-script residue) would otherwise be
+    // re-cut into a second group under a second label. A transient failure
+    // on any single group's recovery therefore skips cutting for this tick —
+    // better one 200ms-late cut than a double-grouped file.
+    if (!(await this.recoverStaged(shard))) return;
 
     const cut = await cutOtelGroup({
       redis,
@@ -251,9 +257,18 @@ export class OtelGrouper {
    * leader, and (via reconcile) the partial-cut residue of a mid-script
    * error. A nil manifest for a scanned groupId only means a concurrent
    * clear between HKEYS and HGET (already published) — skip.
+   *
+   * Returns false when any group's recovery hit a TRANSIENT error (redis
+   * read failure etc.) — the caller must then skip cutting this tick, or
+   * unreconciled mid-script residue could be re-cut into a second group
+   * under a second label. (An unparsable manifest reads as null and does NOT
+   * dirty the tick: Redis doesn't bit-rot values, so it can only be a
+   * foreign/buggy write — alarmed in the read helper, never fixable by
+   * waiting, must not stall the shard.)
    */
-  private async recoverStaged(shard: string): Promise<void> {
+  private async recoverStaged(shard: string): Promise<boolean> {
     const redis = this.redis!;
+    let clean = true;
     const groupIds = await scanStagedOtelGroups({ redis, shard });
     for (const groupId of groupIds) {
       try {
@@ -276,8 +291,10 @@ export class OtelGrouper {
         logger.error(
           `[OtelGrouper] recovery failed for group ${groupId} on ${shard}: ${e instanceof Error ? e.message : String(e)}`,
         );
+        clean = false; // dirty tick — caller must not cut until recovery completes
       }
     }
+    return clean;
   }
 
   private async acquireOrRenew(shard: string): Promise<boolean> {
@@ -321,11 +338,9 @@ export class OtelGrouper {
     recordGauge("langfuse.otel_grouper.staging_count", staged.length, {
       shard,
     });
-    recordGauge(
-      "langfuse.otel_grouper.pending_oldest_age_ms",
-      oldestAge ?? 0,
-      { shard },
-    );
+    recordGauge("langfuse.otel_grouper.pending_oldest_age_ms", oldestAge ?? 0, {
+      shard,
+    });
 
     // Queue-side health (design §6.3): wait depth = consumption keeping up;
     // failed depth + oldest failed age = the DLQ/age-guard chain's SLA input
@@ -346,9 +361,7 @@ export class OtelGrouper {
       const oldestFailed = await queue.getJobs(["failed"], 0, 0, true);
       recordGauge(
         "langfuse.otel_queue.failed_oldest_age_ms",
-        oldestFailed[0]?.timestamp
-          ? Date.now() - oldestFailed[0].timestamp
-          : 0,
+        oldestFailed[0]?.timestamp ? Date.now() - oldestFailed[0].timestamp : 0,
         { shard },
       );
     } catch (e) {

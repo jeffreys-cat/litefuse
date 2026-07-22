@@ -160,121 +160,188 @@ describe("OtelGrouper orchestration (real Redis)", () => {
     expect(await otelPendingDepth({ redis, shard })).toBe(0);
   });
 
-  itR("publish failure keeps the manifest and republishes next tick", async () => {
-    const shard = freshShard();
-    await registerOtelFile({
-      redis,
-      shard,
-      entry: entry({ size: 3000 }),
-      ttlMs: 60_000,
-    });
-
-    const calls: Published[] = [];
-    let failures = 2;
-    const { grouper } = makeGrouper(shard, {
-      addGroupJob: async (s, cut) => {
-        calls.push({ shard: s, cut });
-        if (failures-- > 0) throw new Error("queue down");
-      },
-    });
-    await grouper.start();
-
-    await vi.waitFor(
-      async () => {
-        expect(calls.length).toBeGreaterThanOrEqual(3);
-        expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
-      },
-      { timeout: 4_000 },
-    );
-    // Every attempt republished the SAME decided group — never a new cut.
-    const ids = new Set(calls.map((c) => c.cut.groupId));
-    expect(ids.size).toBe(1);
-  });
-
-  itR("republishes a leftover manifest and reconciles its list residue", async () => {
-    const shard = freshShard();
-    // Simulate the mid-script/partial-cut residue: manifest + staged index
-    // exist AND the members still sit in the pending list (LTRIM never ran).
-    const e1 = entry();
-    const e2 = entry();
-    const raws = [JSON.stringify(e1), JSON.stringify(e2)];
-    const groupId = computeGroupId([e1.fileKey, e2.fileKey]);
-    await redis.hset(otelStagingHashKey(shard), groupId, `[${raws.join(",")}]`);
-    await redis.rpush(otelPendingListKey(shard), ...raws);
-
-    const { grouper, published } = makeGrouper(shard);
-    await grouper.start();
-
-    await vi.waitFor(
-      async () => {
-        expect(published.length).toBeGreaterThanOrEqual(1);
-        expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
-      },
-      { timeout: 3_000 },
-    );
-    // Exactly ONE group (the recovered one) — the reconciled members were
-    // LREM'd, never re-cut into a second group under a second label.
-    expect(new Set(published.map((p) => p.cut.groupId))).toEqual(
-      new Set([groupId]),
-    );
-    expect(await otelPendingDepth({ redis, shard })).toBe(0);
-  });
-
-  itR("unparsable manifest is surfaced but never wedges the recovery scan", async () => {
-    const shard = freshShard();
-    await redis.hset(otelStagingHashKey(shard), "broken-group", "not-json{{{");
-    await registerOtelFile({
-      redis,
-      shard,
-      entry: entry({ size: 3000 }),
-      ttlMs: 60_000,
-    });
-
-    const { grouper, published } = makeGrouper(shard);
-    await grouper.start();
-
-    // Normal cutting continues despite the poisonous manifest field.
-    await vi.waitFor(
-      () => {
-        expect(published.length).toBeGreaterThanOrEqual(1);
-      },
-      { timeout: 3_000 },
-    );
-  });
-
-  itR("defers to a foreign lease holder, takes over after release", async () => {
-    const shard = freshShard();
-    await registerOtelFile({
-      redis,
-      shard,
-      entry: entry({ size: 3000 }),
-      ttlMs: 60_000,
-    });
-    // Another worker holds the shard lease.
-    expect(
-      await acquireOtelGrouperLease({
+  itR(
+    "publish failure keeps the manifest and republishes next tick",
+    async () => {
+      const shard = freshShard();
+      await registerOtelFile({
         redis,
         shard,
-        token: "foreign-leader",
+        entry: entry({ size: 3000 }),
         ttlMs: 60_000,
-      }),
-    ).toBe(true);
+      });
 
-    const { grouper, published } = makeGrouper(shard);
-    await grouper.start();
+      const calls: Published[] = [];
+      let failures = 2;
+      const { grouper } = makeGrouper(shard, {
+        addGroupJob: async (s, cut) => {
+          calls.push({ shard: s, cut });
+          if (failures-- > 0) throw new Error("queue down");
+        },
+      });
+      await grouper.start();
 
-    // Several ticks pass — not the leader, must not touch anything.
-    await new Promise((r) => setTimeout(r, 300));
-    expect(published).toHaveLength(0);
-    expect(await otelPendingDepth({ redis, shard })).toBe(1);
+      await vi.waitFor(
+        async () => {
+          expect(calls.length).toBeGreaterThanOrEqual(3);
+          expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
+        },
+        { timeout: 4_000 },
+      );
+      // Every attempt republished the SAME decided group — never a new cut.
+      const ids = new Set(calls.map((c) => c.cut.groupId));
+      expect(ids.size).toBe(1);
+    },
+  );
 
-    // Leader dies (lease released) → takeover on a later tick.
-    await redis.del(otelGrouperLockKey(shard));
-    await vi.waitFor(
-      () => {
-        expect(published.length).toBeGreaterThanOrEqual(1);
-      },
-      { timeout: 3_000 },
-    );
-  });
+  itR(
+    "republishes a leftover manifest and reconciles its list residue",
+    async () => {
+      const shard = freshShard();
+      // Simulate the mid-script/partial-cut residue: manifest + staged index
+      // exist AND the members still sit in the pending list (LTRIM never ran).
+      const e1 = entry();
+      const e2 = entry();
+      const raws = [JSON.stringify(e1), JSON.stringify(e2)];
+      const groupId = computeGroupId([e1.fileKey, e2.fileKey]);
+      await redis.hset(
+        otelStagingHashKey(shard),
+        groupId,
+        `[${raws.join(",")}]`,
+      );
+      await redis.rpush(otelPendingListKey(shard), ...raws);
+
+      const { grouper, published } = makeGrouper(shard);
+      await grouper.start();
+
+      await vi.waitFor(
+        async () => {
+          expect(published.length).toBeGreaterThanOrEqual(1);
+          expect(await scanStagedOtelGroups({ redis, shard })).toEqual([]);
+        },
+        { timeout: 3_000 },
+      );
+      // Exactly ONE group (the recovered one) — the reconciled members were
+      // LREM'd, never re-cut into a second group under a second label.
+      expect(new Set(published.map((p) => p.cut.groupId))).toEqual(
+        new Set([groupId]),
+      );
+      expect(await otelPendingDepth({ redis, shard })).toBe(0);
+    },
+  );
+
+  itR(
+    "dirty recovery tick skips cutting (mid-script residue must not be re-grouped)",
+    async () => {
+      const shard = freshShard();
+      // Mid-script residue: valid manifest G whose members ALSO still sit in
+      // pending (LTRIM never ran).
+      const e1 = entry({ size: 3000 });
+      const raw = JSON.stringify(e1);
+      const groupId = computeGroupId([e1.fileKey]);
+      await redis.hset(otelStagingHashKey(shard), groupId, `[${raw}]`);
+      await redis.rpush(otelPendingListKey(shard), raw);
+
+      // Wrap HGET to fail transiently for this manifest a few times —
+      // simulating the narrow window where recovery can't read the manifest
+      // while the cut Lua would still succeed.
+      const realHget = redis.hget.bind(redis);
+      let failures = 3;
+      const spy = vi
+        .spyOn(redis, "hget")
+        .mockImplementation(async (...args: Parameters<typeof realHget>) => {
+          if (failures > 0) {
+            failures--;
+            throw new Error("transient read failure");
+          }
+          return realHget(...args);
+        });
+      cleanups.push(async () => spy.mockRestore());
+
+      const { grouper, published } = makeGrouper(shard);
+      await grouper.start();
+
+      await vi.waitFor(
+        async () => {
+          expect(published.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 4_000 },
+      );
+      // ONLY the recovered group G was ever published — the residue member was
+      // never cut into a second group under a second label, because dirty
+      // recovery ticks skipped cutting until the manifest became readable.
+      expect(new Set(published.map((p) => p.cut.groupId))).toEqual(
+        new Set([groupId]),
+      );
+      expect(await otelPendingDepth({ redis, shard })).toBe(0);
+    },
+  );
+
+  itR(
+    "unparsable manifest is surfaced but never wedges the recovery scan",
+    async () => {
+      const shard = freshShard();
+      await redis.hset(
+        otelStagingHashKey(shard),
+        "broken-group",
+        "not-json{{{",
+      );
+      await registerOtelFile({
+        redis,
+        shard,
+        entry: entry({ size: 3000 }),
+        ttlMs: 60_000,
+      });
+
+      const { grouper, published } = makeGrouper(shard);
+      await grouper.start();
+
+      // Normal cutting continues despite the poisonous manifest field.
+      await vi.waitFor(
+        () => {
+          expect(published.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 3_000 },
+      );
+    },
+  );
+
+  itR(
+    "defers to a foreign lease holder, takes over after release",
+    async () => {
+      const shard = freshShard();
+      await registerOtelFile({
+        redis,
+        shard,
+        entry: entry({ size: 3000 }),
+        ttlMs: 60_000,
+      });
+      // Another worker holds the shard lease.
+      expect(
+        await acquireOtelGrouperLease({
+          redis,
+          shard,
+          token: "foreign-leader",
+          ttlMs: 60_000,
+        }),
+      ).toBe(true);
+
+      const { grouper, published } = makeGrouper(shard);
+      await grouper.start();
+
+      // Several ticks pass — not the leader, must not touch anything.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(published).toHaveLength(0);
+      expect(await otelPendingDepth({ redis, shard })).toBe(1);
+
+      // Leader dies (lease released) → takeover on a later tick.
+      await redis.del(otelGrouperLockKey(shard));
+      await vi.waitFor(
+        () => {
+          expect(published.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 3_000 },
+      );
+    },
+  );
 });
