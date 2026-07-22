@@ -79,6 +79,7 @@ export class OtelGrouper {
   private stopped = true;
   private tickInFlight: Promise<void> | null = null;
   private tickCount = 0;
+  private healthLineCounter = 0;
   /** shard → we believe we currently hold its lease (renew before re-acquire). */
   private held = new Set<string>();
 
@@ -260,6 +261,27 @@ export class OtelGrouper {
     recordIncrement("langfuse.otel_grouper.files_grouped", cut.entries.length, {
       shard,
     });
+
+    // Cut decision line — reads together with the [OtelGroupJob] line:
+    // waited = oldest member's registration → cut (the grouping latency
+    // component of e2e_lag); reason = which dispatch-gate condition fired
+    // (undersized "timeout" groups at high traffic ⇒ raise flush/tick;
+    // constant "bytes" at low traffic ⇒ target too small).
+    const bytes = cut.entries.reduce((a, e) => a + e.size, 0);
+    const spans = cut.entries.reduce((a, e) => a + e.spanCount, 0);
+    const waitedMs = Date.now() - Math.min(...cut.entries.map((e) => e.ts));
+    const reason =
+      bytes >= this.cfg.targetBytes
+        ? "bytes"
+        : spans >= this.cfg.targetRows
+          ? "rows"
+          : cut.entries.length >= this.cfg.maxFiles
+            ? "files"
+            : "timeout";
+    logger.info(
+      `[OtelGrouper] cut shard=${shard} group=${cut.groupId.slice(0, 12)} files=${cut.entries.length} bytes=${(bytes / (1024 * 1024)).toFixed(1)}MB spans=${spans} waited=${waitedMs}ms reason=${reason}`,
+    );
+
     await this.publish(shard, cut);
   }
 
@@ -324,6 +346,12 @@ export class OtelGrouper {
           windowSize: this.cfg.maxFiles,
         });
         recordIncrement("langfuse.otel_grouper.republished", 1, { shard });
+        // Crash-recovery in action — expect a matching [OtelGroupJob] line
+        // (or a LABEL_DEDUP no-op) shortly after; repeated lines for the
+        // SAME group mean the publish keeps failing.
+        logger.warn(
+          `[OtelGrouper] republishing leftover group=${groupId.slice(0, 12)} shard=${shard} files=${manifest.entries.length}`,
+        );
         await this.publish(shard, manifest);
       } catch (e) {
         logger.error(
@@ -385,26 +413,50 @@ export class OtelGrouper {
     // (failed_oldest_age alert must fire well before the label retention
     // window closes the redrive path). Only for REAL configured shards — the
     // tests' throwaway shard names must not summon queue connections.
-    if (!OtelIngestionQueue.getShardNames().includes(shard)) return;
-    try {
-      const queue = OtelIngestionQueue.getInstance({ shardName: shard });
-      if (!queue) return;
-      const counts = await queue.getJobCounts("wait", "failed");
-      recordGauge("langfuse.otel_queue.wait_depth", counts.wait ?? 0, {
-        shard,
-      });
-      recordGauge("langfuse.otel_queue.failed_depth", counts.failed ?? 0, {
-        shard,
-      });
-      const oldestFailed = await queue.getJobs(["failed"], 0, 0, true);
-      recordGauge(
-        "langfuse.otel_queue.failed_oldest_age_ms",
-        oldestFailed[0]?.timestamp ? Date.now() - oldestFailed[0].timestamp : 0,
-        { shard },
-      );
-    } catch (e) {
-      logger.debug(
-        `[OtelGrouper] queue gauge emit failed for ${shard}: ${e instanceof Error ? e.message : String(e)}`,
+    let wait: number | null = null;
+    let failed: number | null = null;
+    let failedOldestMs = 0;
+    if (OtelIngestionQueue.getShardNames().includes(shard)) {
+      try {
+        const queue = OtelIngestionQueue.getInstance({ shardName: shard });
+        if (queue) {
+          const counts = await queue.getJobCounts("wait", "failed");
+          wait = counts.wait ?? 0;
+          failed = counts.failed ?? 0;
+          recordGauge("langfuse.otel_queue.wait_depth", wait, { shard });
+          recordGauge("langfuse.otel_queue.failed_depth", failed, { shard });
+          const oldestFailed = await queue.getJobs(["failed"], 0, 0, true);
+          failedOldestMs = oldestFailed[0]?.timestamp
+            ? Date.now() - oldestFailed[0].timestamp
+            : 0;
+          recordGauge(
+            "langfuse.otel_queue.failed_oldest_age_ms",
+            failedOldestMs,
+            { shard },
+          );
+        }
+      } catch (e) {
+        logger.debug(
+          `[OtelGrouper] queue gauge emit failed for ${shard}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
+    // Human-readable health line every ~60s (gauges fire every ~5s → every
+    // 12th emission). All-zero = healthy steady state; the interesting
+    // fields for troubleshooting: pending(oldest) rising = grouper stalled /
+    // undersized; wait rising = consumption behind; failed>0 = jobs riding
+    // the DLQ ladder (check failed_oldest vs the 3d label window); anything
+    // in staging/quarantine persisting = recovery/poison-entry problems.
+    this.healthLineCounter = (this.healthLineCounter + 1) % 12;
+    if (this.healthLineCounter === 0) {
+      const oldestSec = oldestAge != null ? (oldestAge / 1000).toFixed(1) : "-";
+      const queuePart =
+        wait != null
+          ? ` wait=${wait} failed=${failed}${(failed ?? 0) > 0 ? `(oldest ${(failedOldestMs / 3600_000).toFixed(1)}h)` : ""}`
+          : "";
+      logger.info(
+        `[OtelGrouper.health] shard=${shard} leader=${this.held.has(shard)} pending=${depth}(oldest ${oldestSec}s) staging=${staged.length} quarantine=${quarantine}${queuePart}`,
       );
     }
   }

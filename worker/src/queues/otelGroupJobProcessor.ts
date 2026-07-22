@@ -80,7 +80,9 @@ const deadLetterRow = (params: {
 // ---------------------------------------------------------------------------
 
 const ndjsonBody = (rows: Record<string, unknown>[]): StreamLoadBodySource => {
-  const buffers = rows.map((r) => Buffer.from(JSON.stringify(r) + "\n", "utf8"));
+  const buffers = rows.map((r) =>
+    Buffer.from(JSON.stringify(r) + "\n", "utf8"),
+  );
   return {
     format: "ndjson",
     byteLength: buffers.reduce((a, b) => a + b.length, 0),
@@ -108,7 +110,10 @@ export type TransformedFile = {
 
 export type GroupJobDeps = {
   downloadFile: (fileKey: string) => Promise<string>;
-  transformFile: (entry: OtelPendingEntryType, raw: string) => Promise<{
+  transformFile: (
+    entry: OtelPendingEntryType,
+    raw: string,
+  ) => Promise<{
     eventRecords: EventRecordInsertType[];
     scalarRecords: TraceScalarRecordInsertType[];
     sessions: Map<string, string>;
@@ -177,7 +182,8 @@ export const processOtelGroupJob = async (
           if (isDeterministicIngestError(e)) {
             deadLetterRow({
               fileKey: entry.fileKey,
-              reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+              reason:
+                e instanceof Error ? `${e.name}: ${e.message}` : String(e),
             });
             return; // file-level dead letter — group continues
           }
@@ -186,6 +192,9 @@ export const processOtelGroupJob = async (
       }),
     ),
   );
+
+  const transformMs = Date.now() - startedAt;
+  const deadFiles = entries.length - transformed.length;
 
   const eventRows = transformed.flatMap((t) =>
     t.eventRecords.map((r) => formatRecordForDoris(r, "events_full")),
@@ -200,18 +209,23 @@ export const processOtelGroupJob = async (
   // here keeps the gate logic from ever touching that path.)
   if (eventRows.length === 0 && scalarRows.length === 0) {
     await writeLedger(payload, deps);
+    logger.warn(
+      `[OtelGroupJob] group=${groupId.slice(0, 12)} EMPTY (all ${entries.length} file(s) dead-lettered) — ledger written, nothing loaded`,
+    );
     return;
   }
 
   // ③ events_full: the ONE deterministic-label load of this group.
   const label = eventsFullLabelForGroup(groupId);
-  const outcome =
-    eventRows.length > 0
-      ? await deps.streamLoadBody("events_full", ndjsonBody(eventRows), eventRows.length, {
-          ...LOAD_OPTS,
-          label,
-        })
-      : { dedupedByLabel: false };
+  const eventsBody = eventRows.length > 0 ? ndjsonBody(eventRows) : null;
+  const tEvents = Date.now();
+  const outcome = eventsBody
+    ? await deps.streamLoadBody("events_full", eventsBody, eventRows.length, {
+        ...LOAD_OPTS,
+        label,
+      })
+    : { dedupedByLabel: false };
+  const eventsMs = Date.now() - tEvents;
 
   // ④ traces_scalar (MoW, no label). Delete-protection gate — DUAL condition
   // (design §3.3-3 / review B1): skip ONLY when the label deduped AND the
@@ -227,6 +241,7 @@ export const processOtelGroupJob = async (
       recordIncrement("langfuse.otel_group.scalar_gate_skipped", 1);
     }
   }
+  const tScalar = Date.now();
   if (scalarRows.length > 0 && !skipScalar) {
     await deps.streamLoadBody(
       "traces_scalar",
@@ -235,6 +250,7 @@ export const processOtelGroupJob = async (
       LOAD_OPTS,
     );
   }
+  const scalarMs = Date.now() - tScalar;
 
   // ⑤ Side effects BEFORE ack. Eval scheduling is best-effort (impl swallows
   // errors — replays may re-schedule, declared boundary); trace_sessions
@@ -243,7 +259,10 @@ export const processOtelGroupJob = async (
   // the error would 404 session pages forever).
   if (deps.scheduleEvals) await deps.scheduleEvals(transformed);
 
-  const sessions = new Map<string, { projectId: string; environment: string }>();
+  const sessions = new Map<
+    string,
+    { projectId: string; environment: string }
+  >();
   for (const t of transformed) {
     for (const [sessionId, environment] of t.sessions) {
       sessions.set(sessionId, { projectId: t.entry.projectId, environment });
@@ -254,7 +273,9 @@ export const processOtelGroupJob = async (
   // ⑥ Ledger LAST (after both loads): its existence certifies "this group
   // completed once end-to-end" — which is exactly what the scalar gate and
   // the reconciliation tool key on.
+  const tLedger = Date.now();
   await writeLedger(payload, deps);
+  const ledgerMs = Date.now() - tLedger;
 
   recordIncrement("langfuse.otel_group.jobs_completed", 1);
   recordIncrement("langfuse.otel_group.files_processed", entries.length);
@@ -265,6 +286,27 @@ export const processOtelGroupJob = async (
   if (outcome.dedupedByLabel) {
     recordIncrement("langfuse.otel_group.label_deduped", 1);
   }
+
+  // Per-job performance breakdown — THE line to read for write-throughput
+  // questions (one per group, ~0.3/s at target load). e2e_lag = registration
+  // of the OLDEST member → fully landed: the true end-to-end ingest latency,
+  // covering pending wait + grouping + queue + processing.
+  const totalMs = Date.now() - startedAt;
+  const eventsMB = (eventsBody?.byteLength ?? 0) / (1024 * 1024);
+  const oldestTs = Math.min(...entries.map((e) => e.ts));
+  const eventsPart = outcome.dedupedByLabel
+    ? "LABEL_DEDUP"
+    : eventsBody
+      ? `${eventsMs}ms ${eventsMB.toFixed(1)}MB ${eventRows.length}rows ${eventsMs > 0 ? ((eventsMB * 1000) / eventsMs).toFixed(1) : "∞"}MB/s`
+      : "none";
+  const scalarPart = skipScalar
+    ? "SKIPPED(gate)"
+    : scalarRows.length > 0
+      ? `${scalarMs}ms ${scalarRows.length}rows`
+      : "none";
+  logger.info(
+    `[OtelGroupJob] group=${groupId.slice(0, 12)} files=${entries.length}${deadFiles > 0 ? ` dead_files=${deadFiles}` : ""} | transform=${transformMs}ms | events_full: ${eventsPart} | scalar: ${scalarPart} | ledger=${ledgerMs}ms | total=${totalMs}ms e2e_lag=${((Date.now() - oldestTs) / 1000).toFixed(1)}s`,
+  );
 };
 
 const writeLedger = async (
@@ -303,9 +345,9 @@ export const buildGroupJobDeps = (params: {
   const client = dorisClient();
   return {
     downloadFile: (fileKey) =>
-      getS3EventStorageClient(sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!).download(
-        fileKey,
-      ),
+      getS3EventStorageClient(
+        sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
+      ).download(fileKey),
     transformFile: params.transformFile,
     // Every load goes through the per-worker load semaphore: global in-flight
     // loads = N workers × LITEFUSE_OTEL_LOAD_CONCURRENCY (design §5.3).
@@ -360,7 +402,10 @@ export const buildTransformFile = (params: {
 }): GroupJobDeps["transformFile"] => {
   return async (entry, raw) => {
     const parsed = JSON.parse(raw); // SyntaxError → deterministic → file dead letter
-    if (params.isDirectWriteEligible && !params.isDirectWriteEligible(entry, parsed)) {
+    if (
+      params.isDirectWriteEligible &&
+      !params.isDirectWriteEligible(entry, parsed)
+    ) {
       recordIncrement("langfuse.otel_group.file_not_direct_write_eligible", 1);
       return {
         eventRecords: [],
