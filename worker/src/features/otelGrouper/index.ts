@@ -116,6 +116,19 @@ export class OtelGrouper {
       return;
     }
 
+    // ioredis connects ASYNCHRONOUSLY and our connection has
+    // enableOfflineQueue=false — any command issued before the socket is
+    // ready throws "Stream isn't writeable". Wait for readiness first, or
+    // the noeviction self-check below silently degrades to "unavailable"
+    // (deployment contract unchecked!) and the first ticks spray errors.
+    // start() is fire-and-forget from app.ts, so waiting here blocks nobody.
+    if (!(await this.waitForRedisReady(this.redis))) {
+      // stopped during the wait
+      if (this.ownsRedis) this.redis.disconnect();
+      this.redis = null;
+      return;
+    }
+
     // Deployment-contract self-check (design §5.2/L4): with an eviction
     // policy other than noeviction, Redis may silently evict pending entries,
     // staging manifests and registered keys — losing registered data and
@@ -148,6 +161,27 @@ export class OtelGrouper {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * Poll until the connection reports "ready" (or the grouper is stopped —
+   * returns false). No hard timeout: if Redis is down at boot the grouper
+   * simply keeps waiting instead of dying permanently; a warn every 10s
+   * keeps the wait visible.
+   */
+  private async waitForRedisReady(redis: RedisHandle): Promise<boolean> {
+    let lastWarn = Date.now();
+    while (!this.stopped) {
+      if ((redis as Redis).status === "ready") return true;
+      if (Date.now() - lastWarn >= 10_000) {
+        lastWarn = Date.now();
+        logger.warn(
+          `[OtelGrouper] waiting for Redis connection (status=${(redis as Redis).status})…`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  }
 
   private scheduleNext(): void {
     if (this.stopped) return;
