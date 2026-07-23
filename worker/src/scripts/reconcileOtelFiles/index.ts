@@ -26,10 +26,10 @@
  * sizing precision is irrelevant at reconciliation volumes).
  */
 
-import Redis from "ioredis";
-
 import {
   OtelIngestionQueue,
+  createNewRedisInstance,
+  redisQueueRetryOptions,
   dorisClient,
   getS3EventStorageClient,
   logger,
@@ -40,6 +40,7 @@ import {
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
+import { env } from "../../env";
 
 import { classifyOtelFile, type OtelFileVerdict } from "./classify";
 
@@ -77,11 +78,14 @@ const main = async () => {
     return;
   }
 
-  // Age-guard sanity (design §6.4 threshold contract).
-  const labelKeepMs = 3 * 24 * 3600_000;
+  // Age-guard sanity (design §6.4 threshold contract). Read from the SAME
+  // env var the DLQ age guard uses — a hardcoded copy here would let the two
+  // ends of the "nothing still redrivable may be re-injected" contract drift
+  // when the operator retunes LITEFUSE_OTEL_LABEL_KEEP_MS.
+  const labelKeepMs = env.LITEFUSE_OTEL_LABEL_KEEP_MS;
   if (OLDER_THAN_MS <= labelKeepMs) {
     throw new Error(
-      `--older-than-hours must exceed the DLQ age guard (${labelKeepMs / 3600_000}h): still-redrivable jobs must never be re-injected`,
+      `--older-than-hours must exceed the DLQ age guard (LITEFUSE_OTEL_LABEL_KEEP_MS = ${labelKeepMs / 3600_000}h): still-redrivable jobs must never be re-injected`,
     );
   }
   if (OLDER_THAN_MS >= sharedEnv.LITEFUSE_OTEL_REGISTERED_TTL_MS) {
@@ -90,11 +94,14 @@ const main = async () => {
     );
   }
 
-  const redis = new Redis({
-    host: process.env.REDIS_HOST ?? "127.0.0.1",
-    port: Number(process.env.REDIS_PORT ?? 6379),
-    password: process.env.REDIS_AUTH || undefined,
-  });
+  // Same topology-aware factory the pipeline itself uses (connection string /
+  // sentinel / cluster / TLS all honored, no ioredis keyPrefix) — a hand-rolled
+  // host/port connection would read an empty keyspace on any non-trivial
+  // deployment and turn the preflight + classification into fiction.
+  const redis = createNewRedisInstance(redisQueueRetryOptions);
+  if (!redis) {
+    throw new Error("[reconcile] failed to create Redis connection");
+  }
   const shards = OtelIngestionQueue.getShardNames();
   const storage = getS3EventStorageClient(
     sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
@@ -128,14 +135,18 @@ const main = async () => {
     }
   }
 
-  // ① S3 inventory inside the window.
-  const prefix = `${sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}otel/`;
+  // ① S3 inventory inside the window. COMPLETE listing is the whole point of
+  // the backstop — the default listFiles cap (LITEFUSE_S3_LIST_MAX_KEYS) would
+  // silently truncate to the lexicographically-first page and certify the
+  // rest as never-examined. ~100B per key: even millions of keys fit in RAM.
   const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
-  const files = (await storage.listFiles(prefix)).filter(
-    (f) => f.createdAt.getTime() >= cutoff,
-  );
+  const prefix = `${sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}otel/`;
+  const allFiles = await storage.listFiles(prefix, {
+    maxKeys: Number.MAX_SAFE_INTEGER,
+  });
+  const files = allFiles.filter((f) => f.createdAt.getTime() >= cutoff);
   logger.info(
-    `[reconcile] ${files.length} otel file(s) in the last ${WINDOW_DAYS}d window`,
+    `[reconcile] ${allFiles.length} otel file(s) listed, ${files.length} in the last ${WINDOW_DAYS}d window`,
   );
 
   // ② Poison ledger (rare rows — load once, index by fileKey).

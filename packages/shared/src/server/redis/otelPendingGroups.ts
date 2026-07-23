@@ -4,6 +4,7 @@ import { Cluster, Redis } from "ioredis";
 import { OtelPendingEntry, type OtelPendingEntryType } from "../queues";
 import { getQueuePrefix } from "./redis";
 import { logger } from "../logger";
+import { env } from "../../env";
 
 /**
  * Redis primitives for the otel exactly-once ingestion pipeline
@@ -13,23 +14,40 @@ import { logger } from "../logger";
  *   grouper ── CUT_GROUP (fence → members → staging → LTRIM, one atomic Lua)
  *           ── queue.add(jobId=groupId) ── DEL staging
  *
- * Key layout: every key of a shard shares the shard's queue prefix/hash tag
- * (getQueuePrefix — cluster mode wraps in {braces} so the multi-key Lua stays
- * on one slot; the staging key is derived inside the script from the SAME
- * tagged prefix, so it lands on the same slot too).
+ * Key layout: every key of a shard shares the shard's tag (deployment prefix
+ * + shard name; cluster mode wraps it in {braces} so the multi-key Lua stays
+ * on one slot).
  *
- * All functions take the Redis handle explicitly (web uses the shared
- * singleton, the grouper owns its instance) and stay env-free — sizing/TTL
- * parameters come from the caller.
+ * CONNECTION CONTRACT: the key builders below return FULL key strings —
+ * REDIS_KEY_PREFIX is already embedded in the shard tag. They must therefore
+ * run on connections WITHOUT an ioredis-level `keyPrefix` (which would
+ * prefix a second time and split producers/consumers into disjoint
+ * keyspaces). Use getUnprefixedRedis() / createNewRedisInstance(), NEVER the
+ * shared `redis` singleton (it sets keyPrefix=REDIS_KEY_PREFIX).
+ *
+ * All functions take the Redis handle explicitly and stay env-free for
+ * sizing/TTL — those parameters come from the caller.
  */
 
 // ---------------------------------------------------------------------------
 // Key layout
 // ---------------------------------------------------------------------------
 
-/** Base prefix for a shard's pipeline keys; cluster mode = {hash-tagged}. */
-const shardTag = (shardName: string): string =>
-  getQueuePrefix(shardName) ?? shardName;
+/**
+ * Base tag for a shard's pipeline keys — always unique per shard:
+ *   no prefix        → "<shard>"
+ *   non-cluster+pfx  → "<prefix>:<shard>"   (getQueuePrefix returns the BARE
+ *                       prefix in this mode — BullMQ appends the queue name
+ *                       itself — so the shard name must be appended here or
+ *                       every shard's keys would collide on one string)
+ *   cluster          → "{<prefix>:<shard>}" (hash tag from getQueuePrefix)
+ */
+const shardTag = (shardName: string): string => {
+  const prefix = getQueuePrefix(shardName);
+  if (!prefix) return shardName;
+  if (env.REDIS_CLUSTER_ENABLED === "true") return prefix;
+  return `${prefix}:${shardName}`;
+};
 
 export const otelPendingListKey = (shard: string) =>
   `${shardTag(shard)}:otel-pending`;

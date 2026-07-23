@@ -23,7 +23,12 @@ vi.mock("../../../env", () => ({ env: envMock }));
 vi.mock("../../s3", () => ({
   getS3EventStorageClient: vi.fn(() => ({ uploadJsonString })),
 }));
-vi.mock("../../redis/redis", () => ({ redis: { fake: "redis-handle" } }));
+vi.mock("../../redis/redis", () => ({
+  redis: { fake: "redis-handle" },
+  // Registration must go through the keyPrefix-free connection, never the
+  // (potentially prefixed) singleton.
+  getUnprefixedRedis: vi.fn(() => ({ fake: "unprefixed-redis-handle" })),
+}));
 vi.mock("../../redis/otelPendingGroups", () => ({ registerOtelFile }));
 vi.mock("../../redis/otelIngestionQueue", () => ({
   OtelIngestionQueue: {

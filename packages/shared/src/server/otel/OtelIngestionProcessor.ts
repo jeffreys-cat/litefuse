@@ -9,6 +9,7 @@ import {
   type TraceEventType,
   type IngestionEventType,
   redis,
+  getUnprefixedRedis,
   logger,
   instrumentAsync,
   recordIncrement,
@@ -204,7 +205,12 @@ export class OtelIngestionProcessor {
     ).uploadJsonString(fileKey, body);
 
     if (env.LITEFUSE_OTEL_GROUPING_ENABLED === "true") {
-      if (!redis) {
+      // Pipeline keys are FULL key strings (otelPendingGroups shard tag) —
+      // they must be written through a connection WITHOUT the ioredis
+      // keyPrefix that the shared singleton carries, or the grouper (which
+      // reads prefix-free) would never see them.
+      const groupingRedis = getUnprefixedRedis();
+      if (!groupingRedis) {
         throw new Error(
           "Redis not available — cannot register otel file for grouping",
         );
@@ -216,7 +222,7 @@ export class OtelIngestionProcessor {
       const shard =
         shardNames[Math.floor(Math.random() * shardNames.length)] as string;
       await registerOtelFile({
-        redis,
+        redis: groupingRedis,
         shard,
         ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
         entry: {
