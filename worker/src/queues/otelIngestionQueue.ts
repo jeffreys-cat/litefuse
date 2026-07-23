@@ -257,34 +257,15 @@ const processGroupShapedJob = async (
     transformFile: buildTransformFile({
       createEventRecord: (input, fileKey) =>
         ingestionService.createEventRecord(input as never, fileKey),
-      // Mirrors the legacy SDK gating: header-based first, per-span scope
-      // inspection as fallback (effectively always true under the OTel-only
-      // contract).
-      isDirectWriteEligible: (entry, parsed) => {
-        if (
-          checkHeaderBasedDirectWrite({
-            sdkName: entry.sdkName,
-            sdkVersion: entry.sdkVersion,
-            ingestionVersion: entry.ingestionVersion,
-          })
-        ) {
-          return true;
-        }
-        const spans = parsed as ResourceSpan[];
-        const sdkInfo =
-          Array.isArray(spans) && spans.length > 0
-            ? getSdkInfoFromResourceSpans(spans[0])
-            : { scopeName: null, scopeVersion: null, telemetrySdkLanguage: null };
-        return checkSdkVersionRequirements(sdkInfo, true);
-      },
     }),
   });
 
   // Best-effort eval scheduling over the transformed records (side-effect
   // boundary: replays may re-schedule; never fails the data path).
   deps.scheduleEvals = async (files) => {
-    let schedulerDeps: ReturnType<typeof createObservationEvalSchedulerDeps> | null =
-      null;
+    let schedulerDeps: ReturnType<
+      typeof createObservationEvalSchedulerDeps
+    > | null = null;
     for (const file of files) {
       const configs = await getEvalConfigs(file.entry.projectId);
       if (configs.length === 0) continue;
@@ -580,11 +561,13 @@ export const otelIngestionQueueProcessor: Processor = async (
     if (sessionEnvByid.size > 0) {
       try {
         await prisma.traceSession.createMany({
-          data: Array.from(sessionEnvByid.entries()).map(([id, environment]) => ({
-            id,
-            projectId,
-            environment,
-          })),
+          data: Array.from(sessionEnvByid.entries()).map(
+            ([id, environment]) => ({
+              id,
+              projectId,
+              environment,
+            }),
+          ),
           skipDuplicates: true,
         });
       } catch (e) {

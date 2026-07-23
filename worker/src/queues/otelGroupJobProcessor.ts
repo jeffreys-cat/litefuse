@@ -401,31 +401,14 @@ export const buildTransformFile = (params: {
     eventInput: Record<string, unknown>,
     fileKey: string,
   ) => Promise<EventRecordInsertType>;
-  /**
-   * Direct-write eligibility (mirrors the legacy processor's SDK gating;
-   * injected by the router to avoid an import cycle). Ineligible files are
-   * skipped with a counter — behavior parity with the legacy path's early
-   * return for pre-v4 SDKs (effectively always eligible under the OTel-only
-   * contract).
-   */
-  isDirectWriteEligible?: (
-    entry: OtelPendingEntryType,
-    parsed: unknown,
-  ) => boolean;
 }): GroupJobDeps["transformFile"] => {
   return async (entry, raw) => {
+    // No SDK-eligibility re-check here: the web OTel route hard-rejects
+    // pre-v4 SDKs with a 400 BEFORE upload/registration, so every file in
+    // the pipeline (including reconcile re-injections, which lose the SDK
+    // header metadata) already passed admission. A worker-side re-check
+    // could only misfire and silently drop legitimate replayed files.
     const parsed = JSON.parse(raw); // SyntaxError → deterministic → file dead letter
-    if (
-      params.isDirectWriteEligible &&
-      !params.isDirectWriteEligible(entry, parsed)
-    ) {
-      recordIncrement("langfuse.otel_group.file_not_direct_write_eligible", 1);
-      return {
-        eventRecords: [],
-        scalarRecords: [],
-        sessions: new Map<string, string>(),
-      };
-    }
     const processor = new OtelIngestionProcessor({
       projectId: entry.projectId,
       publicKey: entry.publicKey,
