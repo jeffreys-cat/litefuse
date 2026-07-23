@@ -53,6 +53,18 @@ import { toTraceScalarRecord } from "../services/IngestionService";
  * EVERYTHING else — S3/PG/Redis/network/unknown — is presumed transient and
  * must FAIL the job (replay from S3 is free; a swallowed transient error is
  * a silently lost row).
+ *
+ * DELIBERATELY NOT whitelisted: TypeError/RangeError. They often ARE
+ * deterministic (malformed attribute → undefined deref in the transform),
+ * but they can equally originate inside infra client code (ioredis/prisma)
+ * under transient failure — and misclassifying THAT means silent row loss.
+ * The cost asymmetry decides it: a deterministic error treated as transient
+ * fails loudly (retries → DLQ → poison ledger + alert, file kept in S3,
+ * manual recovery possible — plus, on the legacy per-span path only,
+ * label-less retries may duplicate rows, which the DUPLICATE-model table
+ * tolerates by design); a transient error treated as deterministic loses
+ * rows silently and unrecoverably. Do not widen this list without that
+ * trade-off in mind.
  */
 export const isDeterministicIngestError = (e: unknown): boolean => {
   if (e instanceof ZodError) return true;
@@ -126,7 +138,7 @@ export type GroupJobDeps = {
   ) => Promise<StreamLoadOutcome>;
   ledgerExists: (groupId: string) => Promise<boolean>;
   upsertSessions: (
-    sessions: Map<string, { projectId: string; environment: string }>,
+    sessions: Array<{ id: string; projectId: string; environment: string }>,
   ) => Promise<void>;
   /**
    * Best-effort observation-eval scheduling (side-effect boundary: NOT
@@ -196,18 +208,26 @@ export const processOtelGroupJob = async (
   const transformMs = Date.now() - startedAt;
   const deadFiles = entries.length - transformed.length;
 
-  const eventRows = transformed.flatMap((t) =>
+  // Memory discipline: a group holds its data THREE ways while loading —
+  // record objects (kept for evals/sessions below), formatted Doris rows,
+  // and the NDJSON Buffers. The formatted rows and Buffers are each
+  // released (nulled) the moment their load returns, so the GC can reclaim
+  // them during the remaining (slow, up-to-600s) loads instead of holding
+  // ~5-6x the source size until the function exits.
+  let eventRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
     t.eventRecords.map((r) => formatRecordForDoris(r, "events_full")),
   );
-  const scalarRows = transformed.flatMap((t) =>
+  let scalarRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
     t.scalarRecords.map((r) => formatRecordForDoris(r, "traces_scalar")),
   );
+  const eventRowCount = eventRows.length;
+  const scalarRowCount = scalarRows.length;
 
   // ② Empty group (every file dead-lettered): nothing to load — write the
   // ledger so the files never resurface in reconciliation, and ack.
   // (streamLoadBody would early-return on an empty body; short-circuiting
   // here keeps the gate logic from ever touching that path.)
-  if (eventRows.length === 0 && scalarRows.length === 0) {
+  if (eventRowCount === 0 && scalarRowCount === 0) {
     await writeLedger(payload, deps);
     logger.warn(
       `[OtelGroupJob] group=${groupId.slice(0, 12)} EMPTY (all ${entries.length} file(s) dead-lettered) — ledger written, nothing loaded`,
@@ -217,14 +237,18 @@ export const processOtelGroupJob = async (
 
   // ③ events_full: the ONE deterministic-label load of this group.
   const label = eventsFullLabelForGroup(groupId);
-  const eventsBody = eventRows.length > 0 ? ndjsonBody(eventRows) : null;
+  let eventsBody = eventRowCount > 0 ? ndjsonBody(eventRows) : null;
+  eventRows = null; // Buffers built — the formatted objects are dead weight
+  const hadEventsBody = eventsBody !== null;
+  const eventsBytes = eventsBody?.byteLength ?? 0;
   const tEvents = Date.now();
   const outcome = eventsBody
-    ? await deps.streamLoadBody("events_full", eventsBody, eventRows.length, {
+    ? await deps.streamLoadBody("events_full", eventsBody, eventRowCount, {
         ...LOAD_OPTS,
         label,
       })
     : { dedupedByLabel: false };
+  eventsBody = null; // release the group-sized Buffers before the scalar load
   const eventsMs = Date.now() - tEvents;
 
   // ④ traces_scalar (MoW, no label). Delete-protection gate — DUAL condition
@@ -242,14 +266,17 @@ export const processOtelGroupJob = async (
     }
   }
   const tScalar = Date.now();
-  if (scalarRows.length > 0 && !skipScalar) {
+  if (scalarRows && scalarRowCount > 0 && !skipScalar) {
+    const scalarBody = ndjsonBody(scalarRows);
+    scalarRows = null;
     await deps.streamLoadBody(
       "traces_scalar",
-      ndjsonBody(scalarRows),
-      scalarRows.length,
+      scalarBody,
+      scalarRowCount,
       LOAD_OPTS,
     );
   }
+  scalarRows = null;
   const scalarMs = Date.now() - tScalar;
 
   // ⑤ Side effects BEFORE ack. Eval scheduling is best-effort (impl swallows
@@ -259,16 +286,26 @@ export const processOtelGroupJob = async (
   // the error would 404 session pages forever).
   if (deps.scheduleEvals) await deps.scheduleEvals(transformed);
 
+  // Dedup on (projectId, sessionId) — trace_sessions' composite PK. A group
+  // spans projects, and the same sessionId (e.g. a generic "default") can
+  // legitimately exist in several of them; keying by sessionId alone would
+  // let the last project overwrite the others' rows.
   const sessions = new Map<
     string,
-    { projectId: string; environment: string }
+    { id: string; projectId: string; environment: string }
   >();
   for (const t of transformed) {
     for (const [sessionId, environment] of t.sessions) {
-      sessions.set(sessionId, { projectId: t.entry.projectId, environment });
+      sessions.set(`${t.entry.projectId} ${sessionId}`, {
+        id: sessionId,
+        projectId: t.entry.projectId,
+        environment,
+      });
     }
   }
-  if (sessions.size > 0) await deps.upsertSessions(sessions);
+  if (sessions.size > 0) {
+    await deps.upsertSessions(Array.from(sessions.values()));
+  }
 
   // ⑥ Ledger LAST (after both loads): its existence certifies "this group
   // completed once end-to-end" — which is exactly what the scalar gate and
@@ -292,17 +329,17 @@ export const processOtelGroupJob = async (
   // of the OLDEST member → fully landed: the true end-to-end ingest latency,
   // covering pending wait + grouping + queue + processing.
   const totalMs = Date.now() - startedAt;
-  const eventsMB = (eventsBody?.byteLength ?? 0) / (1024 * 1024);
+  const eventsMB = eventsBytes / (1024 * 1024);
   const oldestTs = Math.min(...entries.map((e) => e.ts));
   const eventsPart = outcome.dedupedByLabel
     ? "LABEL_DEDUP"
-    : eventsBody
-      ? `${eventsMs}ms ${eventsMB.toFixed(1)}MB ${eventRows.length}rows ${eventsMs > 0 ? ((eventsMB * 1000) / eventsMs).toFixed(1) : "∞"}MB/s`
+    : hadEventsBody
+      ? `${eventsMs}ms ${eventsMB.toFixed(1)}MB ${eventRowCount}rows ${eventsMs > 0 ? ((eventsMB * 1000) / eventsMs).toFixed(1) : "∞"}MB/s`
       : "none";
   const scalarPart = skipScalar
     ? "SKIPPED(gate)"
-    : scalarRows.length > 0
-      ? `${scalarMs}ms ${scalarRows.length}rows`
+    : scalarRowCount > 0
+      ? `${scalarMs}ms ${scalarRowCount}rows`
       : "none";
   logger.info(
     `[OtelGroupJob] group=${groupId.slice(0, 12)} files=${entries.length}${deadFiles > 0 ? ` dead_files=${deadFiles}` : ""} | transform=${transformMs}ms | events_full: ${eventsPart} | scalar: ${scalarPart} | ledger=${ledgerMs}ms | total=${totalMs}ms e2e_lag=${((Date.now() - oldestTs) / 1000).toFixed(1)}s`,
@@ -376,13 +413,7 @@ export const buildGroupJobDeps = (params: {
     },
     upsertSessions: async (sessions) => {
       await prisma.traceSession.createMany({
-        data: Array.from(sessions.entries()).map(
-          ([id, { projectId, environment }]) => ({
-            id,
-            projectId,
-            environment,
-          }),
-        ),
+        data: sessions,
         skipDuplicates: true,
       });
     },
