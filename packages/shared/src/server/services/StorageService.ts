@@ -104,7 +104,17 @@ export interface StorageService {
 
   download(path: string): Promise<string>;
 
-  listFiles(prefix: string): Promise<{ file: string; createdAt: Date }[]>;
+  /**
+   * List objects under a prefix, paginating through the backend until
+   * exhausted or `maxKeys` entries are collected (default:
+   * LITEFUSE_S3_LIST_MAX_KEYS). Callers that need a COMPLETE inventory
+   * (e.g. the otel reconcile backstop) must pass an explicit high maxKeys —
+   * the default is a truncating bound, not a page size.
+   */
+  listFiles(
+    prefix: string,
+    opts?: { maxKeys?: number },
+  ): Promise<{ file: string; createdAt: Date }[]>;
 
   getSignedUrl(
     fileName: string,
@@ -376,10 +386,13 @@ class AzureBlobStorageService implements StorageService {
 
   public async listFiles(
     prefix: string,
+    opts?: { maxKeys?: number },
   ): Promise<{ file: string; createdAt: Date }[]> {
+    const maxKeys = opts?.maxKeys ?? env.LITEFUSE_S3_LIST_MAX_KEYS;
     try {
       await this.createContainerIfNotExists();
 
+      // The async iterator paginates through the listing transparently.
       const result = this.client.listBlobsFlat({ prefix });
       const files = [];
       for await (const blob of result) {
@@ -388,7 +401,7 @@ class AzureBlobStorageService implements StorageService {
             file: blob.name,
             createdAt: blob?.properties?.createdOn ?? new Date(),
           });
-          if (files.length >= env.LITEFUSE_S3_LIST_MAX_KEYS) {
+          if (files.length >= maxKeys) {
             break;
           }
         }
@@ -671,22 +684,36 @@ class S3StorageService implements StorageService {
 
   public async listFiles(
     prefix: string,
+    opts?: { maxKeys?: number },
   ): Promise<{ file: string; createdAt: Date }[]> {
-    const listCommand = new ListObjectsV2Command({
-      Bucket: this.bucketName,
-      Prefix: prefix,
-      MaxKeys: env.LITEFUSE_S3_LIST_MAX_KEYS,
-    });
+    const maxKeys = opts?.maxKeys ?? env.LITEFUSE_S3_LIST_MAX_KEYS;
 
     try {
-      const response = await this.client.send(listCommand);
-      return (
-        response.Contents?.flatMap((file) =>
-          file.Key
-            ? [{ file: file.Key, createdAt: file.LastModified ?? new Date() }]
-            : [],
-        ) ?? []
-      );
+      const files: { file: string; createdAt: Date }[] = [];
+      let continuationToken: string | undefined;
+      do {
+        const response = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucketName,
+            Prefix: prefix,
+            // S3 serves at most 1000 keys per page regardless of MaxKeys.
+            MaxKeys: Math.min(maxKeys - files.length, 1000),
+            ContinuationToken: continuationToken,
+          }),
+        );
+        for (const file of response.Contents ?? []) {
+          if (file.Key) {
+            files.push({
+              file: file.Key,
+              createdAt: file.LastModified ?? new Date(),
+            });
+          }
+        }
+        continuationToken = response.IsTruncated
+          ? response.NextContinuationToken
+          : undefined;
+      } while (continuationToken && files.length < maxKeys);
+      return files;
     } catch (err) {
       logger.error(`Failed to list files from S3 ${prefix}`, err);
       handleStorageError(err, "list files from S3");
@@ -927,11 +954,13 @@ class GoogleCloudStorageService implements StorageService {
 
   public async listFiles(
     prefix: string,
+    opts?: { maxKeys?: number },
   ): Promise<{ file: string; createdAt: Date }[]> {
     try {
+      // getFiles auto-paginates up to maxResults.
       const [files] = await this.bucket.getFiles({
         prefix,
-        maxResults: env.LITEFUSE_S3_LIST_MAX_KEYS,
+        maxResults: opts?.maxKeys ?? env.LITEFUSE_S3_LIST_MAX_KEYS,
       });
 
       return files.map((file) => ({
