@@ -1651,6 +1651,7 @@ model OtelPoisonJob {
   firstSeenAt DateTime @map("first_seen_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
+  @@unique([shardName, jobId])
   @@index([createdAt])
   @@map("otel_poison_jobs")
 }

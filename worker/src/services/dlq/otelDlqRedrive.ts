@@ -100,10 +100,19 @@ export const redriveOtelFailedJobs = async (): Promise<void> => {
 
         if (decision.action === "poison") {
           // PG ledger FIRST — only a durable record may release the job from
-          // automatic recovery. If this insert throws, the job stays in
-          // failed and is re-attempted next cycle.
-          await prisma.otelPoisonJob.create({
-            data: {
+          // automatic recovery. If this write throws, the job stays in
+          // failed and is re-attempted next cycle. Upsert on (shard, jobId):
+          // when job.remove() below fails transiently, the next cycle
+          // re-classifies the same job — a plain create would then add a
+          // duplicate ledger row every 10 minutes until remove succeeds.
+          await prisma.otelPoisonJob.upsert({
+            where: {
+              shardName_jobId: {
+                shardName: shard,
+                jobId: String(job.id ?? data.id),
+              },
+            },
+            create: {
               shardName: shard,
               jobId: String(job.id ?? data.id),
               groupId,
@@ -112,6 +121,7 @@ export const redriveOtelFailedJobs = async (): Promise<void> => {
               redrives: data.redrives ?? 0,
               firstSeenAt: new Date(firstSeenTs),
             },
+            update: {},
           });
           recordIncrement("langfuse.otel_dlq.poison", 1, {
             shard,

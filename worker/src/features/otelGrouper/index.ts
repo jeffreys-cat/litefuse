@@ -117,6 +117,10 @@ export class OtelGrouper {
       this.stopped = true;
       return;
     }
+    // Local handle: stop() may run during the awaits below and null out
+    // this.redis — dereferencing the field after an await would throw.
+    // disconnect() on an already-disconnected connection is a no-op.
+    const conn = this.redis;
 
     // ioredis connects ASYNCHRONOUSLY and our connection has
     // enableOfflineQueue=false — any command issued before the socket is
@@ -124,9 +128,9 @@ export class OtelGrouper {
     // the noeviction self-check below silently degrades to "unavailable"
     // (deployment contract unchecked!) and the first ticks spray errors.
     // start() is fire-and-forget from app.ts, so waiting here blocks nobody.
-    if (!(await this.waitForRedisReady(this.redis))) {
+    if (!(await this.waitForRedisReady(conn))) {
       // stopped during the wait
-      if (this.ownsRedis) this.redis.disconnect();
+      if (this.ownsRedis) conn.disconnect();
       this.redis = null;
       return;
     }
@@ -135,9 +139,9 @@ export class OtelGrouper {
     // policy other than noeviction, Redis may silently evict pending entries,
     // staging manifests and registered keys — losing registered data and
     // breaking idempotency with no error signal anywhere. Refuse to run.
-    if (!(await this.assertNoEviction(this.redis))) {
+    if (!(await this.assertNoEviction(conn)) || this.stopped) {
       this.stopped = true;
-      if (this.ownsRedis) this.redis.disconnect();
+      if (this.ownsRedis) conn.disconnect();
       this.redis = null;
       return;
     }
