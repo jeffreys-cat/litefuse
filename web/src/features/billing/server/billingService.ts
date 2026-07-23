@@ -29,7 +29,10 @@ import {
   isBillingCatalogueConfigured,
   type BillingTargetPlan,
 } from "./billingCatalogue";
-import { getFreshBillingUsage } from "./billingUsageService";
+import {
+  getFreshBillingUsage,
+  getPaidBillingUsage,
+} from "./billingUsageService";
 
 type StripeConfigPurpose = "checkout" | "portal" | "webhook";
 
@@ -401,13 +404,33 @@ export async function getBillingStatus(
 
   const plan = getOrganizationPlanServerSide(cloudConfig ?? undefined);
   const includedUnits = plan === "cloud:hobby" ? 100_000 : 200_000;
-  const usagePromise = getFreshBillingUsage({ organization: org });
+  const stripeCustomerId = cloudConfig?.stripe?.customerId;
+  const hasStripeMetering =
+    plan !== "cloud:hobby" && Boolean(subscriptionId && stripeCustomerId);
+  const usagePromise =
+    hasStripeMetering && stripeCustomerId
+      ? getPaidBillingUsage({
+          organization: org,
+          customerId: stripeCustomerId,
+        })
+      : getFreshBillingUsage({ organization: org }).then((usage) => ({
+          ...usage,
+          reportedUnits: null,
+          pendingUnits: null,
+          reportedThrough: null,
+        }));
   const billingConfigurationIssues = getInvalidBillingCatalogueEntries().map(
     (entry) =>
       `${entry.envVar} must be a Stripe Price ID starting with price_. Current value starts with ${entry.value.slice(0, 5)}.`,
   );
 
-  const { currentUnits, updatedAt: usageUpdatedAt } = await usagePromise;
+  const {
+    currentUnits,
+    reportedUnits,
+    pendingUnits,
+    reportedThrough,
+    updatedAt: usageUpdatedAt,
+  } = await usagePromise;
   const cycleEnd = getBillingCycleEnd(org, new Date());
 
   return {
@@ -431,6 +454,9 @@ export async function getBillingStatus(
     },
     usage: {
       currentUnits,
+      reportedUnits,
+      pendingUnits,
+      reportedThrough,
       includedUnits,
       overageUnits: Math.max(0, currentUnits - includedUnits),
       estimatedOverageUsd:
