@@ -156,6 +156,11 @@ export const traceRecordReadSchema = traceRecordBaseSchema.extend({
   // Doris Variant columns: mysql2 typeCast parses them to object/array on read
   input: z.unknown().nullish(),
   output: z.unknown().nullish(),
+  // Precomputed compact preview from the root span (input_trim/output_trim, see
+  // migration 0037). trace.byId returns these as input/output for verbosity
+  // "compact" (the traces-list cell) instead of parsing the full Variant.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
   timestamp: dorisStringDateSchema,
   created_at: dorisStringDateSchema,
   updated_at: dorisStringDateSchema,
@@ -654,6 +659,8 @@ export const eventRecordBaseSchema = z.object({
   // We mainly use the id for compatibility with old events that always had a `id` column.
   id: z.string(), // same as span_id. Needs to be set manually.
   parent_span_id: z.string().nullish(),
+  // Root-span flag (1 when parent_span_id is empty), precomputed at ingestion.
+  is_root: z.number().nullish(),
 
   // Core properties
   name: z.string(),
@@ -703,6 +710,10 @@ export const eventRecordBaseSchema = z.object({
   // I/O
   input: z.string().nullish(),
   output: z.string().nullish(),
+  // Precomputed compact preview (see events_full migration 0037): parseIO(.., "compact")
+  // truncated to 200 chars, for list tables. Full I/O stays in input/output.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
 
   // Flattened metadata (parallel arrays, matches langfuse-main V4 events_full).
   // The previous fork shape — a separate `metadata` Map plus `metadata_hashes`
@@ -710,6 +721,14 @@ export const eventRecordBaseSchema = z.object({
   // has since dropped. Doris events_full only carries the two parallel arrays.
   metadata_names: z.array(z.string()).default([]),
   metadata_values: z.array(z.string().nullish()).default([]),
+  // Map mirror of the parallel arrays above. Carried so (a) trace-list metadata
+  // filtering uses native map access `metadata['key'] <op> value` — the only
+  // representation that supports the per-key value operators (=, contains,
+  // starts/ends with) correctly — and (b) the trace-list MV can expose
+  // MAX(IF(parent_span_id='', CAST(metadata AS STRING), NULL)) as a single
+  // rewrite-friendly column for the list preview. Arrays stay for byId detail /
+  // existing readers.
+  metadata: z.record(z.string(), z.string()).nullish(),
 
   // Experiment properties
   experiment_id: z.string().nullish(),
@@ -746,6 +765,13 @@ export type EventRecordBaseType = z.infer<typeof eventRecordBaseSchema>;
 
 export const eventRecordReadSchema = eventRecordBaseSchema.extend({
   total_cost: z.number().nullish(),
+  // Precomputed UI metrics (see events_full migration 0037). Derived at ingestion
+  // from usage_details/cost_details so reads avoid explode_map/array_filter.
+  input_tokens_calculated: z.number().nullish(),
+  output_tokens_calculated: z.number().nullish(),
+  total_tokens_calculated: z.number().nullish(),
+  input_cost_calculated: z.number().nullish(),
+  output_cost_calculated: z.number().nullish(),
 
   start_time: dorisStringDateSchema,
   end_time: dorisStringDateSchema.nullish(),
@@ -758,6 +784,11 @@ export type EventRecordReadType = z.infer<typeof eventRecordReadSchema>;
 
 export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
   total_cost: z.number().nullish(),
+  input_tokens_calculated: z.number().nullish(),
+  output_tokens_calculated: z.number().nullish(),
+  total_tokens_calculated: z.number().nullish(),
+  input_cost_calculated: z.number().nullish(),
+  output_cost_calculated: z.number().nullish(),
   start_time: z.number(),
   end_time: z.number().nullish(),
   completion_start_time: z.number().nullish(),
@@ -766,3 +797,39 @@ export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
   event_ts: z.number(),
 });
 export type EventRecordInsertType = z.infer<typeof eventRecordInsertSchema>;
+
+// traces_scalar: one row per trace — the root span's scalar fields, dual-written
+// at ingestion next to events_full (see migration 0039). Timestamps are epoch-ms
+// numbers like the other *InsertType shapes; start_time_date is derived by
+// formatRecordForDoris from start_time. Empty-string user_id/session_id/release/
+// version are normalized to null at the dual-write site so filters match the
+// MV's NULLIF(x, '') semantics.
+export const traceScalarRecordInsertSchema = z.object({
+  project_id: z.string(),
+  id: z.string(),
+  start_time: z.number(),
+  end_time: z.number().nullish(),
+  name: z.string().nullish(),
+  user_id: z.string().nullish(),
+  session_id: z.string().nullish(),
+  release: z.string().nullish(),
+  version: z.string().nullish(),
+  environment: z.string().default("default"),
+  bookmarked: z.boolean().nullish(),
+  public: z.boolean().nullish(),
+  tags: z.array(z.string()).nullish(),
+  metadata: z.record(z.string(), z.string()).nullish(),
+  // 200-char ingestion-precomputed previews — serve traces.byId
+  // verbosity="compact" (the trace-list cell preview) as a flat point read.
+  input_trim: z.string().nullish(),
+  output_trim: z.string().nullish(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  event_ts: z.number(),
+});
+export type TraceScalarRecordInsertType = z.infer<
+  typeof traceScalarRecordInsertSchema
+>;
+
+// trace_metrics_agg is now a synchronous materialized view on events_full
+// (migration 0040) — no insert shape needed; the base-table load maintains it.

@@ -326,3 +326,34 @@ declare global {
 export const redis = globalThis.redis ?? createRedisClient();
 
 if (env.NODE_ENV !== "production") globalThis.redis = redis;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var litefuseUnprefixedRedis: undefined | Redis | Cluster | null;
+}
+
+let unprefixedRedis: Redis | Cluster | null | undefined;
+
+/**
+ * Shared connection WITHOUT the ioredis-level `keyPrefix` that the `redis`
+ * singleton applies (keyPrefix silently prepends REDIS_KEY_PREFIX to every
+ * command key, including the KEYS of defineCommand Lua scripts).
+ *
+ * Required by the otel exactly-once pipeline (otelPendingGroups.ts): its key
+ * builders return FULL key strings with the deployment prefix already
+ * embedded, and its worker-side readers (grouper, reconcile script) run on
+ * prefix-free connections — writing through the prefixed singleton would
+ * double-prefix and split producers/consumers into disjoint keyspaces.
+ *
+ * Lazy: without REDIS_KEY_PREFIX the singleton is already prefix-free and is
+ * returned as-is (no extra connection).
+ */
+export const getUnprefixedRedis = (): Redis | Cluster | null => {
+  if (!env.REDIS_KEY_PREFIX) return redis;
+  if (unprefixedRedis !== undefined) return unprefixedRedis;
+  unprefixedRedis = globalThis.litefuseUnprefixedRedis ?? createNewRedisInstance();
+  if (env.NODE_ENV !== "production") {
+    globalThis.litefuseUnprefixedRedis = unprefixedRedis;
+  }
+  return unprefixedRedis;
+};

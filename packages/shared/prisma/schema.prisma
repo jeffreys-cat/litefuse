@@ -1635,3 +1635,23 @@ model CloudSpendAlert {
   @@index([orgId])
   @@map("cloud_spend_alerts")
 }
+
+// Poison ledger for the otel exactly-once pipeline (design §3.4 M6): a job
+// leaves DLQ auto-redrive only after its fileKeys are durably recorded here.
+// In Postgres by design — poisoning is most often caused by a Doris outage,
+// so the ledger must not live in Doris.
+model OtelPoisonJob {
+  id          String   @id @default(cuid())
+  shardName   String   @map("shard_name")
+  jobId       String   @map("job_id")
+  groupId     String?  @map("group_id")
+  fileKeys    Json     @map("file_keys")
+  reason      String
+  redrives    Int      @default(0)
+  firstSeenAt DateTime @map("first_seen_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([shardName, jobId])
+  @@index([createdAt])
+  @@map("otel_poison_jobs")
+}

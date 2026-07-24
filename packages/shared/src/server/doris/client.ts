@@ -1,6 +1,8 @@
 import axios, { AxiosInstance } from "axios";
+import { randomUUID } from "crypto";
 import http from "http";
 import https from "https";
+import { Readable } from "stream";
 import mysql from "mysql2/promise";
 import { env } from "../../env";
 import { getCurrentSpan } from "../instrumentation";
@@ -8,13 +10,26 @@ import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
 
-// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but data is actually utf8mb4.
-// mysql2 maps charset 33 to 'cesu8' (3-byte), causing 4-byte emoji characters to become U+FFFD.
-// Override to 'utf8' which handles 4-byte sequences correctly in Node.js.
-// mysql2 is in serverExternalPackages (next.config.mjs) so this internal require works at runtime.
+// Doris reports charset 33 (utf8) in MySQL protocol column metadata, but stores
+// utf8mb4. mysql2 maps charset 33 to 'cesu8' (3-byte), so 4-byte chars (emoji)
+// in string columns decode to U+FFFD ('�'). The global fix —
+// require("mysql2/lib/constants/charset_encodings")[33]='utf8' — is blocked by
+// mysql2's package.json "exports" map, so instead the connection typeCast below
+// force-decodes string/blob columns with field.string("utf8"). See STRING_FIELD_TYPES.
 
-// const CharsetToEncoding = require("mysql2/lib/constants/charset_encodings");
-// CharsetToEncoding[33] = "utf8";
+// mysql2 field.type names for text/blob columns we force-decode as utf8 (Doris
+// stores utf8 text in all of these; no binary blobs in our schema).
+const STRING_FIELD_TYPES = new Set([
+  "VARCHAR",
+  "VAR_STRING",
+  "STRING",
+  "BLOB",
+  "TINY_BLOB",
+  "MEDIUM_BLOB",
+  "LONG_BLOB",
+  "ENUM",
+  "SET",
+]);
 
 export interface DorisStreamLoadOptions {
   format?: "json" | "csv";
@@ -25,6 +40,31 @@ export interface DorisStreamLoadOptions {
   max_filter_ratio?: number;
   timeout?: number;
   load_mem_limit?: number;
+  /**
+   * Caller-owned STABLE label (must be identical across retries of the same
+   * batch). Supplying it opts this load into exactly-once semantics: a
+   * response of "Label Already Exists" + ExistingJobStatus FINISHED is treated
+   * as SUCCESS (the previous attempt committed — e.g. the client timed out
+   * after the body landed), instead of a failure. Without it a per-attempt
+   * label is generated and "Label Already Exists" stays a plain failure (it
+   * could only be a collision). Only pass this for tables where duplicate
+   * application corrupts data (AGGREGATE-KEY SUM columns); MoW unique-key
+   * tables are idempotent and don't need it.
+   */
+  label?: string;
+}
+
+/**
+ * Result of a Stream Load attempt that did not throw.
+ * `dedupedByLabel: true` ⇔ this call did NOT load anything because the FE
+ * label registry proved an earlier attempt of the SAME label already
+ * committed (Label Already Exists + FINISHED, or SHOW TRANSACTION resolved
+ * VISIBLE/COMMITTED). Callers implementing exactly-once (otel group jobs)
+ * branch on this to decide replay behavior; all other outcomes — including
+ * empty-input early returns and Publish Timeout — report `false`.
+ */
+export interface StreamLoadOutcome {
+  dedupedByLabel: boolean;
 }
 
 export interface DorisQueryOptions {
@@ -32,6 +72,30 @@ export interface DorisQueryOptions {
   query_params?: Record<string, any>;
   timeout?: number;
 }
+
+/**
+ * A pre-serialized Stream Load body delivered as byte chunks instead of one
+ * string. `chunks()` must yield buffers that concatenated form the exact HTTP
+ * body; `byteLength` must equal their total size — it is sent verbatim as
+ * Content-Length (an overcount stalls the request until timeout, an undercount
+ * aborts it mid-write). Each send calls chunks() afresh, so retries never need
+ * the body to be materialized. `format` names the framing the chunks encode;
+ * streamLoadBody derives the strip_outer_array/read_json_by_line flags from it
+ * (overriding any caller options for those two), so a framing↔flags mismatch
+ * is unrepresentable. Used by the hot ingestion path (DorisWriter) so a batch
+ * is streamed row-by-row to the socket rather than concatenated into a
+ * body-sized string plus a body-sized Buffer copy.
+ */
+export type StreamLoadBodySource = {
+  format: "ndjson" | "json_array";
+  chunks: () => Iterable<Buffer>;
+  byteLength: number;
+};
+
+// Truncation for verbatim peer-response bodies embedded in error messages —
+// enough to carry a full Stream Load result JSON (Message, ErrorURL, counts)
+// without letting an HTML error page flood the log line.
+const RESPONSE_LOG_MAX_CHARS = 1000;
 
 export interface DorisClientConfig {
   feHttpUrl?: string;
@@ -218,6 +282,12 @@ export class DorisClient {
               );
               return str;
             }
+          }
+          // Force utf8 decoding for string/blob columns. Doris advertises charset
+          // 33 (which mysql2 decodes as 3-byte cesu8 → '�' for 4-byte emoji), but
+          // its data is utf8mb4. field.string("utf8") decodes 4-byte chars correctly.
+          if (STRING_FIELD_TYPES.has(field.type)) {
+            return field.string("utf8");
           }
           return next();
         },
@@ -473,11 +543,15 @@ export class DorisClient {
    */
   private async streamLoadPut(
     urlOrPath: string,
-    jsonData: string,
+    // Never a plain string: axios' default transformRequest "validates" a
+    // string body under a JSON content type by JSON.parse-ing ALL of it
+    // (stringifySafely), allocating and discarding an object graph several
+    // times the body size on every attempt. Streams pass through untouched.
+    data: Readable | undefined,
     authHeaders: Record<string, string>,
   ) {
     const isAbsolute = /^https?:\/\//i.test(urlOrPath);
-    return this.streamLoadClient.put(urlOrPath, jsonData, {
+    return this.streamLoadClient.put(urlOrPath, data, {
       headers: authHeaders,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
@@ -491,7 +565,11 @@ export class DorisClient {
   }
 
   /**
-   * Stream Load data into Doris table using HTTP API
+   * Stream Load data into Doris table using HTTP API. Object convenience
+   * wrapper — serializes `data` once and delegates to streamLoadBody. Prefer
+   * streamLoadBody / insert(body, recordCount) on the hot ingestion path where
+   * the caller already holds a pre-serialized body (avoids a second full
+   * JSON.stringify of the batch).
    * @param table Target table name
    * @param data Array of records to insert
    * @param options Stream load options
@@ -501,22 +579,85 @@ export class DorisClient {
     table: string,
     data: T[],
     options: DorisStreamLoadOptions = {},
-  ): Promise<void> {
+  ): Promise<StreamLoadOutcome> {
     if (!data || data.length === 0) {
       logger.warn("No data provided for stream load", { table });
-      return;
+      return { dedupedByLabel: false };
+    }
+    return this.streamLoadBody(
+      table,
+      JSON.stringify(data),
+      data.length,
+      options,
+    );
+  }
+
+  /**
+   * Stream Load a pre-serialized body. `body` is the exact bytes sent to Doris
+   * (a JSON array when strip_outer_array=true, or newline-delimited objects
+   * when read_json_by_line=true) — either one string or a StreamLoadBodySource
+   * streamed chunk-by-chunk. `recordCount` is used only for logging.
+   */
+  async streamLoadBody(
+    table: string,
+    body: string | StreamLoadBodySource,
+    recordCount: number,
+    options: DorisStreamLoadOptions = {},
+  ): Promise<StreamLoadOutcome> {
+    if (!body) {
+      logger.warn("No data provided for stream load", { table });
+      return { dedupedByLabel: false };
+    }
+
+    // Normalize a string body into the chunked shape so everything downstream
+    // (byte accounting, payload, headers) has exactly ONE path. A string
+    // carries no framing discriminant — its flags come from options/defaults.
+    const source: {
+      format?: "ndjson" | "json_array";
+      chunks: () => Iterable<Buffer>;
+      byteLength: number;
+    } =
+      typeof body === "string"
+        ? {
+            byteLength: Buffer.byteLength(body, "utf8"),
+            chunks: () => [Buffer.from(body, "utf8")],
+          }
+        : body;
+    const bodyBytes = source.byteLength;
+    // <= 0 (not === 0): a buggy producer's negative/NaN byteLength must be
+    // rejected here, never sent as a malformed Content-Length header.
+    if (!Number.isInteger(bodyBytes) || bodyBytes <= 0) {
+      logger.warn("No data provided for stream load", { table, bodyBytes });
+      return { dedupedByLabel: false };
     }
 
     const loadOptions = {
       format: "json",
+      // Self-consistent defaults for the legacy string path: streamLoad()
+      // serializes one JSON array, which pairs with strip_outer_array=true and
+      // read_json_by_line=false. (Both flags true is contradictory and only
+      // tolerated by Doris because a JSON.stringify array is single-line.)
       strip_outer_array: true,
-      read_json_by_line: true,
+      read_json_by_line: false,
       timeout: 600, // 10 minutes
       ...options,
     };
+    // A chunked source names its own framing — derive the two body-shape flags
+    // from it so the framing and the flags can never desync (the caller's
+    // options for these two are deliberately ignored).
+    if (source.format) {
+      loadOptions.strip_outer_array = source.format === "json_array";
+      loadOptions.read_json_by_line = source.format === "ndjson";
+    }
 
-    // Generate unique load label for idempotency
-    const loadLabel = `langfuse_${table}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // A caller-owned label opts into exactly-once dedup semantics (see
+    // DorisStreamLoadOptions.label). Otherwise generate a per-attempt label —
+    // crypto-grade randomness: once "Label Already Exists" can mean SUCCESS
+    // (stable path), a collision would silently swallow a batch, so entropy
+    // must be beyond doubt for both paths.
+    const stableLabel = options.label != null;
+    const loadLabel =
+      options.label ?? `langfuse_${table}_${Date.now()}_${randomUUID()}`;
 
     // Prepare request headers
     const headers: Record<string, string> = {
@@ -530,9 +671,6 @@ export class DorisClient {
       timezone: "UTC",
     };
 
-    // Convert data to JSON string
-    const jsonData = JSON.stringify(data);
-
     const url = `/api/${this.config.database}/${table}/_stream_load`;
 
     try {
@@ -545,74 +683,156 @@ export class DorisClient {
         Authorization: `Basic ${authString}`,
       };
 
-      // First attempt: try the FE endpoint
-      logger.debug("DorisClient: Sending PUT request to FE", {
-        url,
-        headers: authHeaders,
-      });
+      // Two-stage PUT.
+      //
+      // Doris Stream Load always goes through an FE→307→BE redirect. FE
+      // doesn't ingest the body itself; it picks a BE per request
+      // (load-balancing + failover) and tells the client where to push.
+      // The naive "PUT the full body to FE and follow the redirect in one
+      // shot" is broken on Node.js: axios + Expect:100-continue still
+      // pre-fills one TCP send buffer (~64KB) before it sees the 307, and
+      // FE closes the connection right after sending the redirect — which
+      // surfaces as `write EPIPE` on the client whenever bodyBytes > ~64KB.
+      // Under load with multi-MB batches that's nearly every request.
+      //
+      // The fix: send an *empty-body* PUT to FE first (Content-Length: 0).
+      // FE only needs the headers to make its BE selection, so an empty PUT
+      // round-trips in a few ms and yields the same 307 with a Location
+      // header — but no body bytes ever flow to FE, so EPIPE is
+      // mechanically impossible. The actual data body is then PUT straight
+      // to the redirected BE URL (still via streamLoadPut so it reuses the
+      // keep-alive agent and doesn't open one TCP per stream load).
+      // Pass `undefined` (not "") as the body so axios' JSON transform emits
+      // no bytes at all — JSON.stringify("") would send a 2-byte `""`. axios
+      // then sets Content-Length: 0 for us. (Don't set Content-Length
+      // manually too; a duplicate header makes the peer reject with 400.)
+      // Tag transport errors with WHICH leg failed and the exact target URL.
+      // Without this a bare axios "timeout of 30000ms exceeded" is
+      // undiagnosable — it doesn't say whether the FE probe or the body PUT
+      // to the (possibly unreachable) redirect target hung. The tag is read
+      // by the outer catch and prefixed into the logged/thrown message.
+      const tagLeg = (e: unknown, leg: string, target: string): never => {
+        if (e && typeof e === "object") {
+          (e as any).streamLoadLeg = leg;
+          (e as any).streamLoadTarget = target;
+        }
+        throw e;
+      };
+      const feUrl = `${this.config.feHttpUrl}${url}`;
 
-      // Manual 307 handling — Doris FE always redirects stream loads to a BE.
-      let response = await this.streamLoadPut(url, jsonData, authHeaders);
+      logger.debug("DorisClient: Sending empty-body probe PUT to FE", { url });
+      const probe = await this.streamLoadPut(url, undefined, authHeaders).catch(
+        (e) => tagLeg(e, "FE probe PUT", feUrl),
+      );
 
-      // Handle redirect manually if we get a 307 (this is normal behavior for Doris FE)
-      if (response.status === 307 && response.headers?.location) {
-        logger.debug("Handling manual redirect for Stream Load", {
-          originalUrl: url,
-          redirectUrl: response.headers.location,
-        });
-
-        // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
-        // in the Location header). Supports both http:// and https://.
-        const redirectUrl = response.headers.location.replace(
-          /^(https?:\/\/)[^@/]+@/,
-          "$1",
+      if (probe.status !== 307 || !probe.headers?.location) {
+        // The probe didn't get the expected 307 redirect. Report the facts
+        // verbatim — probed URL, received status, raw response body — and let
+        // the reader judge the cause (FE-side header/auth errors, a proxy, a
+        // misdirected URL, ... all surface here). No interpretation in logs.
+        const data = probe.data;
+        const body =
+          (typeof data === "string" ? data : JSON.stringify(data)) ||
+          "empty body";
+        throw new Error(
+          `Stream load FE probe PUT ${feUrl} returned HTTP ${probe.status} without a 307 redirect; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`,
         );
-
-        logger.debug("DorisClient: Sending PUT request to BE (redirect)", {
-          redirectUrl,
-        });
-
-        // Make the request to the redirect URL with proper auth, reusing the
-        // same keep-alive agents as the FE call so we don't open one TCP per
-        // stream load.
-        response = await this.streamLoadPut(redirectUrl, jsonData, authHeaders);
       }
 
-      // Check load result
+      // Strip embedded basic-auth credentials (Doris FE embeds user:pass@host
+      // in the Location header). Supports both http:// and https://.
+      const redirectUrl = probe.headers.location.replace(
+        /^(https?:\/\/)[^@/]+@/,
+        "$1",
+      );
+
+      logger.debug("DorisClient: Sending body PUT to BE (redirect)", {
+        redirectUrl,
+        bodyBytes,
+      });
+
+      // Body goes straight to the redirected BE, reusing the same keep-alive
+      // agent as the FE probe so we don't open one TCP per stream load. A
+      // fresh Readable per attempt; axios can't know a bare stream's length,
+      // so Content-Length is set manually from byteLength (exact by the
+      // source's contract). Only on this leg — the FE probe stays body-less
+      // with axios' own Content-Length: 0 (a duplicate header there rejects
+      // with 400).
+      const response = await this.streamLoadPut(
+        redirectUrl,
+        Readable.from(source.chunks()),
+        { ...authHeaders, "Content-Length": String(bodyBytes) },
+      ).catch((e) => tagLeg(e, "BE body PUT", redirectUrl));
+
+      // Check load result. result may be a non-object (empty 200 body, plain
+      // text, a stray 3xx passed by validateStatus) — optional chaining keeps
+      // the failure path reporting the VERBATIM body instead of dying on a
+      // TypeError that would mask the real fact.
       const result = response.data;
-      if (result.Status !== "Success") {
-        // Extract error message from different response formats
-        let errorMessage = "Unknown error";
 
-        if (result.Message) {
-          // Standard Stream Load error format
-          errorMessage = result.Message;
-        } else if (result.msg && result.data) {
-          // Authentication or API error format
-          errorMessage = `${result.msg}: ${result.data}`;
-        } else if (result.msg) {
-          // Simple message format
-          errorMessage = result.msg;
-        } else if (result.data) {
-          // Data field contains error details
-          errorMessage = result.data;
-        } else if (typeof result === "string") {
-          // Plain text response
-          errorMessage = result;
+      // Exactly-once handshake — ONLY for caller-owned stable labels. A prior
+      // attempt of THIS batch may have committed after we timed out; the FE's
+      // label registry is the authority (verified on Doris 4.0.6):
+      //   ExistingJobStatus FINISHED → the txn is VISIBLE: this batch is
+      //     already in Doris. Success, don't re-park (that would double-apply
+      //     AGGREGATE-KEY SUM columns).
+      //   ExistingJobStatus RUNNING → the earlier attempt is still in flight
+      //     server-side. Throw retryable: it will resolve to FINISHED (dedup)
+      //     or the txn aborts (label freed → next retry loads normally).
+      //   Anything else → resolve via SHOW TRANSACTION (aborted txns free the
+      //     label, so "already exists" implies PREPARE/COMMITTED/VISIBLE).
+      // For generated per-attempt labels this can only be a collision → fall
+      // through to the plain failure path (retry gets a fresh label).
+      if (stableLabel && result?.Status === "Label Already Exists") {
+        if (result.ExistingJobStatus === "FINISHED") {
+          logger.info(
+            `Stream load deduplicated by label (already committed): ${JSON.stringify({ table, loadLabel, message: result.Message })}`,
+          );
+          return { dedupedByLabel: true };
         }
+        if (result.ExistingJobStatus === "RUNNING") {
+          throw new Error(
+            `Stream load label busy (earlier attempt still running); response: ${JSON.stringify(result).slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+          );
+        }
+        // Unknown/missing ExistingJobStatus (format drift safety net): ask the
+        // FE directly instead of wedging the batch in an eternal retry loop.
+        const txnStatus = await this.resolveLabelTxnStatus(loadLabel);
+        if (txnStatus === "VISIBLE" || txnStatus === "COMMITTED") {
+          logger.info(
+            `Stream load deduplicated by label (SHOW TRANSACTION=${txnStatus}): ${JSON.stringify({ table, loadLabel })}`,
+          );
+          return { dedupedByLabel: true };
+        }
+        throw new Error(
+          `Stream load label already exists, txn status ${txnStatus}; response: ${JSON.stringify(result).slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+        );
+      }
 
-        logger.error("DorisClient: Stream load failed (verbose)", {
-          responseData: result,
-          errorMessage,
-        });
+      // Publish Timeout = the transaction IS committed (durable, cannot roll
+      // back); only the visibility publish to all replicas lagged past the
+      // publish timeout. FE keeps publishing in the background, so the data
+      // WILL become visible. Treating this as failure would retry the batch —
+      // harmless under a stable label (dedup) but a guaranteed duplicate on
+      // label-less tables — so it is success by definition here.
+      if (result?.Status === "Publish Timeout") {
+        logger.warn(
+          `Stream load committed but publish timed out (data durable, visibility lagging): ${JSON.stringify({ table, loadLabel, message: result?.Message })}`,
+        );
+        return { dedupedByLabel: false };
+      }
 
-        // Include ErrorURL in the thrown error so logs are usable for debugging
-        // without needing to crank LOG_LEVEL to debug.
-        const errorUrlSuffix =
-          result && (result.ErrorURL || result.errorURL)
-            ? ` (ErrorURL: ${result.ErrorURL ?? result.errorURL})`
-            : "";
-        throw new Error(`Stream load failed: ${errorMessage}${errorUrlSuffix}`);
+      if (result?.Status !== "Success") {
+        // BE answered but did not accept the load. Report the response
+        // verbatim — it already carries Message, ErrorURL, filtered-row
+        // counts, txn info — instead of picking fields case by case. The
+        // outer catch logs it exactly once.
+        const body =
+          (typeof result === "string" ? result : JSON.stringify(result)) ||
+          "empty body";
+        throw new Error(
+          `Stream load Status != Success; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`,
+        );
       }
 
       if (env.LITEFUSE_DORIS_LOG_STREAM_LOAD_RESPONSE === "true") {
@@ -622,39 +842,27 @@ export class DorisClient {
       } else {
         logger.debug("Stream load completed", {
           table,
-          recordCount: data.length,
-          dataSizeKB: (Buffer.byteLength(jsonData, "utf8") / 1024).toFixed(2),
+          recordCount,
+          dataSizeKB: (bodyBytes / 1024).toFixed(2),
           loadLabel,
           response: result,
         });
       }
+      return { dedupedByLabel: false };
     } catch (error) {
-      // Enhanced error handling for different error types
+      // Build the failure message from FACTS only, verbatim: HTTP status +
+      // raw response body when the peer answered, the transport error message
+      // when it didn't. No field-picking, no interpretation.
       let errorMessage = "Unknown error";
 
       if (error && typeof error === "object" && "response" in error) {
         // Axios HTTP error with response
         const axiosError = error as any;
         if (axiosError.response?.data) {
-          const responseData = axiosError.response.data;
-
-          logger.debug("DorisClient: HTTP error response data", {
-            status: axiosError.response.status,
-            statusText: axiosError.response.statusText,
-            responseData: responseData,
-          });
-
-          if (responseData.msg && responseData.data) {
-            errorMessage = `${responseData.msg}: ${responseData.data}`;
-          } else if (responseData.msg) {
-            errorMessage = responseData.msg;
-          } else if (responseData.Message) {
-            errorMessage = responseData.Message;
-          } else if (typeof responseData === "string") {
-            errorMessage = responseData;
-          } else {
-            errorMessage = `HTTP ${axiosError.response.status}: ${axiosError.response.statusText}`;
-          }
+          const d = axiosError.response.data;
+          const body =
+            (typeof d === "string" ? d : JSON.stringify(d)) || "empty body";
+          errorMessage = `HTTP ${axiosError.response.status} ${axiosError.response.statusText ?? ""}; response: ${body.slice(0, RESPONSE_LOG_MAX_CHARS)}`;
         } else {
           errorMessage = axiosError.message || "Network error";
         }
@@ -664,66 +872,84 @@ export class DorisClient {
         errorMessage = String(error);
       }
 
+      // Prefix which leg failed (FE probe vs BE body PUT) + the exact target
+      // URL + the axios error code (ECONNABORTED/ECONNREFUSED/EPIPE/...), set
+      // by tagLeg above. A bare "timeout of 30000ms exceeded" is useless; the
+      // same timeout tagged "[BE body PUT http://172.29.0.3:8040/... ]" points
+      // straight at an unreachable redirect target.
+      const anyErr = error as any;
+      const legPrefix = anyErr?.streamLoadLeg
+        ? `[${anyErr.streamLoadLeg} ${anyErr.streamLoadTarget}${anyErr?.code ? ` ${anyErr.code}` : ""}] `
+        : "";
+      const finalMessage = `${legPrefix}${errorMessage}`;
+
       // Inline errorMessage into the message string so it survives the
       // default text log format (which drops the metadata object). Without
       // this, "[E-217]json body size ... exceed BE's conf
       // streaming_load_json_max_mb ..." and similar BE-side rejections are
-      // invisible until operators flip LITEFUSE_LOG_FORMAT=json.
-      const dataSizeKB = (
-        data.reduce(
-          (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
-          0,
-        ) / 1024
-      ).toFixed(2);
+      // invisible until operators flip LITEFUSE_LOG_FORMAT=json. Size was
+      // computed once up front (no re-scan of the body).
+      const dataSizeKB = (bodyBytes / 1024).toFixed(2);
       logger.error(
-        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${data.length}, dataSizeKB=${dataSizeKB}): ${errorMessage}`,
+        `Stream load failed for ${table} (loadLabel=${loadLabel}, recordCount=${recordCount}, dataSizeKB=${dataSizeKB}): ${finalMessage}`,
       );
 
-      throw new Error(errorMessage);
+      throw new Error(finalMessage);
     }
   }
 
   /**
-   * Batch insert with automatic retry mechanism
-   * @param table Target table name
-   * @param data Array of records to insert
-   * @param options Stream load options
-   * @returns Promise<void>
+   * Resolve a load label's transaction status straight from the FE (MySQL
+   * protocol) — the fallback for a "Label Already Exists" response whose
+   * ExistingJobStatus we can't interpret. Returns the raw TransactionStatus
+   * (VISIBLE/COMMITTED/PREPARE/...) or "UNKNOWN" when the lookup itself fails —
+   * callers treat non-VISIBLE/COMMITTED as retryable, so an FE hiccup here just
+   * means one more backoff round, never a wrong success.
    */
-  async insert<T = any>(
-    table: string,
-    data: T[],
-    options: DorisStreamLoadOptions = {},
-  ): Promise<void> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
-      try {
-        await this.streamLoad(table, data, options);
-        return; // Success, exit retry loop
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (attempt < this.config.maxRetries) {
-          const delay = this.config.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          logger.warn(
-            `Stream load attempt ${attempt} failed for ${table}, retrying in ${delay}ms: ${lastError.message}`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+  private async resolveLabelTxnStatus(label: string): Promise<string> {
+    try {
+      const rows = await this.query(
+        `SHOW TRANSACTION FROM ${this.config.database} WHERE LABEL = '${label.replace(/'/g, "''")}'`,
+      );
+      // A label freed by an ABORTED txn can be reused, so the transaction
+      // history may hold SEVERAL rows for the same label (e.g. an old ABORTED
+      // attempt plus the later committed one) and the FE's return order
+      // carries no contract. Scan ALL rows: any committed/visible txn under
+      // this label means the batch IS in Doris.
+      let fallback: string = "UNKNOWN";
+      for (const row of rows ?? []) {
+        const status = row?.TransactionStatus;
+        if (typeof status !== "string" || status.length === 0) continue;
+        if (status === "VISIBLE" || status === "COMMITTED") return status;
+        fallback = status;
       }
+      return fallback;
+    } catch (e) {
+      logger.warn(
+        `SHOW TRANSACTION lookup failed for label ${label}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return "UNKNOWN";
     }
+  }
 
-    // All retries failed
-    // Safely calculate size by iterating instead of JSON.stringify (avoids ~374MB temp alloc for 2000×96KB)
-    const dataSizeKB =
-      data.reduce(
-        (acc, item) => acc + Buffer.byteLength(JSON.stringify(item), "utf8"),
-        0,
-      ) / 1024;
-    throw new Error(
-      `Stream load failed after ${this.config.maxRetries} attempts: ${lastError?.message} | table=${table}, recordCount=${data.length}, dataSizeKB=${dataSizeKB.toFixed(2)}`,
-    );
+  /**
+   * Single-attempt Stream Load of a pre-serialized body. Retry/backoff is NOT
+   * done here — it is owned entirely by the caller (DorisWriter re-queues failed
+   * rows), so retry logic lives in exactly one layer. Throws on failure.
+   * @param table Target table name
+   * @param body Pre-serialized Stream Load body (JSONL or JSON array), as one
+   *   string or a StreamLoadBodySource streamed chunk-by-chunk
+   * @param recordCount Number of rows in `body` (logging only)
+   * @param options Stream load options
+   * @returns StreamLoadOutcome (dedupedByLabel — see type doc)
+   */
+  async insert(
+    table: string,
+    body: string | StreamLoadBodySource,
+    recordCount: number,
+    options: DorisStreamLoadOptions = {},
+  ): Promise<StreamLoadOutcome> {
+    return await this.streamLoadBody(table, body, recordCount, options);
   }
 
   /**
@@ -861,16 +1087,25 @@ const TIMESTAMP_FIELDS = [
   "dataset_item_version",
 ] as const;
 
-const DATE_FIELD_MAPPINGS = {
+// null = "this table needs NO derived date field" (still must be listed —
+// an unknown table name falls to the dual-column fallback branch, which would
+// synthesize stray timestamp_date/start_time_date fields).
+const DATE_FIELD_MAPPINGS: Record<
+  string,
+  { sourceField: string; dateField: string } | null
+> = {
   traces: { sourceField: "timestamp", dateField: "timestamp_date" },
   scores: { sourceField: "timestamp", dateField: "timestamp_date" },
   observations: { sourceField: "start_time", dateField: "start_time_date" },
-  // events_full uses observation-shaped timestamps (start_time + start_time_date
-  // partition key). Explicit mapping prevents formatDataForDoris from falling
-  // back to the dual-column branch (which would also synthesize a stray
-  // `timestamp_date` field that events_full doesn't have).
-  events_full: { sourceField: "start_time", dateField: "start_time_date" },
-} as const;
+  // events_full partitions directly on start_time (date_trunc auto partition,
+  // migration 0037) — there is no start_time_date column to derive.
+  events_full: null,
+  // traces_scalar mirrors events_full's timestamp shape (root-span dual-write;
+  // start_time_date derived from start_time, no stray timestamp_date).
+  traces_scalar: { sourceField: "start_time", dateField: "start_time_date" },
+  // trace_metrics_agg is a sync MV on events_full (migration 0040) — never
+  // stream-loaded directly, so no mapping entry.
+};
 
 /**
  * Convert various timestamp formats to Date object
@@ -1004,39 +1239,46 @@ const normalizeMetadataForDoris = (
  * Elegant utility function to format data for Doris insertion
  * Handles data type conversion, null values, and date field generation
  */
+/**
+ * Normalize + date-derive a single record for Doris. Hot path: the ingestion
+ * writer calls this once per row at enqueue time (so the row is serialized
+ * exactly once and never re-formatted on flush/retry), rather than
+ * re-formatting the whole batch on every Stream Load attempt.
+ */
+export const formatRecordForDoris = <T extends Record<string, any>>(
+  record: T,
+  tableName?: string,
+): T => {
+  // Step 1: Normalize all field values
+  const formatted = Object.entries(record).reduce((acc, [key, value]) => {
+    (acc as any)[key] = normalizeValue(key, value);
+    return acc;
+  }, {} as T);
+
+  // Step 1.5: Normalize metadata to avoid Doris MAP parsing issues with
+  // escaped quotes in JSON string values.
+  if ("metadata" in formatted && formatted.metadata) {
+    (formatted as any).metadata = normalizeMetadataForDoris(formatted.metadata);
+  }
+
+  // Step 2: Generate date fields based on table type. A listed table with a
+  // null mapping (events_full) needs no derived date field; only UNKNOWN
+  // tables fall to the dual-column fallback.
+  if (tableName && tableName in DATE_FIELD_MAPPINGS) {
+    const mapping = DATE_FIELD_MAPPINGS[tableName];
+    if (mapping) {
+      generateDateField(formatted, mapping.sourceField, mapping.dateField);
+    }
+  } else {
+    // Fallback: generate both possible date fields
+    generateDateField(formatted, "timestamp", "timestamp_date");
+    generateDateField(formatted, "start_time", "start_time_date");
+  }
+
+  return formatted;
+};
+
 export const formatDataForDoris = <T extends Record<string, any>>(
   data: T[],
   tableName?: string,
-): T[] => {
-  return data.map((record) => {
-    // Step 1: Normalize all field values
-    const formatted = Object.entries(record).reduce((acc, [key, value]) => {
-      (acc as any)[key] = normalizeValue(key, value);
-      return acc;
-    }, {} as T);
-
-    // Step 1.5: Normalize metadata to avoid Doris MAP parsing issues with
-    // escaped quotes in JSON string values.
-    if ("metadata" in formatted && formatted.metadata) {
-      (formatted as any).metadata = normalizeMetadataForDoris(
-        formatted.metadata,
-      );
-    }
-
-    // Step 2: Generate date fields based on table type
-    const mapping = tableName
-      ? DATE_FIELD_MAPPINGS[tableName as keyof typeof DATE_FIELD_MAPPINGS]
-      : null;
-
-    if (mapping) {
-      // Table-specific date field generation
-      generateDateField(formatted, mapping.sourceField, mapping.dateField);
-    } else {
-      // Fallback: generate both possible date fields
-      generateDateField(formatted, "timestamp", "timestamp_date");
-      generateDateField(formatted, "start_time", "start_time_date");
-    }
-
-    return formatted;
-  });
-};
+): T[] => data.map((record) => formatRecordForDoris(record, tableName));

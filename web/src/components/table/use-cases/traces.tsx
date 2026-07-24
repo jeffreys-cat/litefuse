@@ -132,6 +132,40 @@ export type TracesTableRow = {
   };
 };
 
+// Hover tooltip for a trace's token/cost cell. The traces list query returns only
+// scalar totals (no per-key maps), so the per-key breakdown is fetched lazily —
+// only when the user actually opens the tooltip — scoped to this one trace.
+const TraceUsageBreakdownTooltip = ({
+  projectId,
+  traceId,
+  timestamp,
+  isCost,
+  children,
+}: {
+  projectId: string;
+  traceId: string;
+  timestamp: Date;
+  isCost?: boolean;
+  children: React.ReactNode;
+}) => {
+  const [open, setOpen] = useState(false);
+  const breakdown = api.traces.usageBreakdownById.useQuery(
+    { projectId, traceId, timestamp },
+    {
+      enabled: open,
+      staleTime: 60 * 1000,
+      refetchOnWindowFocus: false,
+    },
+  );
+  const details =
+    (isCost ? breakdown.data?.costDetails : breakdown.data?.usageDetails) ?? {};
+  return (
+    <BreakdownTooltip details={details} isCost={isCost} onOpenChange={setOpen}>
+      {children}
+    </BreakdownTooltip>
+  );
+};
+
 export type TracesTableProps = {
   projectId: string;
   userId?: string;
@@ -704,7 +738,11 @@ export default function TracesTable({
         }
 
         return (
-          <BreakdownTooltip details={row.original.tokenDetails ?? []}>
+          <TraceUsageBreakdownTooltip
+            projectId={projectId}
+            traceId={row.original.id}
+            timestamp={row.original.timestamp}
+          >
             <div className="flex items-center gap-1">
               <TokenUsageBadge
                 inputUsage={Number(value.inputUsage ?? 0)}
@@ -714,7 +752,7 @@ export default function TracesTable({
               />
               <InfoIcon className="h-3 w-3" />
             </div>
-          </BreakdownTooltip>
+          </TraceUsageBreakdownTooltip>
         );
       },
       enableSorting,
@@ -729,7 +767,12 @@ export default function TracesTable({
         const cost: TracesTableRow["totalCost"] = row.getValue("totalCost");
         if (!traceMetrics.data) return <Skeleton className="h-3 w-1/2" />;
         return cost != null ? (
-          <BreakdownTooltip details={row.original.costDetails ?? []} isCost>
+          <TraceUsageBreakdownTooltip
+            projectId={projectId}
+            traceId={row.original.id}
+            timestamp={row.original.timestamp}
+            isCost
+          >
             <div className="flex items-center gap-1">
               {cost ? (
                 <span>{usdFormatter(cost.toNumber())}</span>
@@ -738,7 +781,7 @@ export default function TracesTable({
               )}
               <InfoIcon className="h-3 w-3" />
             </div>
-          </BreakdownTooltip>
+          </TraceUsageBreakdownTooltip>
         ) : null;
       },
       enableHiding: true,

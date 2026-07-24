@@ -186,9 +186,9 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
 
   const filters = [];
   if (traceTimestampFilter) {
-    // events_full uses start_time (not timestamp). The CTE this filter
-    // lands inside is FROM events_full t, so the bare column reference
-    // resolves against the events_full schema.
+    // traces_scalar uses start_time (not timestamp). The CTE this filter
+    // lands inside is FROM traces_scalar t, so the bare column reference
+    // resolves against the traces_scalar schema.
     filters.push(
       new DorisDateTimeFilter({
         table: "traces",
@@ -251,89 +251,203 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     sessionColsForDoris,
   );
 
+  // Two-phase fast path (~10x on large projects, measured on a 50T env):
+  // phase 1 picks the page's session_ids with the cheapest possible
+  // aggregate (MIN(start_time) only, both time bounds pushed into the
+  // scan for partition pruning), phase 2 builds the expensive array
+  // aggregates for ONLY those sessions. Legal only when the page can be
+  // selected from per-trace predicates alone: ordering by min_timestamp
+  // and filters that apply to a trace row (time bounds, environment,
+  // session_id, bookmarked). Aggregate-level filters/orderings (user_ids,
+  // tags, metrics, scores) must see every session before paging → legacy.
+  const traceTimestampUpperFilter: DorisDateTimeFilter | undefined =
+    tracesFilter.find(
+      (f) =>
+        f.field === "min_timestamp" &&
+        (f.operator === "<=" || f.operator === "<"),
+    ) as DorisDateTimeFilter | undefined;
+
+  const orderByTarget = orderBy
+    ? sessionColsForDoris.find(
+        (c) =>
+          c.uiTableName === orderBy.column || c.uiTableId === orderBy.column,
+      )?.select
+    : undefined;
+
+  const PUSHDOWN_FIELDS = new Set([
+    "project_id",
+    "min_timestamp",
+    "environment",
+    "session_id",
+    "bookmarked",
+  ]);
+  const filtersPushable = !tracesFilter.some(
+    (f) =>
+      !PUSHDOWN_FIELDS.has(f.field) ||
+      (f.field === "min_timestamp" &&
+        ![">", ">=", "<", "<="].includes(f.operator)),
+  );
+
+  const twoPhaseEligible =
+    (select === "rows" &&
+      limit !== undefined &&
+      page !== undefined &&
+      !selectMetrics &&
+      !requiresScoresJoin &&
+      (orderByTarget === undefined || orderByTarget === "min_timestamp") &&
+      filtersPushable) ||
+    // count ignores ordering entirely, so only the filters must be pushable:
+    // the session count = sessions with at least one trace row in the window.
+    (select === "count" && filtersPushable);
+
+  let twoPhaseQuery: string | undefined;
+  if (twoPhaseEligible) {
+    // Reused verbatim in BOTH phases (values are inlined, so repetition is
+    // safe): phase 2 keeps only the lower time bound, preserving the legacy
+    // semantics that max_timestamp/trace_ids include traces after the
+    // window's end.
+    const sharedFilterList = tracesFilter.filter((f) =>
+      ["environment", "session_id", "bookmarked"].includes(f.field),
+    );
+    if (traceTimestampFilter) {
+      sharedFilterList.push(
+        new DorisDateTimeFilter({
+          table: "traces",
+          field: "start_time",
+          operator: traceTimestampFilter.operator,
+          value: traceTimestampFilter.value,
+        }),
+      );
+    }
+    const sharedClause = sharedFilterList.apply().query;
+    // Upper bound goes into phase 1's scan only. Pre-aggregation filtering
+    // is equivalent to HAVING min <= upper: a session with any row in the
+    // window has its min inside it; one with none has min above the upper
+    // bound and would be dropped anyway.
+    const upperClause = traceTimestampUpperFilter
+      ? new DorisDateTimeFilter({
+          table: "traces",
+          field: "start_time",
+          operator: traceTimestampUpperFilter.operator,
+          value: traceTimestampUpperFilter.value,
+        }).apply().query
+      : "";
+
+    twoPhaseQuery =
+      select === "count"
+        ? `
+        SELECT count(DISTINCT session_id) as count
+        FROM traces_scalar
+        WHERE project_id = {projectId: String}
+          AND session_id IS NOT NULL AND session_id != ''
+          ${sharedClause ? `AND ${sharedClause}` : ""}
+          ${upperClause ? `AND ${upperClause}` : ""}
+          `
+        : `
+        WITH top_sessions AS (
+          SELECT session_id, MIN(start_time) AS min_timestamp
+          FROM traces_scalar
+          WHERE project_id = {projectId: String}
+            AND session_id IS NOT NULL AND session_id != ''
+            ${sharedClause ? `AND ${sharedClause}` : ""}
+            ${upperClause ? `AND ${upperClause}` : ""}
+          GROUP BY session_id
+          ${dorisOrderBy}
+          LIMIT {limit: Int32} OFFSET {offset: Int32}
+        ),
+        session_data AS (
+          -- min_timestamp reuses phase 1's value so the final sort key is
+          -- exactly the one the page was selected by.
+          SELECT
+            t.session_id,
+            any_value(t.project_id) as project_id,
+            max(t.start_time) as max_timestamp,
+            any_value(s.min_timestamp) as min_timestamp,
+            collect_list(t.id) AS trace_ids,
+            collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
+            count(*) as trace_count,
+            array_remove(group_array_union(t.tags), '') AS trace_tags,
+            any_value(t.environment) as trace_environment
+          FROM traces_scalar t
+          INNER JOIN top_sessions s ON t.session_id = s.session_id
+          WHERE t.project_id = {projectId: String}
+            ${sharedClause ? `AND ${sharedClause}` : ""}
+          GROUP BY t.session_id
+        )
+        SELECT * FROM session_data
+        ${dorisOrderBy}
+          `;
+  }
+
   // Doris version with database-specific adaptations
-  // Note: Tag aggregation is done in a separate CTE (session_tags) to avoid
-  // LATERAL VIEW EXPLODE_OUTER duplicating rows before the observations join,
-  // which would multiply cost/token metrics by the number of tags per trace.
-  // Also, usage/cost key matching uses substring matching (LIKE '%input%') instead
+  // Note: usage/cost key matching uses substring matching (LIKE '%input%') instead
   // of exact key matching, to include keys like cache_read_input_tokens and
   // cache_creation_input_tokens — mirroring upstream's positionCaseInsensitive behavior.
-  const query = `
+  const query =
+    twoPhaseQuery ??
+    `
         WITH filtered_traces AS (
-          -- Doris Unique Key + Merge-on-Write guarantees a single row per
-          -- (project_id, start_time_date, span_id). The legacy CK-style
-          -- ROW_NUMBER() OVER (PARTITION BY trace_id ORDER BY event_ts DESC)
-          -- dedup is unnecessary here; the only residual edge case is a
-          -- single trace whose start_time crosses a monthly partition
-          -- boundary (multiple start_time_date rows for the same
-          -- trace_id) — extremely rare in practice and considered
-          -- acceptable noise.
+          -- One row per trace from traces_scalar (migration 0039 — the root
+          -- span's scalars, dual-written at ingestion) instead of an
+          -- is_root = 1 events_full scan.
+          -- Sessionless traces are excluded HERE, matching upstream (CH
+          -- session_id is Nullable and the query keeps IS NOT NULL rows).
+          -- traces_scalar stores NULL for unset ('' guarded defensively);
+          -- without this exclusion every sessionless trace collapses into a
+          -- single '' group whose collect_list(trace_ids) aggregation state
+          -- grows with the whole project — the sessions list OOMs at scale.
           -- Project start_time without aliasing to "timestamp" so the
           -- singleTraceFilter SQL (which references the bare column name
           -- start_time) works identically in this CTE body AND in the
           -- session_data WHERE clause below — both query against
           -- filtered_traces. Aliasing here previously broke the second
           -- usage with "Unknown column 'start_time'".
-          SELECT trace_id AS id, session_id, project_id, bookmarked,
-                 start_time,
-                 user_id, tags, environment, event_ts
-          FROM events_full t
-          WHERE t.session_id IS NOT NULL
-            AND t.project_id = {projectId: String}
-            AND t.parent_span_id = ''
+          SELECT id, session_id, project_id,
+                 bookmarked, start_time,
+                 COALESCE(user_id, '') AS user_id, tags, environment, event_ts
+          FROM traces_scalar t
+          WHERE t.project_id = {projectId: String}
+            AND t.session_id IS NOT NULL AND t.session_id != ''
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
         ),
         ${
           selectMetrics
-            ? `filtered_observations AS (
-            SELECT span_id AS id, trace_id, project_id, start_time, end_time, usage_details, cost_details, total_cost, event_ts
-            FROM events_full o
-            WHERE o.project_id = {projectId: String}
-            AND o.parent_span_id != ''
-            ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
-            AND o.trace_id IN (
-              SELECT id
-              FROM filtered_traces
-            )
-          ),
-          observations_agg AS (
-            SELECT o.trace_id,
-                  count(*) as obs_count,
-                  min(o.start_time) as min_start_time,
-                  max(o.end_time) as max_end_time,
-                  -- Use substring matching on map keys to include all input/output related keys
-                  -- (e.g. input, cache_read_input_tokens, cache_creation_input_tokens)
-                  -- mirroring upstream's positionCaseInsensitive behavior
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_input_usage,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0)) as sum_output_usage,
-                  sum(CASE WHEN MAP_CONTAINS_KEY(usage_details,'total') THEN usage_details['total'] ELSE 0 END) as sum_total_usage,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_input_cost,
-                  sum(COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(cost_details), map_keys(cost_details))), 0)) as sum_output_cost,
-                  -- total_cost is a denormalized column on events_full populated by the ingestion writer
-                  -- (cost_details['total']). Use it directly instead of re-extracting from the map.
-                  sum(COALESCE(o.total_cost, 0)) as sum_total_cost,
-                  any_value(project_id) as project_id
-            FROM filtered_observations o
-            WHERE o.project_id = {projectId: String}
-            ${traceTimestampFilter ? `AND o.start_time >= DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY)` : ""}
-            GROUP BY o.trace_id
+            ? `observations_agg AS (
+            -- Per-trace metrics in the trace_metrics_agg sync-MV rewrite
+            -- shape (migration 0040): every aggregate is expression-identical
+            -- to the MV definition and the WHERE only references MV key
+            -- expressions (day-truncated bound), so Doris transparently
+            -- rewrites this scan onto the rollup. The CTE must contain ONLY
+            -- this scan — no IN (filtered_traces) membership pre-filter, no
+            -- JOIN — or the rewrite breaks; the LEFT JOIN below discards the
+            -- extra traces. No COALESCE inside the SUMs either (breaks the
+            -- expression match); the 0-for-NULL guard moved to the outer
+            -- session-level sums.
+            -- Semantics deltas vs the old is_root = 0 CTE, both deliberate:
+            --   * min_start_time/max_end_time now span ALL rows incl. the
+            --     root, so duration = the full trace window — same definition
+            --     the migrated traces list uses for latency (OTel root spans
+            --     cover the whole trace).
+            --   * obs_count keeps non-root-only semantics via the MV's
+            --     SUM(CASE WHEN is_root = 0 …) column.
+            SELECT project_id,
+                  trace_id,
+                  SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) as obs_count,
+                  MIN(start_time) as min_start_time,
+                  MAX(end_time) as max_end_time,
+                  SUM(input_tokens_calculated) as sum_input_usage,
+                  SUM(output_tokens_calculated) as sum_output_usage,
+                  SUM(total_tokens_calculated) as sum_total_usage,
+                  SUM(input_cost_calculated) as sum_input_cost,
+                  SUM(output_cost_calculated) as sum_output_cost,
+                  SUM(total_cost) as sum_total_cost
+            FROM events_full
+            WHERE project_id = {projectId: String}
+            ${traceTimestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY), 'day')` : ""}
+            GROUP BY project_id, trace_id
           ),`
             : ""
         }
-        session_tags AS (
-          SELECT
-            t.session_id as tag_session_id,
-            collect_set(
-              CASE
-                WHEN tag_exploded.tag IS NOT NULL AND tag_exploded.tag != ''
-                THEN tag_exploded.tag
-                ELSE NULL
-              END
-            ) as trace_tags
-          FROM filtered_traces t
-          LATERAL VIEW EXPLODE_OUTER(t.tags) tag_exploded AS tag
-          GROUP BY t.session_id
-        ),
         ${
           requiresScoresJoin
             ? `scores_agg AS (
@@ -372,9 +486,19 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 any_value(t.project_id) as project_id,
                 max(t.start_time) as max_timestamp,
                 min(t.start_time) as min_timestamp,
-                collect_list(DISTINCT t.id) AS trace_ids,
+                -- No DISTINCT needed on t.id: traces_scalar is MoW UNIQUE
+                -- KEY(project_id, id) — one row per trace — and both joins
+                -- are 1:1 (observations_agg groups by trace, scores_agg by
+                -- session), so rows never multiply.
+                collect_list(t.id) AS trace_ids,
                 collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
-                count(DISTINCT t.id) as trace_count,
+                count(*) as trace_count,
+                -- Union+dedup of the session's trace tags in one aggregate
+                -- (upstream groupUniqArrayArray equivalent). Unlike the former
+                -- LATERAL VIEW EXPLODE_OUTER CTE this adds no rows before the
+                -- observations join, so it can live in this GROUP BY without
+                -- multiplying cost/token sums.
+                array_remove(group_array_union(t.tags), '') AS trace_tags,
                 any_value(t.environment) as trace_environment
                 ${
                   selectMetrics
@@ -386,16 +510,19 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                   max(o.max_end_time),
                   CASE WHEN min(o.min_start_time) > '1970-01-01' THEN min(o.min_start_time) ELSE NULL END
                 ) as duration,
-                -- JSON string representation for usage details
-                CONCAT('{"input":', CAST(sum(o.sum_input_usage) AS STRING), ',"output":', CAST(sum(o.sum_output_usage) AS STRING), ',"total":', CAST(sum(o.sum_total_usage) AS STRING), '}') as session_usage_details,
-                -- JSON string representation for cost details
-                CONCAT('{"input":', CAST(sum(o.sum_input_cost) AS STRING), ',"output":', CAST(sum(o.sum_output_cost) AS STRING), ',"total":', CAST(sum(o.sum_total_cost) AS STRING), '}') as session_cost_details,
-                sum(o.sum_input_cost) as session_input_cost,
-                sum(o.sum_output_cost) as session_output_cost,
-                sum(o.sum_total_cost) as session_total_cost,
-                sum(o.sum_input_usage) as session_input_usage,
-                sum(o.sum_output_usage) as session_output_usage,
-                sum(o.sum_total_usage) as session_total_usage`
+                -- The 0-for-NULL guard lives HERE, not in observations_agg's
+                -- SUMs (a COALESCE there would break the sync-MV expression
+                -- match): a trace whose spans carry no token/cost values
+                -- yields NULL per-trace sums, and CONCAT would swallow the
+                -- whole JSON string on a single NULL.
+                CONCAT('{"input":', CAST(COALESCE(sum(o.sum_input_usage), 0) AS STRING), ',"output":', CAST(COALESCE(sum(o.sum_output_usage), 0) AS STRING), ',"total":', CAST(COALESCE(sum(o.sum_total_usage), 0) AS STRING), '}') as session_usage_details,
+                CONCAT('{"input":', CAST(COALESCE(sum(o.sum_input_cost), 0) AS STRING), ',"output":', CAST(COALESCE(sum(o.sum_output_cost), 0) AS STRING), ',"total":', CAST(COALESCE(sum(o.sum_total_cost), 0) AS STRING), '}') as session_cost_details,
+                COALESCE(sum(o.sum_input_cost), 0) as session_input_cost,
+                COALESCE(sum(o.sum_output_cost), 0) as session_output_cost,
+                COALESCE(sum(o.sum_total_cost), 0) as session_total_cost,
+                COALESCE(sum(o.sum_input_usage), 0) as session_input_usage,
+                COALESCE(sum(o.sum_output_usage), 0) as session_output_usage,
+                COALESCE(sum(o.sum_total_usage), 0) as session_total_usage`
                     : ""
                 }
                 ${
@@ -423,9 +550,8 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                 ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
             GROUP BY t.session_id
         )
-                  SELECT ${sqlSelect.includes("trace_tags") ? `s.*, st.trace_tags` : sqlSelect}
+                  SELECT ${sqlSelect.includes("trace_tags") ? "s.*" : sqlSelect}
         FROM session_data s
-        LEFT JOIN session_tags st ON s.session_id = st.tag_session_id
         WHERE ${tracesFilterRes.query ? tracesFilterRes.query : "1=1"}
         ${dorisOrderBy}
         ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}

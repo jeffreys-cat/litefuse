@@ -69,6 +69,44 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(5),
+  // Otel grouper (exactly-once pipeline, design §3.2). Group sizing is a
+  // production tuning knob (design §6.4): target SOURCE bytes must leave
+  // headroom under BE streaming_load_json_max_mb after the transform
+  // inflation ratio (measured in load tests).
+  LITEFUSE_OTEL_GROUP_TARGET_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(64 * 1024 * 1024),
+  LITEFUSE_OTEL_GROUP_TARGET_ROWS: z.coerce
+    .number()
+    .positive()
+    .default(100_000),
+  LITEFUSE_OTEL_GROUP_MAX_FILES: z.coerce.number().positive().default(1_000),
+  // Flush timeout: a below-target group ships once its oldest entry waited
+  // this long — bounds ingest latency at low traffic.
+  LITEFUSE_OTEL_GROUP_FLUSH_MS: z.coerce.number().positive().default(1_000),
+  LITEFUSE_OTEL_GROUPER_LOCK_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(10_000),
+  LITEFUSE_OTEL_GROUPER_TICK_MS: z.coerce.number().positive().default(200),
+  // Self-contained group job (design §3.3): per-worker semaphores.
+  // TRANSFORM bounds concurrent S3 download + JSON.parse (event-loop/heap
+  // protection); LOAD bounds concurrent stream loads (global tablet-writer
+  // fan-out = N workers × this value — design §5.3).
+  LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: z.coerce.number().positive().default(4),
+  LITEFUSE_OTEL_LOAD_CONCURRENCY: z.coerce.number().positive().default(4),
+  // DLQ redrive (design §3.4). LABEL_KEEP_MS must mirror the Doris FE's
+  // label_keep_max_second (default 3 days): a job older than the label
+  // retention window CANNOT be redriven — its dedup label has been purged,
+  // a blind replay would double-load — it must go to the poison ledger /
+  // reconciliation path instead (age guard).
+  LITEFUSE_OTEL_LABEL_KEEP_MS: z.coerce
+    .number()
+    .positive()
+    .default(3 * 24 * 60 * 60 * 1000),
+  LITEFUSE_OTEL_DLQ_MAX_REDRIVES: z.coerce.number().positive().default(5),
+  LITEFUSE_OTEL_DLQ_BATCH_LIMIT: z.coerce.number().positive().default(500),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()
@@ -86,10 +124,36 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(1000),
+  // Per-table BUFFER cap (worker memory / backpressure): addToQueue blocks
+  // while a table's buffered bytes (fresh + parked retries) are at this cap,
+  // leaving the backlog in BullMQ/Redis. This bounds RAM, not request size —
+  // the per-request bound is MAX_BATCH_SIZE_BYTES below. Keep this >= that
+  // (else batches degrade to buffer-sized); for throughput aim at roughly
+  // MAX_CONCURRENT_LOADS * typical batch bytes.
   LITEFUSE_INGESTION_DORIS_MAX_QUEUE_SIZE_BYTES: z.coerce
     .number()
     .positive()
-    .default(90 * 1024 * 1024), // 90MB - flush when queue exceeds this to avoid hitting Doris BE 100MB Stream Load limit
+    .default(90 * 1024 * 1024), // 90MB
+  // Per-BATCH byte cap (request sizing): batch assembly stops at batchSize rows
+  // OR this many bytes, whichever first (always >= 1 row), and buffered bytes
+  // reaching it make the table flush-ready without waiting for the row count /
+  // staleness. Keeps a single Stream Load body clear of the BE's
+  // streaming_load_json_max_mb (100MB) hard limit — without it, batchSize big
+  // rows can assemble a >100MB body that fails deterministically and, under
+  // infinite retry, wedges the table forever.
+  LITEFUSE_INGESTION_DORIS_MAX_BATCH_SIZE_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(64 * 1024 * 1024), // 64MB — 36% headroom under the BE's 100MB
+  // Max concurrent in-flight Stream Loads across all tables. Each in-flight
+  // load holds its (~tens of MB) batch in memory while insert() retries, so an
+  // unbounded fan-out balloons worker RSS when Doris rejects/stalls writes.
+  // Bounds in-flight memory to ~this * batch-bytes; excess rows stay queued and
+  // apply backpressure (see MAX_QUEUE_SIZE_BYTES) instead of piling up.
+  LITEFUSE_INGESTION_DORIS_MAX_CONCURRENT_LOADS: z.coerce
+    .number()
+    .positive()
+    .default(4),
   LITEFUSE_INGESTION_DORIS_WRITE_INTERVAL_MS: z.coerce
     .number()
     .positive()
@@ -98,7 +162,19 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(10_000),
-
+  // Exponential backoff for a failed batch's retries: a failed batch is parked
+  // in DorisWriter's per-table retryBuffer with retryNotBefore = now +
+  // min(BASE * 2^(attempts-1), MAX). Backoff is per-batch — fresh rows and
+  // other batches keep flowing; the wait is a timestamp, never a held
+  // concurrency slot. See DorisWriter.parkForRetry.
+  LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_BASE_MS: z.coerce
+    .number()
+    .positive()
+    .default(1000),
+  LITEFUSE_INGESTION_DORIS_RETRY_BACKOFF_MAX_MS: z.coerce
+    .number()
+    .positive()
+    .default(30_000),
   // Analytics backend selection
   LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 

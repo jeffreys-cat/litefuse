@@ -2,7 +2,11 @@ import { z } from "zod/v4";
 import { auditLog } from "@/src/features/audit-logs/auditLog";
 import { throwIfNoProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
 import { aggregateScores } from "@/src/features/scores/lib/aggregateScores";
-import { applyCommentFilters } from "@langfuse/shared/src/server";
+import {
+  applyCommentFilters,
+  applyScoreFilters,
+  isScoreFilterColumn,
+} from "@langfuse/shared/src/server";
 import {
   createTRPCRouter,
   protectedGetTraceProcedure,
@@ -42,10 +46,10 @@ import {
   getCategoricalScoresGroupedByName,
   convertDateToAnalyticsDateTime,
   getAgentGraphData,
+  getTraceUsageBreakdown,
   tracesTableUiColumnDefinitionsForDoris,
   getTracesGroupedByUsers,
   getTracesGroupedBySessionId,
-  updateEvents,
   getScoresAndCorrectionsForTraces,
   partialUpdateDoris,
 } from "@langfuse/shared/src/server";
@@ -131,9 +135,22 @@ export const traceRouter = createTRPCRouter({
         return { traces: [] };
       }
 
+      // Pre-resolve score filters into a trace_id list so the list query stays on
+      // the traces_mv fast path (scores live in their own table — a JOIN would
+      // pull it off the MV). See applyScoreFilters.
+      const { filterState: scoredFilterState, hasNoMatches: noScoreMatches } =
+        await applyScoreFilters({
+          filterState,
+          projectId: ctx.session.projectId,
+        });
+
+      if (noScoreMatches) {
+        return { traces: [] };
+      }
+
       const traces = await getTracesTable({
         projectId: ctx.session.projectId,
-        filter: filterState,
+        filter: scoredFilterState,
         searchQuery: input.searchQuery ?? undefined,
         searchType: input.searchType ?? ["id"],
         orderBy: normalizeOrderByForTable({
@@ -159,9 +176,19 @@ export const traceRouter = createTRPCRouter({
         return { totalCount: 0 };
       }
 
+      const { filterState: scoredFilterState, hasNoMatches: noScoreMatches } =
+        await applyScoreFilters({
+          filterState,
+          projectId: ctx.session.projectId,
+        });
+
+      if (noScoreMatches) {
+        return { totalCount: 0 };
+      }
+
       const count = await getTracesTableCount({
         projectId: ctx.session.projectId,
-        filter: filterState,
+        filter: scoredFilterState,
         searchType: input.searchType,
         searchQuery: input.searchQuery ?? undefined,
         limit: 1,
@@ -207,14 +234,17 @@ export const traceRouter = createTRPCRouter({
         }
       }
 
-      // Remove the comment filter's ID injection and use filteredTraceIds instead
+      // Remove the comment filter's ID injection and use filteredTraceIds instead.
+      // Also drop score filters: the page's traceIds were already score-filtered in
+      // traces.all, so re-applying them here would only add a redundant scores JOIN
+      // (pulling metrics off the traces_mv fast path).
       const filterWithoutCommentIds = filterState.filter(
         (f) =>
           !(
             f.type === "stringOptions" &&
             f.column === "id" &&
             f.operator === "any of"
-          ),
+          ) && !isScoreFilterColumn(f.column),
       );
 
       const res = await getTracesTableMetrics({
@@ -336,6 +366,24 @@ export const traceRouter = createTRPCRouter({
           ? JSON.stringify(ctx.trace.metadata)
           : undefined,
       };
+    }),
+  // Per-trace usage/cost breakdown for the traces-list hover tooltip. The list
+  // metrics query returns only scalar totals; the per-key breakdown is fetched
+  // lazily here when the user hovers a row (scoped to one trace → one bucket).
+  usageBreakdownById: protectedProjectProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+        traceId: z.string(),
+        timestamp: z.date().nullish(),
+      }),
+    )
+    .query(async ({ input }) => {
+      return getTraceUsageBreakdown({
+        projectId: input.projectId,
+        traceId: input.traceId,
+        timestamp: input.timestamp ?? undefined,
+      });
     }),
   byIdWithObservationsAndScores: protectedGetTraceProcedure
     .input(
@@ -495,7 +543,7 @@ export const traceRouter = createTRPCRouter({
           const promises: Promise<void>[] = [];
           // Master events_full migration: traces table is dead-write under
           // OTel-only ingestion. Keep this for code-retention (harmless
-          // no-op against the empty table) and treat updateEvents as the
+          // no-op against the empty table); traces_scalar below is the
           // authoritative write — that's what the UI reads back.
           promises.push(
             partialUpdateDoris({
@@ -505,16 +553,19 @@ export const traceRouter = createTRPCRouter({
             }),
           );
 
-          // events_full is the production read target; the previous flag
-          // gate (LITEFUSE_ENABLE_EVENTS_TABLE_FLAGS) is removed — without
-          // this write, refreshing the page would surface the unchanged
-          // events_full state and "lose" the bookmark.
+          // events_full is a DUPLICATE-model table (migration 0037): UPDATE
+          // is unsupported, so the events_full root row is NOT rewritten.
+          // traces_scalar (UNIQUE/MoW) is the authoritative store for
+          // trace-level mutable flags; full-verbosity byId reads that still
+          // pick bookmarked from events_full will surface the stale value.
+          // traces_scalar serves the trace LIST (and compact byId); without
+          // this mirror the toggled bookmark reverts on the next list load.
           promises.push(
-            updateEvents(
-              input.projectId,
-              { traceIds: [traceById.id], rootOnly: true },
-              { bookmarked: input.bookmarked },
-            ),
+            partialUpdateDoris({
+              table: "traces_scalar",
+              where: { project_id: input.projectId, id: input.traceId },
+              set: { bookmarked: input.bookmarked },
+            }),
           );
           await Promise.all(promises);
         } else {
@@ -579,12 +630,15 @@ export const traceRouter = createTRPCRouter({
             set: { public: input.public },
           }),
         );
+        // events_full is DUPLICATE-model (migration 0037): UPDATE is
+        // unsupported, so the per-span public flag is NOT rewritten there.
+        // traces_scalar mirror — the list/compact-byId read target.
         promises.push(
-          updateEvents(
-            input.projectId,
-            { traceIds: [traceById.id] },
-            { public: input.public },
-          ),
+          partialUpdateDoris({
+            table: "traces_scalar",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { public: input.public },
+          }),
         );
         await Promise.all(promises);
         return traceById;
@@ -642,11 +696,15 @@ export const traceRouter = createTRPCRouter({
             where: { project_id: input.projectId, id: input.traceId },
             set: { tags: input.tags },
           }),
-          updateEvents(
-            input.projectId,
-            { traceIds: [input.traceId], rootOnly: true },
-            { tags: input.tags },
-          ),
+          // events_full is DUPLICATE-model (migration 0037): UPDATE is
+          // unsupported, so the root-span tags are NOT rewritten there.
+          // traces_scalar mirror — the list/compact-byId read target (tags
+          // filters run on its inverted index).
+          partialUpdateDoris({
+            table: "traces_scalar",
+            where: { project_id: input.projectId, id: input.traceId },
+            set: { tags: input.tags },
+          }),
         ]);
       } catch (error) {
         logger.error("Failed to call traces.updateTags", error);

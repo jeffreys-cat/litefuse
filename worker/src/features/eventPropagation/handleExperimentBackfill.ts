@@ -16,9 +16,9 @@
 // SQL sources (post-OTel-only migration):
 //   * getDatasetRunItemsSinceLastRun: dataset_run_items_rmt + LEFT ANTI
 //     JOIN events_full (was `events` placeholder, now real).
-//   * getRelevantTraces: events_full root spans (parent_span_id = '').
+//   * getRelevantTraces: events_full root spans (is_root = 1).
 //   * getRelevantObservations: events_full non-root spans
-//     (parent_span_id != '').
+//     (is_root = 0).
 //
 // Path-1 ingestion-time inline (SDK `experiment.run()`) is still
 // authoritative — it sets experiment_* fields at write time via
@@ -33,7 +33,6 @@ import {
   convertDateToAnalyticsDateTime,
   flattenJsonToPathArrays,
   dorisClient,
-  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { DorisWriter } from "../../services/DorisWriter";
@@ -239,8 +238,8 @@ export async function getRelevantObservations(
 
   // events_full layout: each observation span is a row with parent_span_id
   // != '' (root spans are the trace itself, handled by getRelevantTraces).
-  // metadata is split across metadata_names / metadata_values arrays; we
-  // zip them in TS after the read and synthesize the Map shape that
+  // metadata is read via to_json(metadata) (raw MAP text does not escape inner quotes); we
+  // parse it in TS after the read and synthesize the Map shape that
   // SpanRecord exposes. Dedup-per-span via ROW_NUMBER (Doris has no
   // LIMIT N BY).
   const query = `
@@ -278,8 +277,7 @@ export async function getRelevantObservations(
         o.tool_call_names,
         o.usage_pricing_tier_id,
         o.usage_pricing_tier_name,
-        o.metadata_names AS metadata_names,
-        o.metadata_values AS metadata_values,
+        to_json(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -294,15 +292,14 @@ export async function getRelevantObservations(
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.parent_span_id != ''
+        AND o.is_root = 0
         AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
     ) ranked
     WHERE rn = 1
   `;
 
   type RawObsRow = Omit<SpanRecord, "metadata"> & {
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   };
   const rows = await queryDoris<RawObsRow>({
     query,
@@ -317,10 +314,11 @@ export async function getRelevantObservations(
     },
   });
   return rows.map((row) => {
-    const { metadata_names, metadata_values, ...rest } = row;
+    const { metadata, ...rest } = row;
     return {
       ...rest,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     };
   });
 }
@@ -338,7 +336,7 @@ export async function getRelevantTraces(
   }
 
   // Trace identity comes from events_full's OTel root span
-  // (parent_span_id = ''). Latest event_ts wins within the project / trace
+  // (is_root = 1). Latest event_ts wins within the project / trace
   // pair, mirroring buildTraceAggregationQuery's "trace_root" CTE choice.
   // events_full carries trace-level fields denormalised on the root span,
   // so we don't need a separate CTE for them — read them straight off o.
@@ -375,8 +373,7 @@ export async function getRelevantTraces(
         map() AS tool_definitions,
         [] AS tool_calls,
         [] AS tool_call_names,
-        o.metadata_names AS metadata_names,
-        o.metadata_values AS metadata_values,
+        to_json(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -391,15 +388,14 @@ export async function getRelevantTraces(
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.parent_span_id = ''
+        AND o.is_root = 1
         AND o.start_time >= {minTime: DateTime64(3)} - interval 4 hour
     ) ranked
     WHERE rn = 1
   `;
 
   type RawTraceRow = Omit<SpanRecord, "metadata"> & {
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   };
   const rows = await queryDoris<RawTraceRow>({
     query,
@@ -414,10 +410,11 @@ export async function getRelevantTraces(
     },
   });
   return rows.map((row) => {
-    const { metadata_names, metadata_values, ...rest } = row;
+    const { metadata, ...rest } = row;
     return {
       ...rest,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     };
   });
 }
@@ -679,7 +676,7 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
       eventInput,
       "",
     ); // Empty fileKey since we're not storing raw events
-    ingestionService.writeEventRecord(eventRecord);
+    await ingestionService.writeEventRecord(eventRecord);
   }
 
   logger.info(
@@ -921,7 +918,7 @@ async function processExperimentBackfill(
     // Build a map of trace_id -> {userId, sessionId} for efficient lookup
     const tracePropertiesMap = new Map<string, TraceProperties>();
     // OTel-only events_full: the trace's "root span" is the actual OTel root
-    // span (parent_span_id = ''), not a synthetic `t-<trace_id>` row. Build
+    // span (is_root = 1), not a synthetic `t-<trace_id>` row. Build
     // a trace_id -> rootSpanId lookup so DRIs that point at the trace (no
     // observation_id) can find the real root span by its actual span_id.
     const traceRootSpanIdMap = new Map<string, string>();

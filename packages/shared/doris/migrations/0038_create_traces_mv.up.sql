@@ -1,0 +1,29 @@
+-- RETIRED (2026-07-10): traces_mv is no longer created.
+--
+-- It was an async MTMV pre-aggregating events_full into one row per trace for
+-- the trace-list page (BUILD IMMEDIATE REFRESH AUTO EVERY 1 HOUR — i.e. a
+-- standing refresh job re-aggregating whole partitions). Superseded by the
+-- write-side tables, which are current on the live partition and carry no
+-- refresh job at all:
+--   * traces_scalar     (migration 0039) — root-pick scalars, one row/trace:
+--                        traces.all rows/count, compact byId, filter options.
+--   * trace_metrics_agg (migration 0040) — AGGREGATE-KEY per-span increments:
+--                        traces.metrics and metric-filtered/sorted lists
+--                        (agg JOIN scalar).
+--
+-- The remaining "MV-shaped" fallback queries in traces-ui-table-service
+-- target events_full directly (transparent-rewrite shapes), so they keep
+-- working — unaccelerated — without the MV. They are slated for removal
+-- together with the MV fast-path code.
+--
+-- This migration is a deliberate no-op so FRESH deployments never create the
+-- MV (and never run its hourly refresh). EXISTING deployments have 0038
+-- recorded in schema_migrations — editing this file does not touch them; drop
+-- the MV and its refresh job there manually:
+--
+--   DROP MATERIALIZED VIEW IF EXISTS traces_mv;
+--
+-- (Dropping an MTMV removes its scheduled refresh job. Verify with:
+--  SELECT * FROM jobs("type"="mv");)
+
+SELECT 1;

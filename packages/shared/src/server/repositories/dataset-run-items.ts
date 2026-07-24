@@ -454,6 +454,26 @@ const getDatasetRunsTableInternal = async <T>(
   `;
 
   const traceMetricsCte = `
+    trace_metrics_rollup AS (
+      -- Per-trace cost/latency in the trace_metrics_agg sync-MV rewrite shape
+      -- (migration 0040): aggregates are expression-identical to the MV and
+      -- the WHERE only references the project key, so Doris rewrites the scan
+      -- onto the rollup (one row per trace/day — cheap even project-wide).
+      -- Deliberately NO time/trace-membership subquery predicates here: they
+      -- would break the rewrite, and the join below discards non-run traces.
+      -- Metrics therefore cover ALL spans of a trace, not just spans inside
+      -- the old ±1-day run window — a superset only for traces with spans
+      -- outside it.
+      SELECT
+        project_id,
+        trace_id,
+        SUM(total_cost) AS total_cost,
+        MIN(start_time) AS min_start_time,
+        MAX(end_time) AS max_end_time
+      FROM events_full
+      WHERE project_id = {projectId: String}
+      GROUP BY project_id, trace_id
+    ),
     trace_metrics AS (
       SELECT
         dri.trace_id,
@@ -461,12 +481,11 @@ const getDatasetRunsTableInternal = async <T>(
         dri.dataset_id,
         dri.dataset_run_id,
         dri.dataset_item_id,
-        milliseconds_diff(max(of.end_time), min(of.start_time)) as latency_ms,
-        sum(of.total_cost) as total_cost
+        milliseconds_diff(tmr.max_end_time, tmr.min_start_time) as latency_ms,
+        tmr.total_cost as total_cost
       FROM dataset_run_items_deduped dri
-      JOIN observations_filtered of ON dri.trace_id = of.trace_id
-        AND dri.project_id = of.project_id
-      GROUP BY dri.trace_id, dri.project_id, dri.dataset_id, dri.dataset_run_id, dri.dataset_item_id
+      JOIN trace_metrics_rollup tmr ON dri.trace_id = tmr.trace_id
+        AND dri.project_id = tmr.project_id
     ),
   `;
 

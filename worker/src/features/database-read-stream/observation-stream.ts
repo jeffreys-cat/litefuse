@@ -213,7 +213,7 @@ export const getObservationStream = async (props: {
             ) AS rn
           FROM events_full
           WHERE project_id = {projectId: String}
-            AND parent_span_id = ''
+            AND is_root = 1
         ) ranked
         WHERE rn = 1
       )
@@ -246,8 +246,7 @@ export const getObservationStream = async (props: {
         o.model_id AS internal_model_id,
         o.input AS input,
         o.output AS output,
-        o.metadata_names AS metadata_names,
-        o.metadata_values AS metadata_values,
+        to_json(o.metadata) AS metadata,
         t.trace_name AS traceName,
         t.tags AS traceTags,
         t.trace_timestamp AS traceTimestamp,
@@ -261,9 +260,9 @@ export const getObservationStream = async (props: {
           ON s.trace_id = o.trace_id AND s.observation_id = o.span_id
       WHERE ${appliedObservationsFilter.query}
         -- observation rows only; the synthetic-trace-row filter from the
-        -- legacy schema is replaced by parent_span_id != '' (root span
+        -- legacy schema is replaced by is_root = 0 (root span
         -- carries no observation semantics).
-        AND o.parent_span_id != ''
+        AND o.is_root = 0
         ${search.query}
       ORDER BY o.start_time DESC
       LIMIT {rowLimit: Int64}

@@ -3,30 +3,49 @@
 --   * synthetic trace spans use span_id = 't-' || trace_id and parent_span_id = ''
 --   * observation spans use the SDK-provided id and may reference parent_observation_id
 --
--- Storage model: Unique Key + Merge-on-Write.
---   Cross-batch correctness is owned by IngestionService: full-row
---   pre-read + per-column merge before each Stream Load. Doris MoW
---   resolves any remaining conflicts by load order; that's enough given
---   the writer always sends the post-merge state. (V3 traces /
---   observation_source used the same pattern without a sequence_col
---   binding and were correct.)
+-- Storage model: Duplicate Key (append-only).
+--   The OTel write path is a stateless transform — each delivered span is
+--   loaded as one full row, no read-back or merge. Without MoW there is no
+--   key-level dedup: a re-delivered/replayed span lands as a second identical
+--   row. Accepted for this model: normal OTel delivery is once, and the
+--   duplicate-key sort columns below only define sort order / prefix seek.
+--   In exchange, synchronous (rollup) materialized views become available —
+--   trace_metrics_agg (migration 0040) is now a sync MV maintained
+--   atomically by every load instead of an ingestion dual-write.
 --
--- All non-key columns are nullable or have DEFAULT so that Stream Load with
--- `partial_update_new_key_behavior=APPEND` can insert new rows from arbitrary
--- partial event payloads.
+-- All non-key columns are nullable or have DEFAULT so that Stream Load can
+-- insert rows from arbitrary event payloads.
 
 CREATE TABLE if not exists events_full (
-    -- Key identifiers
+    -- Sort-key identifiers (must be the leading columns, in DUPLICATE KEY
+    -- order: project_id, trace_id, start_time, span_id).
+    -- start_time itself is the partition source — no derived date column. AUTO
+    -- PARTITION BY date_trunc(start_time,'day') lets the optimizer prune
+    -- partitions natively from ANY start_time predicate (plain ranges and even
+    -- DATE(start_time) = x forms — verified on 4.0.6), which eliminates the
+    -- whole class of "forgot the start_time_date mirror predicate →
+    -- full-partition scan" bugs. NOT NULL because auto partition rejects NULL
+    -- partition values (ingestion always supplies it). Values are UTC
+    -- wall-clock, so partitions are UTC days. Duplicate model: replays are NOT
+    -- folded — a re-exported span appends an identical row (see storage-model
+    -- note above).
     `project_id` varchar(64) NOT NULL,
-    `start_time_date` Date NOT NULL,
+    -- nullable to match the ingestion schema (trace_id is nullish); a key +
+    -- distribution column may be NULL in Doris. In practice OTel spans always
+    -- carry a trace_id, so co-location holds; rare NULLs share one bucket.
+    `trace_id` varchar(64),
+    `start_time` DateTime(3) NOT NULL,
     `span_id` varchar(64) NOT NULL,
 
     -- Span relationships
-    `trace_id` varchar(64),
     `parent_span_id` String,
+    -- Root-span flag, set at ingestion (1 when the span is the trace root, i.e.
+    -- parent_span_id = ''). Lets root-pick aggregates use any_value(IF(is_root=1,
+    -- …)) and root-only scans use WHERE is_root=1 — an integer/indexed predicate
+    -- instead of the empty-string `parent_span_id = ''` convention.
+    `is_root` TINYINT DEFAULT '0',
 
     -- Timestamps
-    `start_time` DateTime(3),
     `end_time` DateTime(3),
     `completion_start_time` DateTime(3),
 
@@ -64,6 +83,15 @@ CREATE TABLE if not exists events_full (
     `provided_cost_details` Map<String, Decimal(38, 12)>,
     `cost_details` Map<String, Decimal(38, 12)>,
     `total_cost` Decimal(38, 12),
+    -- Precomputed UI metrics, derived at ingestion from usage_details/cost_details
+    -- via reduceUsageOrCostDetails (input/output = sum of input_*/output_* keys,
+    -- incl. cache; total = the 'total' key). Read directly by the UI / aggregated
+    -- with SUM(...) by trace, replacing query-time explode_map + array_filter.
+    `input_tokens_calculated` BIGINT,
+    `output_tokens_calculated` BIGINT,
+    `total_tokens_calculated` BIGINT,
+    `input_cost_calculated` Decimal(38, 12),
+    `output_cost_calculated` Decimal(38, 12),
     `usage_pricing_tier_id` String,
     `usage_pricing_tier_name` String,
 
@@ -75,12 +103,26 @@ CREATE TABLE if not exists events_full (
     -- I/O (Variant: stores arbitrary JSON; queries can use variant_col['path']).
     `input` Variant,
     `output` Variant,
+    -- Precomputed compact preview of input/output for list tables (the same
+    -- parseIO(.., "compact") the UI applies — ChatML last-message extraction —
+    -- truncated to 200 chars at ingestion). Lets list queries show a preview
+    -- without lazy-loading / parsing the full Variant per row. Full I/O stays in
+    -- input/output above for the detail view.
+    `input_trim` String,
+    `output_trim` String,
 
     -- Flattened metadata (parallel arrays, matches main V4 events_full).
     -- Cross-batch deep-merge happens in IngestionService.mergeFlatMetadata
     -- on top of the full-row pre-read (set-union by key, new wins on conflict).
     `metadata_names` ARRAY<String>,
     `metadata_values` ARRAY<String>,
+    -- Map mirror of the parallel arrays, built at ingestion. Used for (a) trace
+    -- list metadata filtering via native map access `metadata['key'] <op> value`
+    -- (the per-key value operators =, contains, starts/ends with only work on a
+    -- map, not on the flat arrays), and (b) the trace-list MV's single
+    -- rewrite-friendly metadata column MAX(IF(parent_span_id='', CAST(metadata AS
+    -- STRING), NULL)). Arrays above stay for byId detail / existing readers.
+    `metadata` Map<String, String>,
 
     -- Experiment fields (populated by an async backfill job from dataset_run_items_rmt)
     `experiment_id` String,
@@ -118,6 +160,7 @@ CREATE TABLE if not exists events_full (
     INDEX idx_span_id (`span_id`) USING INVERTED COMMENT 'inverted index for span_id',
     INDEX idx_trace_id (`trace_id`) USING INVERTED COMMENT 'inverted index for trace_id',
     INDEX idx_parent_span_id (`parent_span_id`) USING INVERTED COMMENT 'inverted index for parent_span_id',
+    INDEX idx_is_root (`is_root`) USING INVERTED COMMENT 'inverted index for is_root (root-span flag, WHERE is_root=1)',
     INDEX idx_project_id (`project_id`) USING INVERTED COMMENT 'inverted index for project_id',
     INDEX idx_user_id (`user_id`) USING INVERTED COMMENT 'inverted index for user_id',
     INDEX idx_session_id (`session_id`) USING INVERTED COMMENT 'inverted index for session_id',
@@ -143,10 +186,13 @@ CREATE TABLE if not exists events_full (
     INDEX idx_input (`input`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for input content search',
     INDEX idx_output (`output`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for output content search'
 ) ENGINE=OLAP
-UNIQUE KEY(`project_id`, `start_time_date`, `span_id`)
-AUTO PARTITION BY RANGE (date_trunc(`start_time_date`, 'day')) ()
-DISTRIBUTED BY HASH(`project_id`) BUCKETS 8
+-- Key leads with project_id (every query filters it → tenant locality / prefix seek).
+-- trace_id is keyed + hashed so a trace's spans co-locate in one bucket (fast trace
+-- detail) and a project's data spreads across buckets (scan parallelism), unlike the
+-- old HASH(project_id) which put a whole project in one bucket.
+DUPLICATE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
+AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS 90
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1",
-    "enable_unique_key_merge_on_write" = "true"
+    "replication_allocation" = "tag.location.default: 1"
 );

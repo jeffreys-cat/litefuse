@@ -6,8 +6,10 @@ import {
   ObservationLevel,
   PrismaClient,
   Prompt,
+  parseIO,
 } from "@langfuse/shared";
 import { env } from "../../env";
+import { truncateWellFormed } from "./truncateWellFormed";
 import {
   convertObservationReadToInsert,
   convertScoreReadToInsert,
@@ -39,9 +41,11 @@ import {
   UsageCostType,
   findModel,
   matchPricingTier,
+  reduceUsageOrCostDetails,
   validateAndInflateScore,
   DatasetRunItemRecordInsertType,
   EventRecordInsertType,
+  TraceScalarRecordInsertType,
   traceException,
   flattenJsonToPathArrays,
   getDatasetItemById,
@@ -198,6 +202,44 @@ const immutableEntityKeys: {
   ],
 };
 
+/**
+ * Root span → traces_scalar row (flat trace-list fast path, migration 0039),
+ * or null for non-root / trace-less records. Field semantics aligned with
+ * the list expectations: name is the explicit trace_name (no span-name
+ * fallback, per design) and empty-string scalars become NULL. Shared by the
+ * legacy per-file write path (writeEventRecord) and the exactly-once group
+ * job's self-contained scalar load.
+ */
+export const toTraceScalarRecord = (
+  eventRecord: EventRecordInsertType,
+): TraceScalarRecordInsertType | null => {
+  if (eventRecord.is_root !== 1 || !eventRecord.trace_id) return null;
+  return {
+    project_id: eventRecord.project_id,
+    id: eventRecord.trace_id,
+    start_time: eventRecord.start_time,
+    end_time: eventRecord.end_time ?? null,
+    name: eventRecord.trace_name || null,
+    user_id: eventRecord.user_id || null,
+    session_id: eventRecord.session_id || null,
+    release: eventRecord.release || null,
+    version: eventRecord.version || null,
+    environment: eventRecord.environment ?? "default",
+    bookmarked: eventRecord.bookmarked ?? false,
+    public: eventRecord.public ?? false,
+    tags: eventRecord.tags ?? [],
+    metadata: eventRecord.metadata ?? {},
+    // Precomputed compact previews + audit timestamps: let the
+    // verbosity="compact" byId point read be served entirely from
+    // traces_scalar (convertDorisToDomain needs created_at/updated_at).
+    input_trim: eventRecord.input_trim ?? null,
+    output_trim: eventRecord.output_trim ?? null,
+    created_at: eventRecord.created_at,
+    updated_at: eventRecord.updated_at,
+    event_ts: eventRecord.event_ts,
+  };
+};
+
 export class IngestionService {
   private promptService: PromptService;
 
@@ -314,9 +356,9 @@ export class IngestionService {
     ]);
 
     // Doris DateTime(3) is millisecond-precision; the upstream langfuse-main
-    // uses microseconds for ClickHouse DateTime64(6). Use ms here so
-    // start_time_date partition derivation and the column values match
-    // events_full's DateTime(3) shape (otherwise dates land in year 58000+).
+    // uses microseconds for ClickHouse DateTime64(6). Use ms here so the
+    // column values match events_full's DateTime(3) shape (otherwise dates
+    // land in year 58000+). events_full partitions directly on start_time.
     const now = this.getMillisecondTimestamp();
 
     // Flatten raw metadata first (before stringification destroys nested structure)
@@ -327,8 +369,43 @@ export class IngestionService {
     // Defensive: coerce null/undefined to empty string for Array(String) Doris column.
     // Should not be required as convertValueToPlainJavascript() never returns null.
     const metadataValues = flattened.values.map((v) => v ?? "");
+    // Map mirror of the parallel arrays (see events_full migration 0037): drives
+    // native map-access metadata filtering and the trace-list MV's metadata
+    // column. formatDataForDoris/normalizeMetadataForDoris handle the Map column.
+    const metadataMap: Record<string, string> = {};
+    metadataNames.forEach((n, i) => {
+      metadataMap[n] = metadataValues[i] ?? "";
+    });
 
     const resolvedInput: string | null | undefined = eventData.input;
+
+    // Precomputed compact preview of input/output for list tables. Uses the same
+    // parseIO(.., "compact") the UI applies (ChatML last-message extraction, raw
+    // fallback) then truncates to 200 chars. Truncated JSON renders fine — the UI's
+    // deepParseJson falls back to showing the raw string on parse failure.
+    // truncateWellFormed (not a bare slice): a slice that splits a surrogate
+    // pair at the limit leaves a lone surrogate that Doris's simdjson rejects,
+    // poisoning the whole batch (see truncateWellFormed.ts).
+    const trimPreview = (io: string | null | undefined): string | null => {
+      if (io == null) return null;
+      const compact = parseIO(io, "compact");
+      const s = typeof compact === "string" ? compact : io;
+      return truncateWellFormed(s, 200);
+    };
+    const input_trim = trimPreview(resolvedInput);
+    const output_trim = trimPreview(eventData.output);
+
+    // Final usage/cost maps (after model-pricing computation, with provided/event
+    // fallbacks). Reduce them once into the precomputed UI scalars so reads can
+    // SUM(input_tokens_calculated) etc. instead of explode_map + array_filter over
+    // the maps at query time. reduceUsageOrCostDetails matches the UI semantics:
+    // input/output = sum of input_*/output_* keys (incl. cache), total = ['total'].
+    const usageDetailsForRow =
+      generationUsage?.usage_details ?? eventData.usageDetails ?? {};
+    const costDetailsForRow =
+      generationUsage?.cost_details ?? eventData.costDetails ?? {};
+    const reducedUsage = reduceUsageOrCostDetails(usageDetailsForRow);
+    const reducedCost = reduceUsageOrCostDetails(costDetailsForRow);
 
     const eventRecord: EventRecordInsertType = {
       // Required identifiers
@@ -345,6 +422,10 @@ export class IngestionService {
       // wire-level invariant holds — same shape upstream langfuse-main
       // uses against ClickHouse's non-nullable String column.
       parent_span_id: eventData.parentSpanId ?? "",
+      // Root-span flag (1 when this is the trace root). Precomputed at ingestion
+      // so read queries can use is_root=1 / any_value(IF(is_root=1, …)) instead of
+      // the empty-string parent_span_id convention. See migration 0037.
+      is_root: (eventData.parentSpanId ?? "") === "" ? 1 : 0,
 
       // Core properties with defaults
       name: eventData.name ?? "",
@@ -394,16 +475,21 @@ export class IngestionService {
 
       // Usage & Cost
       provided_usage_details: eventData.providedUsageDetails ?? {},
-      usage_details:
-        generationUsage?.usage_details ?? eventData.usageDetails ?? {},
+      usage_details: usageDetailsForRow,
       provided_cost_details: eventData.providedCostDetails ?? {},
-      cost_details:
-        generationUsage?.cost_details ?? eventData.costDetails ?? {},
+      cost_details: costDetailsForRow,
       // total_cost (denormalised from cost_details) is what dashboards
       // sum() in Doris — without this, events_full.total_cost stays 0
       // even though cost_details has the per-key breakdown, and the
       // Home/Model-Usage cost widgets show $0.
       total_cost: generationUsage?.total_cost ?? null,
+      // Precomputed UI metrics (see migration 0037). Trace-type spans carry empty
+      // usage/cost maps, so these stay null for them and SUM() ignores them.
+      input_tokens_calculated: reducedUsage.input ?? null,
+      output_tokens_calculated: reducedUsage.output ?? null,
+      total_tokens_calculated: reducedUsage.total ?? null,
+      input_cost_calculated: reducedCost.input ?? null,
+      output_cost_calculated: reducedCost.output ?? null,
 
       usage_pricing_tier_id: generationUsage?.usage_pricing_tier_id,
       usage_pricing_tier_name: generationUsage?.usage_pricing_tier_name,
@@ -415,6 +501,8 @@ export class IngestionService {
 
       input: resolvedInput,
       output: eventData.output,
+      input_trim,
+      output_trim,
 
       // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
       // shape was a transitional fork artifact; events_full uses just the two
@@ -422,6 +510,7 @@ export class IngestionService {
       // happen here (OTel-only ingestion has no create/update split).
       metadata_names: metadataNames,
       metadata_values: metadataValues,
+      metadata: metadataMap,
 
       // Source/instrumentation metadata
       source: eventData.source,
@@ -474,14 +563,18 @@ export class IngestionService {
    *
    * @param eventRecord - The event record to write
    */
-  public writeEventRecord(eventRecord: EventRecordInsertType): void {
+  public async writeEventRecord(
+    eventRecord: EventRecordInsertType,
+  ): Promise<void> {
     if (!this.dorisWriter) {
       logger.debug(
         "writeEventRecord called but DorisWriter is not initialized, skipping",
       );
       return;
     }
-    this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
+    // await so DorisWriter backpressure (buffer-full) propagates up to the
+    // ingestion job and throttles intake instead of growing worker memory.
+    await this.dorisWriter.addToQueue(TableName.EventsFull, eventRecord);
     logger.debug(
       `[writeEventRecord] queued events_full row for span ${eventRecord.span_id} (trace ${eventRecord.trace_id})`,
     );
@@ -490,6 +583,24 @@ export class IngestionService {
       backend: "doris",
       target: "events_full",
     });
+
+    // Dual-write the root span's scalar fields as the trace's one row in
+    // traces_scalar (flat trace-list fast path, migration 0039). Every merged
+    // re-write of the root row lands here too, so MoW keeps the scalar row
+    // current.
+    const scalarRecord = toTraceScalarRecord(eventRecord);
+    if (scalarRecord) {
+      await this.dorisWriter.addToQueue(TableName.TracesScalar, scalarRecord);
+      recordIncrement("langfuse.ingestion.write", 1, {
+        object: "event",
+        backend: "doris",
+        target: "traces_scalar",
+      });
+    }
+
+    // trace_metrics_agg is a synchronous materialized view on events_full
+    // (migration 0040): every events_full load maintains it atomically, so
+    // there is no metric dual-write anymore.
   }
 
   private async processDatasetRunItemEventList(params: {
@@ -589,7 +700,7 @@ export class IngestionService {
       );
       const writer = DorisWriter.getInstance();
       for (const record of finalDatasetRunItemRecords) {
-        writer.addToQueue(TableName.DatasetRunItems, record);
+        await writer.addToQueue(TableName.DatasetRunItems, record);
       }
     }
   }
@@ -696,7 +807,7 @@ export class IngestionService {
 
     // Write to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
+      await this.dorisWriter.addToQueue(TableName.Scores, finalScoreRecord);
     }
   }
 
@@ -779,7 +890,7 @@ export class IngestionService {
 
     // Write to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
+      await this.dorisWriter.addToQueue(TableName.Traces, finalTraceRecord);
       logger.debug(
         `Added trace ${entityId} to Doris queue for project ${projectId}`,
       );
@@ -991,14 +1102,14 @@ export class IngestionService {
 
       // Write wrapper trace to Doris backend
       if (this.dorisWriter) {
-        this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
+        await this.dorisWriter.addToQueue(TableName.Traces, wrapperTraceRecord);
       }
       finalObservationRecord.trace_id = finalObservationRecord.id;
     }
 
     // Write observation to Doris backend
     if (this.dorisWriter) {
-      this.dorisWriter.addToQueue(
+      await this.dorisWriter.addToQueue(
         TableName.Observations,
         finalObservationRecord,
       );

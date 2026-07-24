@@ -107,7 +107,7 @@ services:
   # image) — the split topology with static IPs + disable_backend_black_list
   # is the configuration that reliably starts and stays healthy.
   doris_fe:
-    image: apache/doris:fe-4.0.4
+    image: apache/doris:fe-4.0.6
     hostname: doris_fe
     container_name: litefuse-doris-fe
     restart: unless-stopped
@@ -125,14 +125,18 @@ services:
       - doris_fe_meta:/opt/apache-doris/fe/doris-meta
       - ./doris-config/fe_custom.conf:/opt/apache-doris/fe/conf/fe_custom.conf:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8030/api/bootstrap 2>/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://127.0.0.1:8030/api/bootstrap 2>/dev/null || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 120s
 
   doris_be:
-    image: apache/doris:be-4.0.4
+    image: apache/doris:be-4.0.6
     hostname: doris_be
     container_name: litefuse-doris-be
     restart: unless-stopped
@@ -153,7 +157,11 @@ services:
     volumes:
       - doris_be_storage:/opt/apache-doris/be/storage
     healthcheck:
-      test: ["CMD-SHELL", "mysql -h 172.29.0.2 -P 9030 -uroot -e 'SHOW BACKENDS\\G' | grep -A 20 'Host: 172.29.0.3' | grep -q 'Alive: true'"]
+      test:
+        [
+          "CMD-SHELL",
+          "mysql -h 172.29.0.2 -P 9030 -uroot -e 'SHOW BACKENDS\\G' | grep -A 20 'Host: 172.29.0.3' | grep -q 'Alive: true'",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

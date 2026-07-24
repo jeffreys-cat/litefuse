@@ -8,7 +8,6 @@ import {
   dq,
   convertDorisTracesListToDomain,
   orderByToDorisSQL,
-  zipDorisMetadataArrays,
   type DateTimeFilter,
 } from "@langfuse/shared/src/server";
 import {
@@ -134,8 +133,7 @@ export const generateTracesForPublicApi = async ({
         t.input as input,
         t.output as output,
         t.session_id as session_id,
-        t.metadata_names as metadata_names,
-        t.metadata_values as metadata_values,
+        to_json(t.metadata) as metadata,
         t.user_id as user_id,
         t.${dq("release")} as ${dq("release")},
         t.version as version,
@@ -152,7 +150,7 @@ export const generateTracesForPublicApi = async ({
       LEFT JOIN observation_stats o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
       LEFT JOIN score_stats s ON t.trace_id = s.trace_id AND t.project_id = s.project_id
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
       ${dorisOrderBy}
       ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
@@ -160,8 +158,7 @@ export const generateTracesForPublicApi = async ({
 
   const rawResult = await queryDoris<
     Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names: unknown;
-      metadata_values: unknown;
+      metadata: unknown;
       observations: string[];
       scores: string[];
       totalCost: number;
@@ -187,9 +184,10 @@ export const generateTracesForPublicApi = async ({
   });
 
   const result = rawResult.map(
-    ({ metadata_names, metadata_values, ...trace }) => ({
+    ({ metadata, ...trace }) => ({
       ...trace,
-      metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
     }),
   );
 
@@ -233,7 +231,7 @@ export const getTracesCountForPublicApi = async ({
       SELECT count(*) as count
       FROM events_full t
       WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      AND t.is_root = 1
       ${dorisFilter.length() > 0 ? `AND ${appliedDorisFilter.query}` : ""}
     `;
 

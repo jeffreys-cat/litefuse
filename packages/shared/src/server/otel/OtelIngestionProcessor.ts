@@ -9,6 +9,7 @@ import {
   type TraceEventType,
   type IngestionEventType,
   redis,
+  getUnprefixedRedis,
   logger,
   instrumentAsync,
   recordIncrement,
@@ -27,6 +28,7 @@ import { LangfuseOtelSpanAttributes } from "./attributes";
 import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
 import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
+import { registerOtelFile } from "../redis/otelPendingGroups";
 import { isValidDateString, flattenJsonToPathArrays } from "./utils";
 
 // Type definitions for internal processor state
@@ -177,18 +179,73 @@ export class OtelIngestionProcessor {
   }
 
   /**
-   * Uploads a batch of resourceSpans to blob storage and adds a job to process them
-   * into the otel-ingestion-queue.
+   * Persists a batch of resourceSpans to blob storage, then hands it to the
+   * ingestion pipeline. Two modes (exactly-once design §3.1):
+   *
+   *   - LITEFUSE_OTEL_GROUPING_ENABLED=false (legacy): one BullMQ job per
+   *     file, enqueued directly.
+   *   - =true: idempotent registration into a per-shard pending list — the
+   *     worker-side grouper packs registered files into group jobs. The
+   *     registration Lua admits a fileKey at most once per TTL window, so a
+   *     client-level command resend cannot double-register. Any failure
+   *     throws → the route answers 5xx → the SDK re-sends (declared EO
+   *     boundary; a re-send is a NEW fileKey).
+   *
+   * The S3 upload always happens first — data durability precedes every
+   * pointer, in both modes.
    */
   async publishToOtelIngestionQueue(resourceSpans: ResourceSpan[]) {
     const fileKey = `${env.LITEFUSE_S3_EVENT_UPLOAD_PREFIX}otel/${this.projectId}/${this.getCurrentTimePath()}/${randomUUID()}.json`;
 
-    // Upload to S3
+    // Serialize exactly once: the same string is uploaded AND (grouping mode)
+    // byte-measured for the registration entry.
+    const body = JSON.stringify(resourceSpans);
     await getS3EventStorageClient(
       env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
-    ).uploadJson(fileKey, resourceSpans as Record<string, unknown>[]);
+    ).uploadJsonString(fileKey, body);
 
-    // Add queue job
+    if (env.LITEFUSE_OTEL_GROUPING_ENABLED === "true") {
+      // Pipeline keys are FULL key strings (otelPendingGroups shard tag) —
+      // they must be written through a connection WITHOUT the ioredis
+      // keyPrefix that the shared singleton carries, or the grouper (which
+      // reads prefix-free) would never see them.
+      const groupingRedis = getUnprefixedRedis();
+      if (!groupingRedis) {
+        throw new Error(
+          "Redis not available — cannot register otel file for grouping",
+        );
+      }
+      // Random shard spread, deliberately independent of REDIS_CLUSTER_ENABLED
+      // (the legacy job path only spreads in cluster mode; the pending lists
+      // must spread wherever more than one shard is configured).
+      const shardNames = OtelIngestionQueue.getShardNames();
+      const shard =
+        shardNames[Math.floor(Math.random() * shardNames.length)] as string;
+      await registerOtelFile({
+        redis: groupingRedis,
+        shard,
+        ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
+        entry: {
+          v: 1,
+          fileKey,
+          size: Buffer.byteLength(body, "utf8"),
+          spanCount: this.getTotalSpanCount(resourceSpans),
+          ts: Date.now(),
+          projectId: this.projectId,
+          publicKey: this.publicKey,
+          orgId: this.orgId,
+          sdkName: this.sdkName,
+          sdkVersion: this.sdkVersion,
+          ingestionVersion: this.ingestionVersion,
+          propagatedHeaders: this.propagatedHeaders,
+        },
+      });
+      // true (newly registered) and false (already registered inside the TTL
+      // window) are BOTH success for the caller — that's the idempotency.
+      return;
+    }
+
+    // Legacy path: one BullMQ job per file.
     const queue = OtelIngestionQueue.getInstance({});
     return queue
       ? queue.add(QueueJobs.OtelIngestionJob, {
@@ -2132,9 +2189,21 @@ export class OtelIngestionProcessor {
       key.startsWith("openclaw.tokens."),
     );
     if (openclawTokenKeys.length > 0) {
+      // Normalize the raw Anthropic cache key names openclaw emits to the
+      // `input_*` vocabulary used by the rest of the processor (matches the
+      // pydantic-ai branch above). Without this, cache keys keep a `cache_`
+      // prefix, so reduceUsageOrCostDetails (startsWith "input", used for the
+      // cell / promptTokens) and BreakdownTooltip (includes "input") disagree on
+      // whether cache counts as input — the cell and the hover show different
+      // input totals for the same row.
+      const openclawKeyMapping: Record<string, string> = {
+        cache_read_input_tokens: "input_cache_read",
+        cache_creation_input_tokens: "input_cache_creation",
+      };
       const result: Record<string, number> = {};
       for (const key of openclawTokenKeys) {
         const shortKey = key.replace("openclaw.tokens.", "");
+        const mappedKey = openclawKeyMapping[shortKey] ?? shortKey;
         const val = attributes[key];
         const num =
           typeof val === "number"
@@ -2143,40 +2212,133 @@ export class OtelIngestionProcessor {
               ? (val as any).low
               : Number(val);
         if (!Number.isNaN(num)) {
-          result[shortKey] = num;
+          result[mappedKey] = num;
         }
       }
       if (Object.keys(result).length > 0) return result;
     }
 
+    // Generic gen_ai.usage.* / llm.token_count.* path. Ported verbatim from
+    // upstream langfuse-main: it recognizes the many cache-token spellings and
+    // normalizes them to the input_* vocabulary (and subtracts cache from base
+    // input), so cache counts as input consistently for ANY standard gen_ai
+    // sender — the fork previously stored cache keys (cache_read_input_tokens)
+    // verbatim here, which made the cell (startsWith input) and the breakdown
+    // tooltip (includes input) disagree for those sources.
+    return this.extractGenericGenAiUsageDetails(attributes);
+  }
+
+  private extractGenericGenAiUsageDetails(
+    attributes: Record<string, unknown>,
+  ): Record<string, number> {
     const usageDetails = Object.keys(attributes).filter(
       (key) =>
         (key.startsWith("gen_ai.usage.") && key !== "gen_ai.usage.cost") ||
-        key.startsWith("llm.token_count"),
+        key.startsWith("llm.token_count."),
     );
 
-    const usageDetailKeyMapping: Record<string, string> = {
-      prompt_tokens: "input",
-      completion_tokens: "output",
-      total_tokens: "total",
-      input_tokens: "input",
-      output_tokens: "output",
-      prompt: "input",
-      completion: "output",
-    };
+    if (usageDetails.length === 0) return {};
 
-    return usageDetails.reduce((acc: any, key) => {
-      const usageDetailKey = key
-        .replace("gen_ai.usage.", "")
-        .replace("llm.token_count.", "");
-      const mappedUsageDetailKey =
-        usageDetailKeyMapping[usageDetailKey] ?? usageDetailKey;
-      const value = Number(attributes[key]);
-      if (!Number.isNaN(value)) {
-        acc[mappedUsageDetailKey] = value;
-      }
-      return acc;
-    }, {});
+    const rawUsageDetails = usageDetails.reduce(
+      (acc: Record<string, number>, key) => {
+        const usageDetailKey = key
+          .replace("gen_ai.usage.", "")
+          .replace("llm.token_count.", "");
+        const value = Number(attributes[key]);
+
+        if (!Number.isNaN(value)) {
+          acc[usageDetailKey] = value;
+        }
+
+        return acc;
+      },
+      {},
+    );
+
+    const inputTokens =
+      rawUsageDetails["prompt_tokens"] ??
+      rawUsageDetails["input_tokens"] ??
+      rawUsageDetails["prompt"];
+    const outputTokens =
+      rawUsageDetails["completion_tokens"] ??
+      rawUsageDetails["output_tokens"] ??
+      rawUsageDetails["completion"];
+    const totalTokens =
+      rawUsageDetails["total_tokens"] ?? rawUsageDetails["total"];
+    const cacheReadTokens =
+      rawUsageDetails["cache_read.input_tokens"] ??
+      rawUsageDetails["cache_read_tokens"] ??
+      rawUsageDetails["details.cache_read_tokens"] ??
+      rawUsageDetails["details.cache_read_input_tokens"] ??
+      rawUsageDetails["prompt_details.cache_read"];
+    const cacheCreationTokens =
+      rawUsageDetails["cache_creation.input_tokens"] ??
+      rawUsageDetails["cache_write_tokens"] ??
+      rawUsageDetails["details.cache_write_tokens"] ??
+      rawUsageDetails["details.cache_creation_input_tokens"] ??
+      rawUsageDetails["prompt_details.cache_write"];
+
+    const normalizedUsageDetails = Object.entries(rawUsageDetails).reduce(
+      (acc: Record<string, number>, [key, value]) => {
+        if (
+          [
+            "prompt_tokens",
+            "input_tokens",
+            "prompt",
+            "completion_tokens",
+            "output_tokens",
+            "completion",
+            "total_tokens",
+            "total",
+            "cache_read.input_tokens",
+            "cache_read_tokens",
+            "details.cache_read_tokens",
+            "details.cache_read_input_tokens",
+            "prompt_details.cache_read",
+            "cache_creation.input_tokens",
+            "cache_write_tokens",
+            "details.cache_write_tokens",
+            "details.cache_creation_input_tokens",
+            "prompt_details.cache_write",
+          ].includes(key)
+        ) {
+          return acc;
+        }
+
+        const normalizedKey = key.startsWith("details.")
+          ? key.replace("details.", "")
+          : key;
+
+        acc[normalizedKey] = value;
+        return acc;
+      },
+      {},
+    );
+
+    if (inputTokens !== undefined) {
+      normalizedUsageDetails.input = Math.max(
+        inputTokens - (cacheReadTokens ?? 0) - (cacheCreationTokens ?? 0),
+        0,
+      );
+    }
+
+    if (outputTokens !== undefined) {
+      normalizedUsageDetails.output = outputTokens;
+    }
+
+    if (totalTokens !== undefined) {
+      normalizedUsageDetails.total = totalTokens;
+    }
+
+    if (cacheReadTokens !== undefined) {
+      normalizedUsageDetails.input_cached_tokens = cacheReadTokens;
+    }
+
+    if (cacheCreationTokens !== undefined) {
+      normalizedUsageDetails.input_cache_creation = cacheCreationTokens;
+    }
+
+    return normalizedUsageDetails;
   }
 
   private extractCostDetails(
@@ -2212,9 +2374,17 @@ export class OtelIngestionProcessor {
       if (isValidDateString(value)) return value;
 
       // Older SDKs have double stringified timestamps that need JSON parsing
-      // "\"2025-10-01T08:45:26.112648Z\""
-      const parsed = JSON.parse(value);
-      if (isValidDateString(parsed)) return parsed;
+      // "\"2025-10-01T08:45:26.112648Z\"". Only a non-empty string can decode
+      // to something new — guard the parse. Without this, the common case
+      // (most spans have no completion_start_time, so value is undefined)
+      // makes JSON.parse(undefined) throw a SyntaxError on EVERY span; the
+      // throw/catch dominates this hot path (~14% of worker CPU in profiling).
+      // The guarded result is identical: absent/non-string values fall through
+      // to null exactly as the throw path did.
+      if (typeof value === "string" && value.length > 0) {
+        const parsed = JSON.parse(value);
+        if (isValidDateString(parsed)) return parsed;
+      }
     } catch {
       // Fallthrough
     }

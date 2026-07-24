@@ -68,11 +68,20 @@ const EnvSchema = z.object({
   DORIS_USER: z.string().optional(),
   DORIS_PASSWORD: z.string().default(""),
   DORIS_MAX_OPEN_CONNECTIONS: z.coerce.number().int().default(25),
-  DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(30000),
-  LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce
-    .number()
-    .positive()
-    .default(1000),
+  // HTTP client timeout. NOTE: axios' timeout is a SOCKET-IDLE timeout, not a
+  // total-duration cap — it only fires after this many ms with no bytes on the
+  // wire (verified empirically against axios 1.12.2). For Stream Load the body
+  // upload keeps the socket active; the idle stretch is the BE's quiet
+  // write/commit phase (~WriteDataTimeMs - ReceiveDataTimeMs +
+  // CommitAndPublishTimeMs), observed at 12-17s per load on a healthy bench —
+  // 60s gives ~4x headroom so loads aren't client-aborted (and then retried
+  // against an already-committing txn) when the BE is under compaction/publish
+  // pressure. We tell Doris `timeout: 600` per load; the BE owns the hard cap.
+  DORIS_REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
+  // Max write attempts per row before dropping. 0 (or negative) = retry forever
+  // (never drop) — the default. This is the single retry authority (DorisWriter
+  // re-queues failed rows; the Doris client itself does a single attempt).
+  LITEFUSE_INGESTION_DORIS_MAX_ATTEMPTS: z.coerce.number().int().default(0),
   LITEFUSE_INGESTION_DORIS_HTTP_MAX_SOCKETS: z.coerce
     .number()
     .positive()
@@ -101,6 +110,21 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(1),
+  // Exactly-once otel pipeline (docs/ingestion-exactly-once-design.md).
+  // GROUPING_ENABLED controls ONLY whether web registers files into the
+  // per-shard pending list (grouper picks them up) instead of enqueuing one
+  // BullMQ job per file. The worker-side grouper runs whenever the otel queue
+  // consumer is enabled — independent of this flag — so flipping it needs no
+  // worker restart and rollback drains the pending backlog.
+  LITEFUSE_OTEL_GROUPING_ENABLED: z.enum(["true", "false"]).default("false"),
+  // Idempotent-registration window: a fileKey is admitted into the pending
+  // list at most once per TTL. MUST be >= the full retry window (BullMQ
+  // attempts + DLQ redrives), i.e. >= FE label_keep_max_second — the
+  // reconciliation tool force-deletes the key when it must re-admit a file.
+  LITEFUSE_OTEL_REGISTERED_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(4 * 24 * 60 * 60 * 1000),
   LITEFUSE_TRACE_UPSERT_QUEUE_SHARD_COUNT: z.coerce
     .number()
     .positive()
@@ -308,11 +332,6 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
   LITEFUSE_DATASET_SERVICE_READ_FROM_VERSIONED_IMPLEMENTATION: z
-    .enum(["true", "false"])
-    .default("true"),
-
-  // Legacy events table (transitional deployment)
-  LITEFUSE_LEGACY_EVENTS_TABLE_EXISTS: z
     .enum(["true", "false"])
     .default("true"),
 

@@ -14,6 +14,7 @@ import {
   recordIncrement,
   redis,
   TQueueJobTypes,
+  type OtelGroupIngestionEventType,
   traceException,
   compareVersions,
   ResourceSpan,
@@ -32,6 +33,13 @@ import {
   scheduleObservationEvals,
   createObservationEvalSchedulerDeps,
 } from "../features/evaluation/observationEval";
+import {
+  buildGroupJobDeps,
+  buildTransformFile,
+  processOtelGroupJob,
+  wrapGroupJobError,
+  isDeterministicIngestError,
+} from "./otelGroupJobProcessor";
 
 /**
  * Check if HTTP headers from the SDK request indicate the batch is eligible
@@ -197,14 +205,117 @@ export function checkSdkVersionRequirements(
   }
 }
 
+const isGroupPayload = (
+  p: TQueueJobTypes[QueueName.OtelIngestionQueue]["payload"],
+): p is OtelGroupIngestionEventType => "shape" in p;
+
+/**
+ * Self-contained group job wiring (exactly-once design §3.3): builds the real
+ * deps (S3, Doris client with the load semaphore, PG sessions, eval
+ * scheduling, SDK direct-write gating) and runs the core processor. Any
+ * failure fails the WHOLE job — BullMQ replay is the only retry layer; the
+ * events_full label and the traces_scalar MoW keys make every replay
+ * idempotent.
+ */
+const processGroupShapedJob = async (
+  payload: OtelGroupIngestionEventType,
+): Promise<void> => {
+  if (!redis) throw new Error("Redis not available");
+  if (!prisma) throw new Error("Prisma not available");
+  const ingestionService = new IngestionService(
+    redis,
+    prisma,
+    DorisWriter.getInstance(),
+    dorisClient(),
+  );
+
+  // Per-project eval configs, fetched once per group (a group can span
+  // projects). Fetch failures degrade to "no evals" — parity with the legacy
+  // path's catch — never fail the data path.
+  const evalConfigCache = new Map<
+    string,
+    Awaited<ReturnType<typeof fetchObservationEvalConfigs>>
+  >();
+  const getEvalConfigs = async (projectId: string) => {
+    if (!evalConfigCache.has(projectId)) {
+      evalConfigCache.set(
+        projectId,
+        await fetchObservationEvalConfigs(projectId).catch((error) => {
+          traceException(error);
+          logger.warn(
+            `Failed to fetch observation eval configs for project ${projectId}`,
+            error,
+          );
+          return [];
+        }),
+      );
+    }
+    return evalConfigCache.get(projectId)!;
+  };
+
+  const deps = buildGroupJobDeps({
+    transformFile: buildTransformFile({
+      createEventRecord: (input, fileKey) =>
+        ingestionService.createEventRecord(input as never, fileKey),
+    }),
+  });
+
+  // Best-effort eval scheduling over the transformed records (side-effect
+  // boundary: replays may re-schedule; never fails the data path).
+  deps.scheduleEvals = async (files) => {
+    let schedulerDeps: ReturnType<
+      typeof createObservationEvalSchedulerDeps
+    > | null = null;
+    for (const file of files) {
+      const configs = await getEvalConfigs(file.entry.projectId);
+      if (configs.length === 0) continue;
+      schedulerDeps = schedulerDeps ?? createObservationEvalSchedulerDeps();
+      for (const record of file.eventRecords) {
+        try {
+          const observation = convertEventRecordToObservationForEval(record);
+          await scheduleObservationEvals({
+            observation,
+            configs,
+            schedulerDeps,
+          });
+        } catch (error) {
+          traceException(error);
+          logger.error(
+            `Failed to schedule observation evals for project ${file.entry.projectId} and span ${record.span_id}`,
+            error,
+          );
+        }
+      }
+    }
+  };
+
+  try {
+    await processOtelGroupJob(payload, deps);
+  } catch (e) {
+    logger.error(
+      `Failed otel group job ${payload.groupId} (${payload.entries.length} files)`,
+      e,
+    );
+    throw wrapGroupJobError(payload.groupId, e);
+  }
+};
+
 export const otelIngestionQueueProcessor: Processor = async (
   job: Job<TQueueJobTypes[QueueName.OtelIngestionQueue]>,
 ): Promise<void> => {
+  // Payload routing (exactly-once pipeline): group-shaped jobs run the
+  // self-contained group processor; legacy per-file jobs run the historical
+  // path below (kept for the grouping-off mode and in-flight jobs during
+  // rollout).
+  if (isGroupPayload(job.data.payload)) {
+    return processGroupShapedJob(job.data.payload);
+  }
+  const payload = job.data.payload;
   try {
-    const projectId = job.data.payload.authCheck.scope.projectId;
-    const publicKey = job.data.payload.data.publicKey;
-    const fileKey = job.data.payload.data.fileKey;
-    const auth = job.data.payload.authCheck;
+    const projectId = payload.authCheck.scope.projectId;
+    const publicKey = payload.data.publicKey;
+    const fileKey = payload.data.fileKey;
+    const auth = payload.authCheck;
 
     const span = getCurrentSpan();
     if (span) {
@@ -450,19 +561,26 @@ export const otelIngestionQueueProcessor: Processor = async (
     if (sessionEnvByid.size > 0) {
       try {
         await prisma.traceSession.createMany({
-          data: Array.from(sessionEnvByid.entries()).map(([id, environment]) => ({
-            id,
-            projectId,
-            environment,
-          })),
+          data: Array.from(sessionEnvByid.entries()).map(
+            ([id, environment]) => ({
+              id,
+              projectId,
+              environment,
+            }),
+          ),
           skipDuplicates: true,
         });
       } catch (e) {
+        // A swallowed failure here 404s the session detail page FOREVER
+        // (protectedGetSessionProcedure can't find the row). createMany with
+        // skipDuplicates is idempotent, so failing the job for a replay is
+        // free and correct (review L3).
         traceException(e);
         logger.error(
           `Failed to upsert trace_sessions for project ${projectId}`,
           e,
         );
+        throw e;
       }
     }
 
@@ -477,12 +595,20 @@ export const otelIngestionQueueProcessor: Processor = async (
             fileKey,
           );
         } catch (error) {
+          // Error whitelist (review H3): only DETERMINISTIC parse/schema
+          // errors may skip a span (with a searchable dead-letter record) —
+          // createEventRecord touches PG/Redis (getPrompt, getGenerationUsage)
+          // and a swallowed transient error there is a silently lost row that
+          // no replay will ever recover. Everything non-deterministic fails
+          // the job → BullMQ replays the file from S3.
+          if (!isDeterministicIngestError(error)) {
+            throw error;
+          }
           traceException(error);
+          recordIncrement("langfuse.otel_group.row_dead_letter", 1);
           logger.error(
-            `Failed to create event record for project ${eventInput.projectId} and observation ${eventInput.spanId}`,
-            error,
+            `event=otel_row_dead_letter fileKey=${fileKey} spanId=${eventInput.spanId} reason=${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`,
           );
-
           return;
         }
 
@@ -512,7 +638,9 @@ export const otelIngestionQueueProcessor: Processor = async (
         // Step 3: Write to events table (independent of eval scheduling)
         if (shouldWriteToEventsTable) {
           try {
-            ingestionService.writeEventRecord(eventRecord);
+            // await so DorisWriter backpressure throttles this batch's intake
+            // (the map runs inside Promise.all) instead of ballooning memory.
+            await ingestionService.writeEventRecord(eventRecord);
           } catch (error) {
             traceException(error);
             logger.error(
@@ -525,13 +653,20 @@ export const otelIngestionQueueProcessor: Processor = async (
     );
   } catch (e) {
     if (e instanceof ForbiddenError) {
+      // Deterministic (API key / project no longer exists — a DB lookup that
+      // answered "not found"): ack the file, but leave a searchable
+      // dead-letter record instead of a bare warn — this is a whole-file
+      // drop and must be visible in reconciliation (review H3).
       traceException(e);
-      logger.warn(`Failed to parse otel observation: ${e.message}`, e);
+      recordIncrement("langfuse.otel_group.row_dead_letter", 1);
+      logger.error(
+        `event=otel_file_dead_letter fileKey=${payload.data.fileKey} reason=ForbiddenError: ${e.message}`,
+      );
       return;
     }
 
     logger.error(
-      `Failed job otel ingestion processing for ${job.data.payload.authCheck.scope.projectId}`,
+      `Failed job otel ingestion processing for ${payload.authCheck.scope.projectId}`,
       e,
     );
     traceException(e);

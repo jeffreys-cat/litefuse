@@ -49,7 +49,7 @@ export default async function handler(
               query: `
                 SELECT trace_id
                 FROM events_full
-                WHERE parent_span_id = ''
+                WHERE is_root = 1
                 AND start_time <= {now: DateTime}
                 AND start_time >= {now: DateTime} - INTERVAL 3 MINUTE
                 LIMIT 1

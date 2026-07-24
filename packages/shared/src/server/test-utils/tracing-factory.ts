@@ -229,6 +229,9 @@ export const createEvent = (
     span_id: spanId,
     id: spanId,
     parent_span_id: null,
+    // Default record is a root span (parent_span_id null); is_root mirrors that.
+    // Tests building child spans override both parent_span_id and is_root.
+    is_root: 1,
 
     // Core properties
     name: "test-event" + v4(),

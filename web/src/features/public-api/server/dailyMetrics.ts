@@ -50,33 +50,40 @@ export const generateDailyMetrics = async (props: QueryType) => {
   const hasNonTimestampsFilter =
     (timeFilter && filter.length() > 1) || (!timeFilter && filter.length() > 0);
 
-  // Observation-side per-date per-model metrics
+  // Observation-side per-date per-model metrics. The per-model breakdown is
+  // observation-grained, so the base scan stays on events_full; only the
+  // trace side of the join moves to traces_scalar (one row per trace, the
+  // root span's scalars — migration 0039), which is what the t-prefixed
+  // trace filters (user_id/name/tags/environment/start_time) reference.
+  // traces_scalar's `name` IS the trace name (events_full root rows carry it
+  // in trace_name), and it stores NULL where root rows store ''.
   const obsQuery = `
     SELECT
       DATE(o.start_time) AS date,
       o.provided_model_name AS model,
       count(o.span_id) AS countObservations,
       count(distinct o.trace_id) AS countTraces,
-      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS inputUsage,
-      COALESCE(sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details)))), 0) AS outputUsage,
-      COALESCE(sum(if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], 0)), 0) AS totalUsage,
+      COALESCE(sum(o.input_tokens_calculated), 0) AS inputUsage,
+      COALESCE(sum(o.output_tokens_calculated), 0) AS outputUsage,
+      COALESCE(sum(o.total_tokens_calculated), 0) AS totalUsage,
       COALESCE(sum(coalesce(o.total_cost, 0)), 0) AS totalCost
     FROM events_full o
-    ${hasNonTimestampsFilter ? "LEFT JOIN events_full t ON o.trace_id = t.trace_id AND o.project_id = t.project_id AND t.parent_span_id = ''" : ""}
+    ${hasNonTimestampsFilter ? "LEFT JOIN traces_scalar t ON o.trace_id = t.id AND o.project_id = t.project_id" : ""}
     WHERE o.project_id = {projectId: String}
     ${hasNonTimestampsFilter ? `AND ${appliedFilter.query}` : ""}
     ${timeFilter ? `AND o.start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
     GROUP BY date, model
   `;
 
-  // Trace-side per-date counts
+  // Trace-side per-date counts: trace-grained, so read traces_scalar directly
+  // (start_time_date is the ingestion-precomputed DATE(start_time), also the
+  // partition column) instead of an is_root = 1 events_full scan.
   const traceQuery = `
     SELECT
-      DATE(t.start_time) AS date,
-      count(t.trace_id) AS countTraces
-    FROM events_full t
+      t.start_time_date AS date,
+      count(t.id) AS countTraces
+    FROM traces_scalar t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
     ${hasTracesFilter ? `AND ${appliedTracesFilter.query}` : ""}
     GROUP BY date
   `;
@@ -194,11 +201,13 @@ export const getDailyMetricsCount = async (props: QueryType) => {
   const filter = convertApiProvidedFilterToDorisFilter(props, filterParams);
   const appliedFilter = filter.filter((f) => f.table === "traces").apply();
 
+  // Trace-grained day count — served by traces_scalar (one row per trace,
+  // start_time_date = precomputed DATE(start_time)) instead of an
+  // is_root = 1 events_full scan. All filterParams columns are trace scalars.
   const query = `
-    SELECT count(distinct DATE(t.start_time)) as count
-    FROM events_full t
+    SELECT count(distinct t.start_time_date) as count
+    FROM traces_scalar t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
     ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
   `;
 

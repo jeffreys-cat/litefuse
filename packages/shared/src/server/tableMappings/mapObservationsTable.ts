@@ -376,21 +376,19 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableId: "tokensPerSecond",
     tableName: "observations",
     select:
-      "if(isNull(o.end_time) OR milliseconds_diff(o.end_time, o.start_time) = 0, NULL, COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details))), 0) / (milliseconds_diff(o.end_time, o.start_time) / 1000))",
+      "if(isNull(o.end_time) OR milliseconds_diff(o.end_time, o.start_time) = 0, NULL, COALESCE(o.output_tokens_calculated, 0) / (milliseconds_diff(o.end_time, o.start_time) / 1000))",
   },
   {
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.cost_details), map_keys(o.cost_details))), 0)",
+    select: "COALESCE(o.input_cost_calculated, 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.cost_details), map_keys(o.cost_details))), 0)",
+    select: "COALESCE(o.output_cost_calculated, 0)",
   },
   {
     uiTableName: "Total Cost ($)",
@@ -430,32 +428,28 @@ export const observationsTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Input Tokens",
     uiTableId: "inputTokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(o.usage_details), map_keys(o.usage_details))), 0)",
+    select: "COALESCE(o.input_tokens_calculated, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Output Tokens",
     uiTableId: "outputTokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(o.usage_details), map_keys(o.usage_details))), 0)",
+    select: "COALESCE(o.output_tokens_calculated, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Total Tokens",
     uiTableId: "totalTokens",
     tableName: "observations",
-    select:
-      "if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], NULL)",
+    select: "o.total_tokens_calculated",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Tokens",
     uiTableId: "tokens",
     tableName: "observations",
-    select:
-      "if(MAP_CONTAINS_KEY(o.usage_details, 'total'), o.usage_details['total'], NULL)",
+    select: "o.total_tokens_calculated",
     typeOverwrite: "Decimal64(3)",
   },
   {

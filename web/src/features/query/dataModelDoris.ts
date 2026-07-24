@@ -1,17 +1,57 @@
 import { type ViewDeclarationType } from "./types";
 
-// Single-table events_full model (Phase B alignment with upstream).
-// Every row is an OTel span (one OTel span = one row in events_full).
-// Root spans have parent_span_id = '' (empty string; coerced from null
-// at write time to match the upstream ClickHouse non-nullable String
-// convention). Child spans have parent_span_id pointing at the parent
-// span_id.
-// - tracesViewDoris: aggregated trace projection (one row per trace_id;
-//   trace-level fields come from the root span via argMaxIf or denormalized
-//   fields).
-// - observationsViewDoris: every events_full row is an observation.
-// Joins across the two views use only trace_id / project_id keys — there
-// is no longer a "synthetic trace span" predicate to add to the JOIN.
+// Hybrid model over the events_full deployment (migrations 0037/0039/0040):
+// - tracesViewDoris reads traces_scalar (one row per trace — the root span's
+//   scalar fields, dual-written at ingestion) for its base and scalar
+//   dimensions, and joins a trace_metrics_agg rewrite-shaped aggregate over
+//   events_full for per-trace metrics.
+// - observationsViewDoris stays on events_full (every row is an OTel span;
+//   one OTel span = one row).
+// - scores views join traces_scalar for trace-level dimensions.
+//
+// traces_scalar stores user_id/session_id/release/version/name as NULL where
+// the events_full root row holds '' (NULLIF at write). Dimensions COALESCE
+// back to '' so grouped outputs and filters keep the upstream non-nullable
+// String convention ('' = unset) that the previous events_full-based queries
+// exposed. COALESCE'd dimension SQL embeds its own table alias — the query
+// builder must not prefix expression selects.
+
+// Tokens replaced by the query builder when a tableRelation's `name` is a
+// derived table (parenthesized SELECT). Project id and query window are baked
+// into the subquery because outer relation time filters cannot apply to it:
+// it exposes no raw time column, and rewrite-compatible bounds must live
+// inside in day-truncated form.
+export const RELATION_SQL_PROJECT_ID = "__RELATION_PROJECT_ID__";
+export const RELATION_SQL_FROM_TIMESTAMP = "__RELATION_FROM_TIMESTAMP__";
+export const RELATION_SQL_TO_TIMESTAMP = "__RELATION_TO_TIMESTAMP__";
+
+// Per-trace metric aggregate in the trace_metrics_agg sync-MV rewrite shape
+// (migration 0040). The sync MV cannot be queried by name: Doris transparently
+// rewrites this scan onto the rollup only while every aggregate stays
+// expression-identical to the MV definition (SUM/MIN/MAX over the same base
+// columns, SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END)) and the WHERE only
+// references MV key expressions — hence date_trunc(start_time, 'day') bounds,
+// not the exact query window (sub-day precision cannot ride the rollup; the
+// exact trace-level window is enforced by the base traces_scalar.start_time
+// filter). GROUP BY (project_id, trace_id) is a subset of the MV keys; the
+// rollup regroups across days.
+const traceMetricsAggRelationSql = `(
+  SELECT
+    project_id,
+    trace_id,
+    MIN(start_time) AS min_start_time,
+    MAX(start_time) AS max_start_time,
+    MIN(end_time) AS min_end_time,
+    MAX(end_time) AS max_end_time,
+    SUM(total_tokens_calculated) AS total_tokens,
+    SUM(total_cost) AS total_cost,
+    SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) AS observation_count
+  FROM events_full
+  WHERE project_id = '${RELATION_SQL_PROJECT_ID}'
+    AND date_trunc(start_time, 'day') >= date_trunc('${RELATION_SQL_FROM_TIMESTAMP}', 'day')
+    AND date_trunc(start_time, 'day') <= date_trunc('${RELATION_SQL_TO_TIMESTAMP}', 'day')
+  GROUP BY project_id, trace_id
+)`;
 
 export const tracesViewDoris: ViewDeclarationType = {
   name: "traces",
@@ -19,13 +59,14 @@ export const tracesViewDoris: ViewDeclarationType = {
     "Traces represent a group of observations and typically represent a single request or operation.",
   dimensions: {
     id: {
-      sql: "trace_id",
+      sql: "id",
       alias: "id",
       type: "string",
       description: "Unique identifier of the trace.",
     },
     name: {
-      sql: "name",
+      sql: "coalesce(traces.name, '')",
+      alias: "name",
       type: "string",
       description:
         "Name assigned to the trace (often the endpoint or operation).",
@@ -36,24 +77,26 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "User-defined tags associated with the trace.",
     },
     userId: {
-      sql: "user_id",
+      sql: "coalesce(traces.user_id, '')",
       alias: "userId",
       type: "string",
       description: "Identifier of the user triggering the trace.",
     },
     sessionId: {
-      sql: "session_id",
+      sql: "coalesce(traces.session_id, '')",
       alias: "sessionId",
       type: "string",
       description: "Identifier of the session triggering the trace.",
     },
     release: {
-      sql: "`release`",
+      sql: "coalesce(traces.`release`, '')",
+      alias: "`release`",
       type: "string",
       description: "Release version of the trace.",
     },
     version: {
-      sql: "version",
+      sql: "coalesce(traces.version, '')",
+      alias: "version",
       type: "string",
       description: "Version of the trace.",
     },
@@ -63,7 +106,7 @@ export const tracesViewDoris: ViewDeclarationType = {
       description: "Deployment environment (e.g., production, staging).",
     },
     timestampMonth: {
-      sql: "date_format(start_time, '%Y-%m')",
+      sql: "date_format(traces.start_time, '%Y-%m')",
       alias: "timestampMonth",
       type: "string",
       description: "Month of the trace timestamp in YYYY-MM format.",
@@ -92,10 +135,14 @@ export const tracesViewDoris: ViewDeclarationType = {
       unit: "traces",
     },
     observationsCount: {
-      sql: "count(observations.span_id)",
+      // observation_count in the MV shape counts non-root spans; + 1 restores
+      // the root span so the value matches the previous count over all
+      // events_full rows of the trace (every traces_scalar row was written
+      // from exactly one root span).
+      sql: "max(observations_agg.observation_count) + 1",
       alias: "observationsCount",
       type: "integer",
-      relationTable: "observations",
+      relationTable: "observations_agg",
       description: "Number of observations within the trace.",
       unit: "observations",
     },
@@ -108,39 +155,42 @@ export const tracesViewDoris: ViewDeclarationType = {
       unit: "scores",
     },
     latency: {
-      sql: "milliseconds_diff(max(observations.end_time), min(observations.start_time))",
+      // max()/min() over the 1-row-per-trace aggregate stay correct under
+      // fan-out when another relation (observations, scores) is joined in the
+      // same query — unlike the previous sum-over-span-rows shape.
+      sql: "milliseconds_diff(max(observations_agg.max_end_time), min(observations_agg.min_start_time))",
       alias: "latency",
       type: "integer",
-      relationTable: "observations",
+      relationTable: "observations_agg",
       description:
         "Elapsed time between the first and last observation inside the trace.",
       unit: "millisecond",
     },
     totalTokens: {
-      sql: "sum(observations.usage_details['total'])",
+      sql: "max(observations_agg.total_tokens)",
       alias: "totalTokens",
       type: "integer",
-      relationTable: "observations",
+      relationTable: "observations_agg",
       description: "Sum of tokens consumed by all observations in the trace.",
       unit: "tokens",
     },
     totalCost: {
-      sql: "sum(observations.total_cost)",
+      sql: "max(observations_agg.total_cost)",
       alias: "totalCost",
       type: "decimal",
-      relationTable: "observations",
+      relationTable: "observations_agg",
       description: "Total cost accumulated across observations in the trace.",
       unit: "USD",
     },
     uniqueUserIds: {
-      sql: "count(distinct traces.user_id)",
+      sql: "count(distinct coalesce(traces.user_id, ''))",
       alias: "uniqueUserIds",
       type: "integer",
       description: "Count of unique userIds.",
       unit: "users",
     },
     uniqueSessionIds: {
-      sql: "count(distinct traces.session_id)",
+      sql: "count(distinct coalesce(traces.session_id, ''))",
       alias: "uniqueSessionIds",
       type: "integer",
       description: "Count of unique sessionIds.",
@@ -148,29 +198,35 @@ export const tracesViewDoris: ViewDeclarationType = {
     },
   },
   tableRelations: {
+    // Raw span rows — only for observation-level dimensions (observationName).
+    // Per-trace metrics use observations_agg below, not this relation.
     observations: {
       name: "events_full",
       joinConditionSql:
-        "ON traces.trace_id = observations.trace_id AND traces.project_id = observations.project_id",
+        "ON traces.id = observations.trace_id AND traces.project_id = observations.project_id",
+      timeDimension: "start_time",
+    },
+    // trace_metrics_agg rewrite-shaped aggregate (one row per trace). The
+    // timeDimension is declaratively required but unused: derived-table
+    // relations carry their bounds inside (see RELATION_SQL_* tokens).
+    observations_agg: {
+      name: traceMetricsAggRelationSql,
+      joinConditionSql:
+        "ON traces.id = observations_agg.trace_id AND traces.project_id = observations_agg.project_id",
       timeDimension: "start_time",
     },
     scores: {
       name: "scores",
       joinConditionSql:
-        "ON traces.trace_id = scores.trace_id AND traces.project_id = scores.project_id",
+        "ON traces.id = scores.trace_id AND traces.project_id = scores.project_id",
       timeDimension: "timestamp",
     },
   },
-  segments: [
-    {
-      column: "parent_span_id",
-      operator: "=",
-      value: "",
-      type: "string",
-    },
-  ],
+  // traces_scalar is root-only by construction — no is_root/parent_span_id
+  // segment needed.
+  segments: [],
   timeDimension: "start_time",
-  baseCte: `events_full traces`,
+  baseCte: `traces_scalar traces`,
 };
 
 export const observationsViewDoris: ViewDeclarationType = {
@@ -191,7 +247,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       description: "Identifier linking the observation to its parent trace.",
     },
     traceName: {
-      sql: "name",
+      sql: "coalesce(traces.name, '')",
       alias: "traceName",
       type: "string",
       relationTable: "traces",
@@ -231,10 +287,16 @@ export const observationsViewDoris: ViewDeclarationType = {
       description: "Version of the observation.",
     },
     tags: {
-      sql: "tags",
+      // Trace-level fields are NOT denormalized onto child spans under OTel
+      // ingestion (only root rows carry them — is_root = 0 rows hold ''/empty
+      // for user_id/session_id/release/tags). Read them from the traces_scalar
+      // relation like traceName/traceVersion, or every non-root observation
+      // buckets under the empty value.
+      sql: "traces.tags",
+      alias: "tags",
       type: "string[]",
-      description:
-        "User-defined tags associated with the trace (denormalized onto every span row).",
+      relationTable: "traces",
+      description: "User-defined tags associated with the parent trace.",
     },
     providedModelName: {
       sql: "provided_model_name",
@@ -255,28 +317,28 @@ export const observationsViewDoris: ViewDeclarationType = {
       description: "Version of the prompt used for the observation.",
     },
     userId: {
-      sql: "user_id",
+      sql: "coalesce(traces.user_id, '')",
       alias: "userId",
       type: "string",
-      description:
-        "Identifier of the user triggering the trace (denormalized onto every span row).",
+      relationTable: "traces",
+      description: "Identifier of the user triggering the parent trace.",
     },
     sessionId: {
-      sql: "session_id",
+      sql: "coalesce(traces.session_id, '')",
       alias: "sessionId",
       type: "string",
-      description:
-        "Identifier of the session triggering the trace (denormalized onto every span row).",
+      relationTable: "traces",
+      description: "Identifier of the session triggering the parent trace.",
     },
     traceRelease: {
-      sql: "`release`",
+      sql: "coalesce(traces.`release`, '')",
       alias: "traceRelease",
       type: "string",
-      description:
-        "Release version of the parent trace (denormalized onto every span row).",
+      relationTable: "traces",
+      description: "Release version of the parent trace.",
     },
     traceVersion: {
-      sql: "version",
+      sql: "coalesce(traces.version, '')",
       alias: "traceVersion",
       type: "string",
       relationTable: "traces",
@@ -357,21 +419,21 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "millisecond",
     },
     inputTokens: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(observations.usage_details), map_keys(observations.usage_details))))",
+      sql: "sum(observations.input_tokens_calculated)",
       alias: "inputTokens",
       type: "integer",
       description: "Sum of input tokens consumed by the observation.",
       unit: "tokens",
     },
     outputTokens: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.usage_details), map_keys(observations.usage_details))))",
+      sql: "sum(observations.output_tokens_calculated)",
       alias: "outputTokens",
       type: "integer",
       description: "Sum of output tokens produced by the observation.",
       unit: "tokens",
     },
     totalTokens: {
-      sql: "sum(observations.usage_details['total'])",
+      sql: "sum(observations.total_tokens_calculated)",
       alias: "totalTokens",
       type: "integer",
       description: "Sum of tokens consumed by the observation.",
@@ -381,7 +443,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       // Calculate average output tokens per second. Denominator uses seconds to align
       // with the `tokens/s` unit; NULL values avoided by guarding against a 0-second
       // duration.
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.usage_details), map_keys(observations.usage_details)))) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
+      sql: "sum(observations.output_tokens_calculated) / nullIf(SECONDS_DIFF(any_value(observations.end_time), any_value(observations.completion_start_time)), 0)",
       alias: "outputTokensPerSecond",
       type: "decimal",
       description:
@@ -389,7 +451,7 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "tokens/s",
     },
     tokensPerSecond: {
-      sql: "sum(observations.usage_details['total']) / SECONDS_DIFF(any_value(observations.end_time), any_value(observations.start_time))",
+      sql: "sum(observations.total_tokens_calculated) / SECONDS_DIFF(any_value(observations.end_time), any_value(observations.start_time))",
       alias: "tokensPerSecond",
       type: "decimal",
       description:
@@ -397,14 +459,14 @@ export const observationsViewDoris: ViewDeclarationType = {
       unit: "tokens/s",
     },
     inputCost: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(observations.cost_details), map_keys(observations.cost_details))))",
+      sql: "sum(observations.input_cost_calculated)",
       alias: "inputCost",
       type: "decimal",
       description: "Sum of input cost incurred by the observation.",
       unit: "USD",
     },
     outputCost: {
-      sql: "sum(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(observations.cost_details), map_keys(observations.cost_details))))",
+      sql: "sum(observations.output_cost_calculated)",
       alias: "outputCost",
       type: "decimal",
       description: "Sum of output cost incurred by the observation.",
@@ -468,9 +530,9 @@ export const observationsViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "events_full",
+      name: "traces_scalar",
       joinConditionSql:
-        "ON observations.trace_id = traces.trace_id AND observations.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON observations.trace_id = traces.id AND observations.project_id = traces.project_id",
       timeDimension: "start_time",
     },
     scores: {
@@ -482,7 +544,7 @@ export const observationsViewDoris: ViewDeclarationType = {
   },
   // Phase B alignment with upstream: every events_full row is an
   // observation now (no more synthetic `t-<trace_id>` rows). The previous
-  // segment `parent_span_id != ''` filtered those out; with the synth
+  // segment `is_root = 0` filtered those out; with the synth
   // rows gone it would instead exclude root observations, which is
   // wrong. No segment is needed.
   segments: [],
@@ -526,7 +588,7 @@ export const scoreBaseDimensionsDoris = {
     description: "Identifier of the parent trace.",
   },
   traceName: {
-    sql: "name",
+    sql: "coalesce(traces.name, '')",
     alias: "traceName",
     type: "string",
     relationTable: "traces",
@@ -539,28 +601,28 @@ export const scoreBaseDimensionsDoris = {
     description: "User-defined tags associated with the trace.",
   },
   userId: {
-    sql: "user_id",
+    sql: "coalesce(traces.user_id, '')",
     alias: "userId",
     type: "string",
     relationTable: "traces",
     description: "Identifier of the user triggering the trace.",
   },
   sessionId: {
-    sql: "session_id",
+    sql: "coalesce(traces.session_id, '')",
     alias: "sessionId",
     type: "string",
     relationTable: "traces",
     description: "Identifier of the session triggering the trace.",
   },
   traceRelease: {
-    sql: "`release`",
+    sql: "coalesce(traces.`release`, '')",
     alias: "traceRelease",
     type: "string",
     relationTable: "traces",
     description: "Release version of the parent trace.",
   },
   traceVersion: {
-    sql: "version",
+    sql: "coalesce(traces.version, '')",
     alias: "traceVersion",
     type: "string",
     relationTable: "traces",
@@ -632,9 +694,9 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "events_full",
+      name: "traces_scalar",
       joinConditionSql:
-        "ON scores_numeric.trace_id = traces.trace_id AND scores_numeric.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON scores_numeric.trace_id = traces.id AND scores_numeric.project_id = traces.project_id",
       timeDimension: "start_time",
     },
     observations: {
@@ -681,9 +743,9 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "events_full",
+      name: "traces_scalar",
       joinConditionSql:
-        "ON scores_categorical.trace_id = traces.trace_id AND scores_categorical.project_id = traces.project_id AND traces.parent_span_id = ''",
+        "ON scores_categorical.trace_id = traces.id AND scores_categorical.project_id = traces.project_id",
       timeDimension: "start_time",
     },
     observations: {

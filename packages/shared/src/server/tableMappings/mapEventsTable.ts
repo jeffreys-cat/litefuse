@@ -559,7 +559,7 @@ export const eventsTableNativeUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Has Parent Observation",
     uiTableId: "hasParentObservation",
     tableName: "observations",
-    select: "o.parent_span_id != ''",
+    select: "o.is_root = 0",
   },
   {
     uiTableName: "Parent Observation ID",

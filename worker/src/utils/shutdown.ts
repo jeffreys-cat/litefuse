@@ -16,6 +16,7 @@ import {
   batchProjectMediaCleaner,
   batchProjectBlobCleaner,
   batchTraceDeletionCleaner,
+  otelGrouper,
 } from "../app";
 
 export const onShutdown: NodeJS.SignalsListener = async (signal) => {
@@ -47,6 +48,10 @@ export const onShutdown: NodeJS.SignalsListener = async (signal) => {
 
   // Stop batch trace deletion cleaner
   batchTraceDeletionCleaner?.stop();
+
+  // Stop the otel grouper (stops cutting new groups; an in-flight publish
+  // finishes — every write it makes is idempotent under replays anyway).
+  await otelGrouper?.stop();
 
   // Shutdown workers (https://docs.bullmq.io/guide/going-to-production#gracefully-shut-down-workers)
   await WorkerManager.closeWorkers();

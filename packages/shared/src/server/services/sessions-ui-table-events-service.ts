@@ -12,11 +12,7 @@ import {
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
-import {
-  StringFilter as DorisStringFilter,
-  StringOptionsFilter as DorisStringOptionsFilter,
-  DateTimeFilter as DorisDateTimeFilter,
-} from "../queries/doris-sql/doris-filter";
+import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 
 type SessionEventsBaseReturnType = {
   session_id: string;
@@ -49,19 +45,21 @@ export const getSessionTracesFromEvents = async (props: {
   projectId: string;
   sessionId: string;
 }) => {
-  // Reads synthetic trace spans (parent_span_id = '') from events_full.
+  // Reads traces_scalar (one row per trace — migration 0039, idx_session_id)
+  // instead of an is_root = 1 events_full scan. Deletion is physical on
+  // traces_scalar (deleteTraces removes the row), so the old is_deleted = 0
+  // predicate has no counterpart here. `name` is the explicit trace name
+  // (scalar name ← trace_name), matching what the migrated traces list shows.
   const query = `
     SELECT
-      trace_id AS id,
-      name,
+      id,
+      COALESCE(name, '') AS name,
       start_time AS \`timestamp\`,
       environment,
-      user_id
-    FROM events_full t
+      COALESCE(user_id, '') AS user_id
+    FROM traces_scalar t
     WHERE t.session_id = {sessionId: String}
       AND t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
-      AND t.is_deleted = 0
     ORDER BY start_time ASC
   `;
 
@@ -176,10 +174,6 @@ const getSessionsTableFromEventsGeneric = async <T>(
       (f.operator === ">=" || f.operator === ">"),
   ) as DorisDateTimeFilter | undefined;
 
-  const sessionIdFilter = sessionFilters.find(
-    (f) => f instanceof DorisStringOptionsFilter && f.field === "session_id",
-  ) as DorisStringOptionsFilter | undefined;
-
   // Build the base query with Doris SQL.
   let sqlSelect: string;
   switch (select) {
@@ -191,13 +185,14 @@ const getSessionsTableFromEventsGeneric = async <T>(
         t.session_id,
         max(t.start_time) as max_timestamp,
         min(t.start_time) as min_timestamp,
-        collect_set(t.trace_id) AS trace_ids,
+        -- No dedup needed on trace_id: traces_scalar is MoW UNIQUE
+        -- KEY(project_id, id) — one row per trace, no joins here.
+        collect_list(t.trace_id) AS trace_ids,
         collect_set(CASE WHEN t.user_id IS NOT NULL AND t.user_id != '' THEN t.user_id ELSE NULL END) AS user_ids,
-        count(DISTINCT t.trace_id) as trace_count,
-        -- Doris collect_set/collect_list don't accept ARRAY inputs directly
-        -- (returns "unexpected type for collect"), so we collect_list to
-        -- ARRAY<ARRAY>, flatten, then distinct.
-        array_distinct(array_flatten(collect_list(t.tags))) AS trace_tags,
+        count(*) as trace_count,
+        -- group_array_union dedups inside the aggregate state, unlike
+        -- collect_list which buffers every duplicate before the flatten.
+        group_array_union(t.tags) AS trace_tags,
         any_value(t.environment) as environment
       `;
       break;
@@ -213,17 +208,43 @@ const getSessionsTableFromEventsGeneric = async <T>(
     ? convertDateToAnalyticsDateTime(traceTimestampFilter.value)
     : null;
 
+  // One row per trace from traces_scalar (migration 0039) under the
+  // events_full-compatible column names the session filter/orderBy mappings
+  // reference — instead of an is_root = 1 events_full scan. Sessionless
+  // traces are excluded (traces_scalar stores NULL for unset, '' guarded
+  // defensively), matching upstream's IS NOT NULL on a Nullable column;
+  // without the exclusion they all collapse into a single '' group whose
+  // aggregation state grows with the whole project and OOMs at scale.
   const query = `
     SELECT ${sqlSelect}
-    FROM events_full t
+    FROM (
+      SELECT
+        project_id,
+        id AS trace_id,
+        session_id,
+        COALESCE(user_id, '') AS user_id,
+        start_time,
+        tags,
+        environment,
+        bookmarked,
+        event_ts
+      FROM traces_scalar
+    ) t
     WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
-      AND t.session_id IS NOT NULL
+      AND t.session_id IS NOT NULL AND t.session_id != ''
       ${traceTimestampFilterClause}
       ${sessionsFilterRes.query ? `AND ${sessionsFilterRes.query}` : ""}
-    GROUP BY t.session_id
+    ${
+      // count(DISTINCT session_id) must aggregate over ALL rows — combined
+      // with GROUP BY session_id it returns one row per session, each
+      // count=1, and the caller reads rows[0] (i.e. the count was always 1).
+      // Ordering/pagination are meaningless for the single count row.
+      select === "count"
+        ? ""
+        : `GROUP BY t.session_id
     ${orderByToDorisSQL(orderBy ? [orderBy] : null, sessionColsForDoris)}
-    ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+    ${limit !== undefined && page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}`
+    }
   `;
 
   const res = await queryDoris<T>({

@@ -767,6 +767,17 @@ export type OrganizationMembership = {
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 };
+export type OtelPoisonJob = {
+  id: string;
+  shard_name: string;
+  job_id: string;
+  group_id: string | null;
+  file_keys: unknown;
+  reason: string;
+  redrives: Generated<number>;
+  first_seen_at: Timestamp;
+  created_at: Generated<Timestamp>;
+};
 export type PendingDeletion = {
   id: string;
   project_id: string;
@@ -1005,6 +1016,7 @@ export type DB = {
   observations: LegacyPrismaObservation;
   organization_memberships: OrganizationMembership;
   organizations: Organization;
+  otel_poison_jobs: OtelPoisonJob;
   pending_deletions: PendingDeletion;
   posthog_integrations: PosthogIntegration;
   prices: Price;

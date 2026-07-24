@@ -111,20 +111,28 @@ export const getBlobStorageByProjectIdAndTraceIds = (
   traceIds: string[],
 ): AsyncGenerator<BlobStorageFileRefRecordReadType> => {
   const query = `
+      -- Trace/observation entity ids come from the events_full family: the
+      -- legacy v3 \`traces\`/\`observations\` tables receive NO writes under the
+      -- OTel-only contract, so reading them here returned empty sets and blob
+      -- cleanup silently skipped every trace/observation file. Trace entities
+      -- are the traces_scalar rows (one per trace); observation entities are
+      -- the trace's span ids from events_full (the root span id doubles as an
+      -- entity id superset — non-matching ids simply find no log rows in the
+      -- EXISTS semi-join).
       with filtered_traces as (
         select distinct
           id as entity_id,
           project_id as project_id,
           'trace' as entity_type
-        from traces
+        from traces_scalar
         where project_id = {projectId: String}
           and id in ({traceIds: Array(String)})
       ), filtered_observations as (
         select distinct
-          id as entity_id,
+          span_id as entity_id,
           project_id as project_id,
           'observation' as entity_type
-        from observations
+        from events_full
         where project_id = {projectId: String}
           and trace_id in ({traceIds: Array(String)})
       ), filtered_scores as (

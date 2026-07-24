@@ -1,7 +1,11 @@
 import { prisma } from "../../db";
 import { Observation, EventsObservation, ObservationType } from "../../domain";
 import { env } from "../../env";
-import { InternalServerError, LangfuseNotFoundError } from "../../errors";
+import {
+  InternalServerError,
+  InvalidRequestError,
+  LangfuseNotFoundError,
+} from "../../errors";
 import { recordDistribution } from "../instrumentation";
 import { logger } from "../logger";
 import {
@@ -38,7 +42,6 @@ import { UiColumnMappings } from "../../tableDefinitions";
 import { eventsTableCols } from "../../eventsTable";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import { zipDorisMetadataArrays } from "../utils/dorisArrays";
 import { convertDateToAnalyticsDateTime, dq } from "./analytics";
 import {
   dorisSearchCondition,
@@ -48,6 +51,8 @@ import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
+import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
+import { OBSERVATIONS_TO_TRACE_INTERVAL } from "./constants";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import {
   queryDoris,
@@ -64,6 +69,7 @@ import {
   type ApiColumnMapping,
 } from "../queries/public-api-filter-builder";
 import { TracingSearchType } from "../../interfaces/search";
+import { parseDorisStringArray } from "../utils/dorisArrays";
 
 type ObservationsTableQueryResultWitouhtTraceFields = Omit<
   ObservationsTableQueryResult,
@@ -447,7 +453,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const dorisSelectString = selectIOAndMetadata
     ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, o.metadata_names, o.metadata_values` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, to_json(o.metadata) AS metadata` : ""}
     `
     : dorisSelect;
 
@@ -523,12 +529,10 @@ async function getObservationsFromEventsTableInternal<T>(
   if (selectIOAndMetadata && opts.select === "rows") {
     return res.map((r) => {
       const row = r as Record<string, unknown>;
-      row.metadata = zipDorisMetadataArrays(
-        row.metadata_names,
-        row.metadata_values,
-      );
-      delete row.metadata_names;
-      delete row.metadata_values;
+      row.metadata =
+        typeof row.metadata === "string"
+          ? JSON.parse(row.metadata)
+          : (row.metadata ?? {});
       return row as T;
     });
   }
@@ -561,9 +565,15 @@ export const getObservationByIdFromEventsTable = async ({
     type,
     traceId,
   });
-  const mapped = records.map((record) =>
-    convertObservation(record, renderingProps),
-  );
+  const mapped = records.map((record) => ({
+    ...convertObservation(record, renderingProps),
+    // Carry the precomputed compact preview (input_trim/output_trim, migration
+    // 0037) so observations.byId can serve it for verbosity "compact" (the
+    // observations-list cell) without parsing the full Variant.
+    input_trim: (record as { input_trim?: string | null }).input_trim ?? null,
+    output_trim:
+      (record as { output_trim?: string | null }).output_trim ?? null,
+  }));
 
   mapped.forEach((observation) => {
     recordDistribution(
@@ -619,6 +629,8 @@ async function getObservationByIdFromEventsTableInternal({
       status_message,
       version,
       ${fetchWithInputOutput ? "input, output," : ""}
+      input_trim,
+      output_trim,
       provided_model_name,
       model_id AS internal_model_id,
       model_parameters,
@@ -681,13 +693,50 @@ export const getTraceByIdFromEventsTable = async ({
   timestamp?: Date;
   renderingProps?: RenderingProps;
 }) => {
-  const query = `
+  // Scalar point read: every selected field is a trace scalar on
+  // traces_scalar (one row per trace — migration 0039; (project_id, id) is
+  // the unique-key prefix and id the distribution column, so this is a
+  // single-tablet lookup). traces_scalar's metadata is a native Map — no
+  // metadata_names/values zip — and `name` is the explicit trace name,
+  // matching what getTraceById (the migrated sibling in traces.ts) returns.
+  // Falls back to the events_full root row when the scalar row is missing
+  // (a trace still in flight — OTel exports the root span last — or data
+  // predating the dual-write), mirroring getTraceById's fallback.
+  const scalarQuery = `
+    SELECT
+      id,
+      name,
+      user_id,
+      to_json(metadata) AS metadata,
+      ${dq("release")},
+      version,
+      project_id,
+      environment,
+      ${dq("public")},
+      bookmarked,
+      tags,
+      session_id,
+      start_time AS \`timestamp\`,
+      created_at,
+      updated_at,
+      0 as is_deleted
+    FROM traces_scalar
+    WHERE project_id = {projectId: String}
+    AND id = {traceId: String}
+    ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
+    -- start_time is part of the unique key: a root span re-delivered with a
+    -- corrected start_time yields a SECOND scalar row for the same trace, so
+    -- pick the newest deterministically (mirrors the fallback's ordering).
+    ORDER BY start_time DESC
+    LIMIT 1
+  `;
+
+  const fallbackQuery = `
     SELECT
       t.trace_id AS id,
       t.name,
       t.user_id,
-      t.metadata_names,
-      t.metadata_values,
+      to_json(t.metadata) AS metadata,
       t.${dq("release")},
       t.version,
       t.project_id,
@@ -703,37 +752,50 @@ export const getTraceByIdFromEventsTable = async ({
     FROM events_full t
     WHERE t.project_id = {projectId: String}
     AND t.trace_id = {traceId: String}
-    AND t.parent_span_id = ''
+    AND t.is_root = 1
     ${timestamp ? `AND DATE(t.start_time) = DATE({timestamp: DateTime})` : ""}
     ORDER BY t.start_time DESC
     LIMIT 1
   `;
 
-  const rawRecords = await queryDoris<
+  const params = {
+    projectId,
+    traceId,
+    ...(timestamp
+      ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
+      : {}),
+  };
+
+  let rawRecords = await queryDoris<
     Omit<TraceRecordReadType, "metadata"> & {
-      metadata_names?: unknown;
-      metadata_values?: unknown;
+      metadata?: unknown;
     }
   >({
-    query,
-    params: {
-      projectId,
-      traceId,
-      ...(timestamp
-        ? { timestamp: convertDateToAnalyticsDateTime(timestamp) }
-        : {}),
-    },
+    query: scalarQuery,
+    params,
     tags: {
       feature: "tracing",
       type: "trace",
-      kind: "byId",
+      kind: "byId-scalar",
       projectId,
     },
   });
+  if (rawRecords.length === 0) {
+    rawRecords = await queryDoris({
+      query: fallbackQuery,
+      params,
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "byId",
+        projectId,
+      },
+    });
+  }
 
   const records: TraceRecordReadType[] = rawRecords.map((r) => ({
     ...r,
-    metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+    metadata: r.metadata,
   })) as TraceRecordReadType[];
 
   const res = records.map((record) =>
@@ -858,8 +920,9 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.version,
       o.input,
       o.output,
-      o.metadata_names,
-      o.metadata_values,
+      o.input_trim,
+      o.output_trim,
+      to_json(o.metadata) AS metadata,
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
@@ -873,7 +936,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.updated_at,
       o.event_ts
     FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -975,13 +1038,11 @@ async function getObservationsRowsFromDoris<T>(
   });
   return res.map((r) => {
     const row = r as Record<string, unknown>;
-    if ("metadata_names" in row || "metadata_values" in row) {
-      row.metadata = zipDorisMetadataArrays(
-        row.metadata_names,
-        row.metadata_values,
-      );
-      delete row.metadata_names;
-      delete row.metadata_values;
+    if ("metadata" in row) {
+      row.metadata =
+        typeof row.metadata === "string"
+          ? JSON.parse(row.metadata)
+          : (row.metadata ?? {});
     }
     return row as T;
   });
@@ -1016,7 +1077,7 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
   const query = `
     SELECT count(*) as count
     FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = ''` : ""}
+    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -1120,14 +1181,85 @@ type PublicApiTracesQuery = {
   orderBy?: { column: string; order: "ASC" | "DESC" } | null;
 };
 
+// traces_scalar (one row per trace — migration 0039) exposed under
+// events_full-compatible column names, so the shared traces filter/orderBy
+// mappings (t.trace_id, t.trace_name, t.start_time, …) apply unchanged. Every
+// column the public traces API projects or filters on is a trace scalar, so
+// the list/count queries read this table instead of `is_root = 1` events_full
+// scans. traces_scalar stores NULL where events_full root rows store ''
+// (name/user_id/session_id/release/version) — COALESCE back to '' HERE so
+// both filters and the serialized response keep the upstream ''-for-unset
+// convention: negative operators (does-not-contain / none-of) must keep
+// matching unset rows, which raw NULL columns silently drop (NULL predicates
+// are never true). Costs the inverted-index probe on these five columns —
+// correctness over index; see the filter-factory NULL-aware-predicate
+// follow-up.
+const TRACES_SCALAR_AS_T_FOR_PUBLIC_API = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS trace_name,
+        COALESCE(name, '') AS name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        environment,
+        tags,
+        metadata,
+        start_time,
+        bookmarked,
+        ${dq("public")},
+        COALESCE(${dq("release")}, '') AS ${dq("release")},
+        COALESCE(version, '') AS version,
+        created_at,
+        updated_at,
+        event_ts
+      FROM traces_scalar
+    ) t`;
+
+// The traces_scalar-backed query only exposes trace-scalar columns. Advanced
+// filters on observation/score columns (level, latency, totalCost, scores_avg,
+// …) would reference aliases that do not exist and fail at parse time — reject
+// them up front with a clear 400 instead. Mirrors rejectNonTracesFilters on
+// the legacy web public-traces path.
+function rejectNonTracesPublicApiFilters(filterList: FilterList): void {
+  const offending: Array<{ table?: string; field: string }> = [];
+  filterList.forEach((f) => {
+    if (f.table && f.table !== "traces") offending.push(f);
+  });
+  if (offending.length > 0) {
+    const desc = offending
+      .map((f) => `'${f.field}' (table: ${f.table})`)
+      .join(", ");
+    throw new InvalidRequestError(
+      `Filtering on ${desc} is not supported via the public traces API on the Doris backend. Only columns on the traces table are supported.`,
+    );
+  }
+}
+
 /**
  * Internal implementation for public API traces queries.
- * Uses Doris traces table directly instead of aggregating from events.
+ * Reads traces_scalar (one row per trace) — every projected/filterable column
+ * is a trace scalar. List and count derive the same FilterList (simple query
+ * params + advanced JSON filters, advanced wins) so their filtering stays
+ * consistent.
  */
 async function getTracesFromEventsTableForPublicApiInternal<T>(
   opts: PublicApiTracesQuery & { select: "rows" | "count" },
 ): Promise<Array<T>> {
   const { projectId, page, limit, orderBy } = opts;
+
+  const filter = deriveFilters(
+    opts,
+    PUBLIC_API_TRACES_COLUMN_MAPPING,
+    opts.advancedFilters,
+    tracesTableUiColumnDefinitionsForDoris,
+    tracesTableCols,
+  );
+  rejectNonTracesPublicApiFilters(filter);
+  const appliedFilter = filter.apply();
+  const whereClause = `
+    WHERE t.project_id = {projectId: String}
+    ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}`;
 
   // Build order by clause
   let orderByClause = "ORDER BY t.project_id DESC, t.start_time DESC";
@@ -1141,14 +1273,13 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
   if (opts.select === "count") {
     const countQuery = `
       SELECT count(*) as count
-      FROM events_full t
-      WHERE t.project_id = {projectId: String}
-      AND t.parent_span_id = ''
+      FROM ${TRACES_SCALAR_AS_T_FOR_PUBLIC_API}
+      ${whereClause}
     `;
 
     const result = await queryDoris<{ count: string }[]>({
       query: countQuery,
-      params: { projectId },
+      params: { projectId, ...appliedFilter.params },
       tags: {
         feature: "tracing",
         type: "traces",
@@ -1176,9 +1307,8 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
       t.${dq("public")},
       t.${dq("release")},
       CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath
-    FROM events_full t
-    WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
+    FROM ${TRACES_SCALAR_AS_T_FOR_PUBLIC_API}
+    ${whereClause}
     ${orderByClause}
     LIMIT {limit: Int32}
     OFFSET {offset: Int32}
@@ -1188,6 +1318,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
     query,
     params: {
       projectId,
+      ...appliedFilter.params,
       limit,
       offset: (page - 1) * limit,
     },
@@ -1262,7 +1393,10 @@ type UpdateableEventFields = {
  * E.g. `{ traceIds: [...] }` will only filter by traceIds, while
  * `{ spanIds: [...], traceIds: [...] }` will filter by both.
  *
- * Updates the observations table.
+ * @deprecated events_full is a DUPLICATE-model table (migration 0037) and
+ * Doris does not support UPDATE on duplicate tables — calling this now fails
+ * at the database. Trace-level mutable flags (bookmarked/public/tags) live in
+ * traces_scalar instead; no production call sites remain.
  */
 export const updateEvents = async (
   projectId: string,
@@ -1508,18 +1642,15 @@ export const getEventsGroupedByTraceTags = async (
 
   const appliedFilter = observationsFilter.apply();
 
-  // In Doris, we use UNNEST to explode array columns
+  // Union+dedup in a single aggregate state instead of UNNEST, which
+  // multiplied the scanned events_full rows by the tag count before DISTINCT.
   const query = `
-    SELECT DISTINCT tag
-    FROM events_full o,
-    UNNEST(o.tags) as t(tag)
+    SELECT group_array_union(o.tags) AS tags_union
+    FROM events_full o
     WHERE ${appliedFilter.query}
-    AND size(o.tags) > 0
-    ORDER BY tag ASC
-    LIMIT 1000
   `;
 
-  const res = await queryDoris<{ tag: string }>({
+  const res = await queryDoris<{ tags_union: string[] | string | null }>({
     query,
     params: {
       projectId,
@@ -1532,7 +1663,10 @@ export const getEventsGroupedByTraceTags = async (
       projectId,
     },
   });
-  return res;
+  return parseDorisStringArray(res[0]?.tags_union ?? null)
+    .sort()
+    .slice(0, 1000)
+    .map((tag) => ({ tag }));
 };
 
 /**
@@ -2052,10 +2186,10 @@ export const getEventsGroupedByHasParentObservation = async (
   const appliedFilter = observationsFilter.apply();
 
   const query = `
-    SELECT (o.parent_span_id != '') as hasParentObservation, count(*) as count
+    SELECT (o.is_root = 0) as hasParentObservation, count(*) as count
     FROM events_full o
     WHERE ${appliedFilter.query}
-    GROUP BY (o.parent_span_id != '')
+    GROUP BY (o.is_root = 0)
     ORDER BY hasParentObservation ASC
     LIMIT 2
   `;
@@ -2216,7 +2350,7 @@ export async function getAgentGraphDataFromEventsTable(params: {
 }) {
   const { projectId, traceId, chMinStartTime, chMaxStartTime } = params;
 
-  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
+  // metadata is read via to_json(metadata) — raw MAP text does not escape inner quotes.
   const query = `
     SELECT
       e.span_id AS id,
@@ -2225,8 +2359,8 @@ export async function getAgentGraphDataFromEventsTable(params: {
       e.name,
       e.start_time,
       e.end_time,
-      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_node')) AS node,
-      element_at(e.metadata_values, array_position(e.metadata_names, 'langgraph_step')) AS step
+      e.metadata['langgraph_node'] AS node,
+      e.metadata['langgraph_step'] AS step
     FROM events_full e
     WHERE
       e.project_id = {projectId: String}
@@ -2353,8 +2487,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
-      e.metadata_names,
-      e.metadata_values
+      to_json(e.metadata) AS metadata
     FROM events_full e
     WHERE e.project_id = {projectId: String}
       AND e.span_id IN ({observationIds: Array(String)})
@@ -2367,8 +2500,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
     id: string;
     input: string | null;
     output: string | null;
-    metadata_names: unknown;
-    metadata_values: unknown;
+    metadata: unknown;
   }>({
     query,
     params: {
@@ -2397,7 +2529,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
         ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
         : null,
     metadata: parseMetadataCHRecordToDomain(
-      zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      typeof r.metadata === "string" ? JSON.parse(r.metadata) : (r.metadata ?? {}),
     ),
   }));
 };
@@ -2417,6 +2549,36 @@ const usersFromEventsTableColumnDefinitionsForDoris: UiColumnMappings = [
   },
 ];
 
+// traces_scalar (one row per trace — migration 0039) exposed under the
+// `o`-prefixed column names the Users-page filter mappings reference
+// (o.start_time via the "Timestamp" compat mapping, o.user_id, o.trace_name,
+// o.environment, …). The per-user queries below are trace-grained — user_id
+// is a root-span scalar — so they read this table instead of scanning
+// events_full. traces_scalar stores NULL where events_full root rows store ''
+// (name/user_id/session_id/release/version) — COALESCE back to '' so negative
+// filter operators keep matching unset rows (raw NULL predicates silently
+// drop them); "has a user" is therefore `user_id != ''`, matching the old
+// events_full guard.
+const TRACES_SCALAR_AS_O_FOR_USERS = `(
+      SELECT
+        project_id,
+        id AS trace_id,
+        COALESCE(name, '') AS name,
+        COALESCE(name, '') AS trace_name,
+        COALESCE(user_id, '') AS user_id,
+        COALESCE(session_id, '') AS session_id,
+        environment,
+        tags,
+        metadata,
+        start_time,
+        COALESCE(${dq("release")}, '') AS ${dq("release")},
+        COALESCE(version, '') AS version,
+        created_at,
+        updated_at,
+        event_ts
+      FROM traces_scalar
+    ) o`;
+
 /**
  * Get users with trace counts from events table with pagination
  * Similar to getTracesGroupedByUsers but queries the events table
@@ -2432,10 +2594,13 @@ export const getUsersFromEventsTable = async (
     tracesPrefix: "o",
   });
 
+  // usersFromEventsTable… (not the plain events defs): includes the
+  // "Timestamp" → o.start_time compat mapping the Users-page filter state
+  // sends, matching what the count/metrics siblings already accepted.
   observationsFilter.push(
     ...createDorisFilterFromFilterState(
       filter,
-      eventsTableUiColumnDefinitionsForDoris,
+      usersFromEventsTableColumnDefinitionsForDoris,
     ),
   );
 
@@ -2447,13 +2612,14 @@ export const getUsersFromEventsTable = async (
 
   const query = `
     SELECT o.user_id as user, count(DISTINCT o.trace_id) as count
-    FROM events_full o
+    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
     WHERE ${appliedFilter.query}
-    AND o.user_id IS NOT NULL
-    AND length(o.user_id) > 0
+    AND o.user_id != ''
     ${searchCondition}
     GROUP BY o.user_id
-    ORDER BY count DESC
+    -- user ASC tiebreaker: equal counts otherwise page nondeterministically
+    -- (a user can repeat on or vanish between pages as plans change).
+    ORDER BY count DESC, user ASC
     LIMIT {limit: Int32}
     OFFSET {offset: Int32}
   `;
@@ -2503,10 +2669,9 @@ export const getUsersCountFromEventsTable = async (
 
   const query = `
     SELECT count(DISTINCT o.user_id) AS totalCount
-    FROM events_full o
+    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
     WHERE ${appliedFilter.query}
-    AND o.user_id IS NOT NULL
-    AND length(o.user_id) > 0
+    AND o.user_id != ''
     ${searchCondition}
   `;
 
@@ -2527,10 +2692,11 @@ export const getUsersCountFromEventsTable = async (
 };
 
 /**
- * Get user metrics from events table
- * Key difference from getUserMetrics in traces.ts:
- * - Uses min(o.start_time)/max(o.start_time) for first/last event (all observations)
- * - Legacy uses min(t.timestamp)/max(t.timestamp) (only trace timestamps)
+ * Get user metrics from events table.
+ * Same query shape as getUserMetrics in traces.ts: per-trace metrics from the
+ * trace_metrics_agg rewrite shape over events_full, joined/aggregated up to
+ * per-user via traces_scalar (which carries the root's user_id and the trace
+ * time window — min/max here are trace timestamps).
  */
 export const getUserMetricsFromEventsTable = async (
   projectId: string,
@@ -2554,23 +2720,60 @@ export const getUserMetricsFromEventsTable = async (
 
   const appliedFilter = observationsFilter.apply();
 
+  // Partition-prune the metrics CTE off the Users-page timestamp filter
+  // ("Timestamp" → o.start_time). Day-truncated bound, loosened by
+  // OBSERVATIONS_TO_TRACE_INTERVAL, so it stays answerable by the rollup's
+  // day key and never cuts spans of a trace the scalar-side filter selects.
+  const timestampFilter = observationsFilter.find(
+    (f) =>
+      f.field === "o.start_time" && (f.operator === ">=" || f.operator === ">"),
+  ) as DorisDateTimeFilter | undefined;
+
+  // Per-trace metrics via the trace_metrics_agg rewrite shape (sync MV,
+  // migration 0040): the CTE aggregates events_full with EXACTLY the MV's
+  // expression shapes, grouped by project_id, trace_id, so Doris rewrites the
+  // scan onto the rollup. It must contain ONLY that scan (a JOIN inside the
+  // same SELECT breaks the rewrite); user_id and the trace scalars join in
+  // from traces_scalar. Usage comes from the ingestion-precomputed
+  // *_calculated reductions of usage_details; obs_count keeps the old
+  // "all spans including root" semantics (observation_count is non-root,
+  // COUNT(*) adds one root per joined trace back). Unlike the previous
+  // events_full GROUP BY, this no longer relies on user_id being denormalized
+  // onto every span — with OTel ingestion only root rows carry it, which made
+  // the old per-user sums miss all child-span usage/cost.
   const query = `
+    WITH per_trace_metrics as (
+      SELECT
+          project_id,
+          trace_id,
+          SUM(total_cost) as sum_total_cost,
+          SUM(input_tokens_calculated) as input_usage,
+          SUM(output_tokens_calculated) as output_usage,
+          SUM(total_tokens_calculated) as total_usage,
+          SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) as observation_count
+      FROM events_full
+      WHERE project_id = {projectId: String}
+      ${timestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({metricsFromTs: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')` : ""}
+      GROUP BY project_id, trace_id
+    )
     SELECT
       o.user_id as user_id,
-      any(o.environment) as environment,
-      count(DISTINCT o.span_id) as obs_count,
+      MAX(o.environment) as environment,
+      COALESCE(SUM(m.observation_count), 0) + COUNT(*) as obs_count,
       count(DISTINCT o.trace_id) as trace_count,
-      sum(if(MAP_CONTAINS_KEY(o.usage_details,'input'), o.usage_details['input'], 0)) as input_usage,
-      sum(if(MAP_CONTAINS_KEY(o.usage_details,'output'), o.usage_details['output'], 0)) as output_usage,
-      sum(if(MAP_CONTAINS_KEY(o.usage_details,'total'), o.usage_details['total'], 0)) as total_usage,
-      sum(o.total_cost) as sum_total_cost,
+      COALESCE(SUM(m.input_usage), 0) as input_usage,
+      COALESCE(SUM(m.output_usage), 0) as output_usage,
+      COALESCE(SUM(m.total_usage), 0) as total_usage,
+      COALESCE(SUM(m.sum_total_cost), 0) as sum_total_cost,
       min(o.start_time) as min_timestamp,
       max(o.start_time) as max_timestamp
-    FROM events_full o
+    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
+    JOIN per_trace_metrics m
+      ON m.project_id = o.project_id
+      AND m.trace_id = o.trace_id
     WHERE ${appliedFilter.query}
     AND o.user_id IN ({userIds: Array(String)})
-    AND o.user_id IS NOT NULL
-    AND length(o.user_id) > 0
+    AND o.user_id != ''
     GROUP BY o.user_id
   `;
 
@@ -2591,6 +2794,13 @@ export const getUserMetricsFromEventsTable = async (
       projectId,
       userIds,
       ...appliedFilter.params,
+      ...(timestampFilter
+        ? {
+            metricsFromTs: convertDateToAnalyticsDateTime(
+              timestampFilter.value,
+            ),
+          }
+        : {}),
     },
     tags: {
       feature: "users",
@@ -2621,12 +2831,13 @@ export const getUserMetricsFromEventsTable = async (
 export const hasAnyUserFromEventsTable = async (
   projectId: string,
 ): Promise<boolean> => {
+  // traces_scalar: one row per trace with the root's user_id (NULL where the
+  // root row stored '') — a flat indexed probe instead of an events_full scan.
   const query = `
     SELECT 1
-    FROM events_full
+    FROM traces_scalar
     WHERE project_id = {projectId: String}
     AND user_id IS NOT NULL
-    AND length(user_id) > 0
     LIMIT 1
   `;
 
@@ -2671,8 +2882,7 @@ export const getEventsForBlobStorageExport = function (
       if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.input,
       o.output,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.start_time,
       o.end_time,
       o.provided_model_name as model,
@@ -2736,8 +2946,7 @@ export const getEventsForAnalyticsIntegrations = async function* (
       o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.usage_details,
       o.cost_details,
       o.provided_model_name,
@@ -2765,10 +2974,10 @@ export const getEventsForAnalyticsIntegrations = async function* (
 
   const baseUrl = env.NEXTAUTH_URL?.replace("/api/auth", "");
   for await (const record of records) {
-    const metadata = zipDorisMetadataArrays(
-      record.metadata_names,
-      record.metadata_values,
-    );
+    const metadata =
+      typeof record.metadata === "string"
+        ? JSON.parse(record.metadata)
+        : (record.metadata ?? {});
     yield {
       timestamp: record.start_time,
       langfuse_observation_name: record.name,
@@ -2810,13 +3019,14 @@ export const getEventsForAnalyticsIntegrations = async function* (
 export const hasAnySessionFromEventsTable = async (
   projectId: string,
 ): Promise<boolean> => {
+  // traces_scalar: one row per trace with the root's session_id (NULL where
+  // the root row stored '', so IS NOT NULL replaces the old length() guard) —
+  // a flat indexed probe instead of an events_full scan.
   const query = `
     SELECT 1
-    FROM events_full
+    FROM traces_scalar
     WHERE project_id = {projectId: String}
-    AND parent_span_id = ''
     AND session_id IS NOT NULL
-    AND length(session_id) > 0
     LIMIT 1
   `;
 
@@ -2844,16 +3054,18 @@ export const getTraceMetadataByIdsFromEvents = async (props: {
 }) => {
   if (props.traceIds.length === 0) return [];
 
+  // Pure trace-scalar batch read → traces_scalar (one row per trace, id is
+  // the distribution column — migration 0039). COALESCE keeps the previous
+  // events_full ''-for-unset convention (traces_scalar stores NULL there).
   const query = `
     SELECT
-      t.trace_id AS id,
-      t.name,
-      t.user_id,
+      t.id,
+      COALESCE(t.name, '') AS name,
+      COALESCE(t.user_id, '') AS user_id,
       t.tags
-    FROM events_full t
+    FROM traces_scalar t
     WHERE t.project_id = {projectId: String}
-    AND t.parent_span_id = ''
-    AND t.trace_id IN ({traceIds: Array(String)})
+    AND t.id IN ({traceIds: Array(String)})
   `;
 
   return queryDoris<{
@@ -2883,19 +3095,19 @@ export const getAvgCostByEvaluatorIds = async (
 > => {
   if (evaluatorIds.length === 0) return [];
 
-  // events_full stores metadata as parallel arrays metadata_names / metadata_values.
+  // metadata is read via to_json(metadata) — raw MAP text does not escape inner quotes.
   const query = `
     SELECT
-      element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) as evaluator_id,
+      o.metadata['job_configuration_id'] as evaluator_id,
       avg(o.total_cost) as avg_cost,
       count(*) as execution_count
     FROM events_full o
     WHERE o.project_id = {projectId: String}
     AND o.type = 'GENERATION'
-    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IS NOT NULL
-    AND element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id')) IN ({evaluatorIds: Array(String)})
+    AND o.metadata['job_configuration_id'] IS NOT NULL
+    AND o.metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
     AND o.start_time >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 7 DAY)
-    GROUP BY element_at(o.metadata_values, array_position(o.metadata_names, 'job_configuration_id'))
+    GROUP BY o.metadata['job_configuration_id']
   `;
 
   const rows = await queryDoris<{
@@ -2966,8 +3178,7 @@ type DorisAnalyticsObservationRecord = {
   model: string | null;
   prompt_name: string | null;
   prompt_version: number | null;
-  metadata_names: unknown;
-  metadata_values: unknown;
+  metadata: unknown;
   usage_details: Record<string, number>;
   cost_details: Record<string, number>;
   provided_model_name: string | null;

@@ -352,32 +352,30 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Input Tokens",
     uiTableId: "inputTokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
+    // Reads the precomputed per-trace rollup from observations_stats (SUM of
+    // input_tokens_calculated), not an explode_map over usage_details.
+    select: "COALESCE(os.input_tokens, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Output Tokens",
     uiTableId: "outputTokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
+    select: "COALESCE(os.output_tokens, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Total Tokens",
     uiTableId: "totalTokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
+    select: "COALESCE(os.total_tokens, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   {
     uiTableName: "Tokens",
     uiTableId: "tokens",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.usage_details), map_keys(os.usage_details))), 0)",
+    select: "COALESCE(os.total_tokens, 0)",
     typeOverwrite: "Decimal64(3)",
   },
   // Scores column duplicated to allow renaming column name. Will be removed once session storage cache is outdated
@@ -412,21 +410,18 @@ export const tracesTableUiColumnDefinitionsForDoris: UiColumnMappings = [
     uiTableName: "Input Cost ($)",
     uiTableId: "inputCost",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
+    select: "COALESCE(os.input_cost, 0)",
   },
   {
     uiTableName: "Output Cost ($)",
     uiTableId: "outputCost",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
+    select: "COALESCE(os.output_cost, 0)",
   },
   {
     uiTableName: "Total Cost ($)",
     uiTableId: "totalCost",
     tableName: "observations",
-    select:
-      "COALESCE(array_sum(array_filter((v, k) -> lower(k) = 'total', map_values(os.cost_details), map_keys(os.cost_details))), 0)",
+    select: "COALESCE(os.total_cost, 0)",
   },
 ];

@@ -8,7 +8,6 @@ import {
   convertObservation,
   convertDateToAnalyticsDateTime,
   dq,
-  zipDorisMetadataArrays,
 } from "@langfuse/shared/src/server";
 import { type FilterState, observationsTableCols } from "@langfuse/shared";
 
@@ -33,7 +32,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
   // scope). The fork uses EXISTS instead of LEFT JOIN to dodge a Doris
   // Nereids optimizer crash on LEFT JOIN + map expressions; re-applying
   // them in the outer WHERE would reference an undefined `t` alias.
-  // events_full root-span rows (parent_span_id = '') stand in for legacy
+  // events_full root-span rows (is_root = 1) stand in for legacy
   // traces table.
   const traceFilters = chFilter.filter((f) => f.table === "traces");
   const observationFilters = chFilter.filter((f) => f.table !== "traces");
@@ -52,8 +51,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.start_time,
       o.end_time,
       o.name,
-      o.metadata_names,
-      o.metadata_values,
+      to_json(o.metadata) AS metadata,
       o.level,
       o.status_message,
       o.version,
@@ -76,7 +74,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.event_ts
     FROM events_full o
     WHERE o.project_id = {projectId: String}
-      ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = '' AND ${appliedTraceFilter.query})` : ""}
+      ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
       ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
     ORDER BY o.start_time DESC
     ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
@@ -105,8 +103,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
     fn: async (input) => {
       const result = await queryDoris<
         Omit<ObservationRecordReadType, "metadata"> & {
-          metadata_names: unknown;
-          metadata_values: unknown;
+          metadata: unknown;
         }
       >({
         query,
@@ -114,10 +111,13 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
         tags: input.tags,
       });
       return result.map((r) => {
-        const { metadata_names, metadata_values, ...rest } = r;
+        const { metadata, ...rest } = r;
         return convertObservation({
           ...rest,
-          metadata: zipDorisMetadataArrays(metadata_names, metadata_values),
+          metadata:
+            typeof metadata === "string"
+              ? JSON.parse(metadata)
+              : (metadata ?? {}),
         } as ObservationRecordReadType);
       });
     },
@@ -136,7 +136,7 @@ export const getObservationsCountForPublicApi = async (props: QueryType) => {
     SELECT count(*) as count
     FROM events_full o
     WHERE o.project_id = {projectId: String}
-    ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.parent_span_id = '' AND ${appliedTraceFilter.query})` : ""}
+    ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
     ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
   `;
 

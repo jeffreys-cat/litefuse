@@ -26,7 +26,6 @@ import {
 } from "../tableMappings";
 import { OrderByState } from "../../interfaces/orderBy";
 import { getTracesByIds } from "./traces";
-import { zipDorisMetadataArrays } from "../utils/dorisArrays";
 import {
   convertObservation,
   enrichObservationWithModelData,
@@ -159,7 +158,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
       level,
       status_message,
       version,
-      ${includeIO === true ? "input, output, metadata_names, metadata_values," : ""}
+      ${includeIO === true ? "input, output, to_json(metadata) AS metadata," : ""}
       provided_model_name,
       model_id AS internal_model_id,
       model_parameters,
@@ -204,16 +203,13 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
   });
 
   // Normalize Doris-returned string-encoded usage/cost details into the
-  // object shape the downstream converter expects, and zip
-  // metadata_names + metadata_values into the metadata Record.
+  // object shape the downstream converter expects, and parse the
+  // to_json(metadata) map projection into the metadata Record.
   records = rawRecords.map((r) => {
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata:
-        includeIO === true
-          ? zipDorisMetadataArrays(r.metadata_names, r.metadata_values)
-          : {},
+      metadata: includeIO === true ? r.metadata : {},
     };
   }) as ObservationRecordReadType[];
 
@@ -288,8 +284,7 @@ export const getObservationForTraceIdByName = async ({
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -345,7 +340,7 @@ export const getObservationForTraceIdByName = async ({
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -378,9 +373,15 @@ export const getObservationById = async ({
     traceId,
     renderingProps,
   });
-  const mapped = records.map((record) =>
-    convertObservation(record, renderingProps),
-  );
+  const mapped = records.map((record) => ({
+    ...convertObservation(record, renderingProps),
+    // Carry the precomputed compact preview (input_trim/output_trim, migration
+    // 0037) so observations.byId can serve it for verbosity "compact" (the
+    // observations-list cell) without parsing the full Variant.
+    input_trim: (record as { input_trim?: string | null }).input_trim ?? null,
+    output_trim:
+      (record as { output_trim?: string | null }).output_trim ?? null,
+  }));
 
   mapped.forEach((observation) => {
     recordDistribution(
@@ -421,8 +422,7 @@ export const getObservationsById = async (
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -457,7 +457,7 @@ export const getObservationsById = async (
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -492,8 +492,7 @@ const getObservationByIdInternal = async ({
       start_time,
       end_time,
       name,
-      metadata_names,
-      metadata_values,
+      to_json(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -517,7 +516,9 @@ const getObservationByIdInternal = async ({
       tool_call_names,
       created_at,
       updated_at,
-      event_ts
+      event_ts,
+      input_trim,
+      output_trim
     FROM events_full
     WHERE span_id = {id: String}
     AND project_id = {projectId: String}
@@ -551,7 +552,7 @@ const getObservationByIdInternal = async ({
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
-      metadata: zipDorisMetadataArrays(r.metadata_names, r.metadata_values),
+      metadata: r.metadata,
     };
   }) as ObservationRecordReadType[];
 
@@ -652,10 +653,24 @@ export const getObservationsTableWithModelData = async (
         })
       : [],
     getTracesByIds(
-      observationRecords
-        .map((o) => o.trace_id)
-        .filter((o): o is string => Boolean(o)),
+      // Dedup: a page of observations usually shares traces (10 rows over ~5
+      // traces sent each id twice into the IN list).
+      Array.from(
+        new Set(
+          observationRecords
+            .map((o) => o.trace_id)
+            .filter((o): o is string => Boolean(o)),
+        ),
+      ),
       opts.projectId,
+      // Time lower bound so the lookup prunes partitions: a trace's root
+      // starts at or before its observations; the page's earliest observation
+      // start minus the standard obs→trace cushion bounds it. Without this
+      // the decoration query scanned every partition on every page load.
+      earliestTraceLowerBound(observationRecords),
+      // Row decoration only needs trace scalars (name/tags/timestamp/userId);
+      // never drag the full input/output Variants for a whole page of traces.
+      { excludeFullIO: true },
     ),
   ]);
 
@@ -682,6 +697,41 @@ export const getObservationsTableWithModelData = async (
   });
 };
 
+// The list's Start Time lower bound (UI sends uiTableId "startTime"; some
+// callers use the display name "Start Time"). Used only to bound the scores
+// CTE — events_full itself needs no mirror predicate anymore: it partitions
+// directly on start_time (migration 0037), so any start_time predicate the
+// filter mapping emits prunes partitions natively.
+const findStartTimeLowerBound = (filter: FilterState) =>
+  filter.find(
+    (f) =>
+      f.type === "datetime" &&
+      (f.column === "Start Time" || f.column === "startTime") &&
+      (f.operator === ">=" || f.operator === ">"),
+  );
+
+// Lower bound for looking up the TRACES of a page of observations: the
+// earliest observation start on the page minus the standard obs→trace cushion
+// (a root span starts at or before its observations; 2 days matches
+// OBSERVATIONS_TO_TRACE_INTERVAL used by every other obs→trace lookup).
+// undefined when no row carries a parsable start_time — the lookup then runs
+// unbounded, as before.
+const earliestTraceLowerBound = (
+  records: Array<{ start_time?: string | Date | null }>,
+): Date | undefined => {
+  let minMs = Infinity;
+  for (const r of records) {
+    if (!r.start_time) continue;
+    const t =
+      r.start_time instanceof Date
+        ? r.start_time.getTime()
+        : parseDorisUTCDateTimeFormat(r.start_time).getTime();
+    if (!Number.isNaN(t) && t < minMs) minMs = t;
+  }
+  if (!Number.isFinite(minMs)) return undefined;
+  return new Date(minMs - 2 * 24 * 60 * 60 * 1000);
+};
+
 const getObservationsTableInternal = async <T>(
   opts: ObservationTableQuery & {
     select: "count" | "rows" | "largeFieldStats";
@@ -696,8 +746,7 @@ const getObservationsTableInternal = async <T>(
           AVG(COALESCE(CHAR_LENGTH(CAST(o.input AS STRING)), 0)) as avg_input_bytes,
           AVG(COALESCE(CHAR_LENGTH(CAST(o.output AS STRING)), 0)) as avg_output_bytes,
           AVG(
-            COALESCE(CHAR_LENGTH(CAST(o.metadata_names AS STRING)), 0) +
-            COALESCE(CHAR_LENGTH(CAST(o.metadata_values AS STRING)), 0)
+            COALESCE(CHAR_LENGTH(to_json(o.metadata)), 0)
           ) as avg_metadata_bytes
         `
         : `
@@ -715,7 +764,11 @@ const getObservationsTableInternal = async <T>(
         o.provided_cost_details as provided_cost_details,
         o.cost_details as cost_details,
         o.level as level,
-        COALESCE(NULLIF(o.environment, ''), t.environment) as environment,
+        -- Upstream-aligned: an observation shows its OWN span env verbatim
+        -- (upstream v4 selects e.environment with no trace fallback —
+        -- event-query-builder.ts base field set). Keeping this t-free lets the
+        -- unfiltered rows path skip the trace join entirely.
+        o.environment as environment,
         o.status_message as status_message,
         o.version as version,
         o.parent_span_id as parent_observation_id,
@@ -740,8 +793,7 @@ const getObservationsTableInternal = async <T>(
       ${dorisSelect},
       o.input,
       o.output,
-      o.metadata_names,
-      o.metadata_values
+      to_json(o.metadata) AS metadata
     `
     : dorisSelect;
 
@@ -758,10 +810,7 @@ const getObservationsTableInternal = async <T>(
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const timeFilter = opts.filter.find(
-    (f) =>
-      f.column === "Start Time" && (f.operator === ">=" || f.operator === ">"),
-  );
+  const timeFilter = findStartTimeLowerBound(opts.filter);
 
   const hasScoresFilter = filter.some((f) =>
     f.column.toLowerCase().includes("score"),
@@ -770,7 +819,7 @@ const getObservationsTableInternal = async <T>(
   // Phase C: trace-level fields are denormalized onto every observation
   // row by createEventRecord, so in the common case `o.environment` etc
   // are already correct. The LEFT JOIN below targets the root span of
-  // the trace (parent_span_id = '') and supplies COALESCE fallbacks for
+  // the trace (is_root = 1) and supplies COALESCE fallbacks for
   // edge cases where the child obs's trace-level fields are empty (out-
   // of-order ingest, OTel child spans without `langfuse.trace.*`
   // attributes). The JOIN is a point-lookup on the inverted trace_id
@@ -829,19 +878,39 @@ const getObservationsTableInternal = async <T>(
     observationsTableUiColumnDefinitionsForDoris,
   );
 
-  // Phase C: LEFT JOIN root span of the trace (parent_span_id = '').
-  // Used as a COALESCE(o.x, t.x) fallback for trace-level fields when the
-  // observation row itself missed denormalization (out-of-order ingest,
-  // OTel child spans without `langfuse.trace.*`). trace_id is inverted-
-  // indexed; Doris MoW UNIQUE KEY makes this a point-lookup, < 1ms / row.
+  // Trace-values LEFT JOIN: traces_scalar (one row per trace — migration
+  // 0039) serves the trace-column filter mappings only — the projection is
+  // o.-only (upstream-aligned), so the join is skipped entirely unless a
+  // filter or ORDER BY references t.*. MoW unique key means no
+  // duplicate-root fan-out (unlike an events_full is_root = 1 self-join on
+  // the DUPLICATE-model base), and trace_id is its distribution column.
+  // traces_scalar stores NULL where events_full stored '' — COALESCE back so
+  // the filter mappings' ''-convention keeps matching.
+  const needsRootJoin =
+    observationsFilter.some((f) => f.table === "traces") ||
+    dorisOrderBy.includes("t.");
   const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
       FROM events_full o
-               LEFT JOIN events_full t
+               ${
+                 needsRootJoin
+                   ? `LEFT JOIN (
+                   SELECT
+                     project_id,
+                     id AS trace_id,
+                     COALESCE(name, '') AS name,
+                     COALESCE(user_id, '') AS user_id,
+                     COALESCE(session_id, '') AS session_id,
+                     environment,
+                     tags,
+                     start_time
+                   FROM traces_scalar
+                 ) t
                  ON t.project_id = o.project_id
-                AND t.trace_id = o.trace_id
-                AND t.parent_span_id = ''
+                AND t.trace_id = o.trace_id`
+                   : ""
+               }
                ${hasScoresFilter ? `LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id` : ""}
       WHERE ${appliedObservationsFilter.query}
                    ${search.query}
@@ -881,12 +950,10 @@ const getObservationsTableInternal = async <T>(
       unknown
     >;
     if (selectIOAndMetadata) {
-      preprocessed.metadata = zipDorisMetadataArrays(
-        preprocessed.metadata_names,
-        preprocessed.metadata_values,
-      );
-      delete preprocessed.metadata_names;
-      delete preprocessed.metadata_values;
+      preprocessed.metadata =
+        typeof preprocessed.metadata === "string"
+          ? JSON.parse(preprocessed.metadata)
+          : (preprocessed.metadata ?? {});
     }
     return preprocessed as T;
   });
@@ -1104,12 +1171,22 @@ export const getCostForTraces = async (
   timestamp: Date,
   traceIds: string[],
 ) => {
+  // Two-level trace_metrics_agg rewrite shape (sync MV, migration 0040): the
+  // inner scan is expression-identical to the MV (SUM(total_cost), key-column
+  // predicates only — project/trace/day) so Doris rewrites it onto the
+  // rollup; the outer SUM folds the per-trace rows. The time bound is
+  // day-truncated to stay answerable by the rollup's day key — a superset of
+  // the old row-level DATE_SUB bound (the IN-list already pins the traces).
   const query = `
         SELECT sum(total_cost) as total_cost
-        FROM events_full o
-        WHERE o.project_id = {projectId: String}
-        AND o.trace_id IN ({traceIds: Array(String)})
-        AND o.start_time >= DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL})
+        FROM (
+          SELECT trace_id, SUM(total_cost) AS total_cost
+          FROM events_full
+          WHERE project_id = {projectId: String}
+          AND trace_id IN ({traceIds: Array(String)})
+          AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({timestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')
+          GROUP BY project_id, trace_id
+        ) per_trace
       `;
 
   const res = await queryDoris<{ total_cost: string }>({
@@ -1297,8 +1374,9 @@ export const getObservationMetricsForPrompts = async (
                     prompt_version,
                     start_time,
                     end_time,
-                    usage_details,
-                    cost_details,
+                    input_tokens_calculated,
+                    output_tokens_calculated,
+                    total_cost,
                     milliseconds_diff(end_time, start_time) AS latency_ms
                 FROM events_full
                 WHERE (type = 'GENERATION')
@@ -1312,13 +1390,9 @@ export const getObservationMetricsForPrompts = async (
             prompt_version,
             min(start_time) AS first_observation,
             max(start_time) AS last_observation,
-            percentile_approx(
-              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%input%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_input_usage,
-            percentile_approx(
-              COALESCE(array_sum(array_filter((v, k) -> lower(k) LIKE '%output%', map_values(usage_details), map_keys(usage_details))), 0), 0.5) AS median_output_usage,
-            percentile_approx(
-              CASE WHEN MAP_CONTAINS_KEY(cost_details,'total') THEN 
-                cost_details['total'] ELSE 0 END, 0.5) AS median_total_cost,
+            percentile_approx(COALESCE(input_tokens_calculated, 0), 0.5) AS median_input_usage,
+            percentile_approx(COALESCE(output_tokens_calculated, 0), 0.5) AS median_output_usage,
+            percentile_approx(COALESCE(total_cost, 0), 0.5) AS median_total_cost,
             percentile_approx(latency_ms, 0.5) AS median_latency_ms
         FROM latencies
         GROUP BY
@@ -1411,16 +1485,24 @@ export const getLatencyAndTotalCostForObservationsByTraces = async (
   traceIds: string[],
   timestamp?: Date,
 ) => {
+  // trace_metrics_agg rewrite shape (sync MV, migration 0040): SUM/MIN/MAX
+  // are expression-identical to the MV columns (no COALESCE inside SUM — a
+  // NULL sum maps to 0 in the JS Number() conversion below, same output as
+  // the old COALESCE) and predicates only reference MV key expressions, so
+  // Doris rewrites the scan onto the rollup. milliseconds_diff is computed on
+  // top of the rolled-up MIN/MAX, mirroring the traces-list latency formula.
+  // The time bound is day-truncated (rollup's day key) — a superset of the
+  // old row-level bound; the IN-list already pins the traces.
   const query = `
       SELECT
           trace_id,
-          sum(COALESCE(total_cost, 0)) AS total_cost,
-          milliseconds_diff(max(end_time), min(start_time)) AS latency_ms
+          SUM(total_cost) AS total_cost,
+          milliseconds_diff(MAX(end_time), MIN(start_time)) AS latency_ms
       FROM events_full
       WHERE project_id = {projectId: String}
       AND trace_id IN ({traceIds: Array(String)})
-      ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-      GROUP BY trace_id
+      ${timestamp ? `AND date_trunc(start_time, 'day') >= date_trunc({timestamp: DateTime}, 'day')` : ""}
+      GROUP BY project_id, trace_id
     `;
   const rows = await queryDoris<{
     trace_id: string;
@@ -1650,8 +1732,7 @@ export const getObservationsForBlobStorageExport = function (
         start_time,
         end_time,
         name,
-        metadata_names,
-        metadata_values,
+        to_json(metadata) AS metadata,
         level,
         status_message,
         version,
@@ -1703,9 +1784,9 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
         CASE WHEN o.completion_start_time IS NULL THEN NULL
              ELSE milliseconds_diff(o.completion_start_time, o.start_time)
         END as time_to_first_token,
-        o.usage_details['input'] as input_tokens,
-        o.usage_details['output'] as output_tokens,
-        o.usage_details['total'] as total_tokens,
+        o.input_tokens_calculated as input_tokens,
+        o.output_tokens_calculated as output_tokens,
+        o.total_tokens_calculated as total_tokens,
         o.project_id as project_id,
         CASE WHEN o.end_time IS NULL THEN NULL
              ELSE milliseconds_diff(o.end_time, o.start_time) / 1000
@@ -1720,14 +1801,14 @@ export const getGenerationsForAnalyticsIntegrations = async function* (
         COALESCE(NULLIF(o.${dq("release")}, ''), t.${dq("release")}) as trace_release,
         COALESCE(o.tags, t.tags) as trace_tags,
         COALESCE(
-          element_at(o.metadata_values, array_position(o.metadata_names, '$posthog_session_id')),
-          element_at(t.metadata_values, array_position(t.metadata_names, '$posthog_session_id'))
+          o.metadata['$posthog_session_id'],
+          t.metadata['$posthog_session_id']
         ) as posthog_session_id
       FROM events_full o
       LEFT JOIN events_full t
         ON t.project_id = o.project_id
        AND t.trace_id = o.trace_id
-       AND t.parent_span_id = ''
+       AND t.is_root = 1
       WHERE o.project_id = {projectId: String}
       AND o.start_time >= {minTimestamp: DateTime}
       AND o.start_time <= {maxTimestamp: DateTime}
@@ -1859,19 +1940,20 @@ export const getCostByEvaluatorIds = async (
 ): Promise<Array<{ evaluatorId: string; totalCost: number }>> => {
   if (evaluatorIds.length === 0) return [];
 
-  // events_full stores metadata as parallel metadata_names + metadata_values
+  // metadata is read via to_json(metadata) — the raw MAP text form does not
+  // escape inner quotes
   // arrays (no MAP), so the legacy metadata['key'] reads are rewritten as
   // element_at(values, array_position(names, key)).
   const query = `
       SELECT
-        element_at(metadata_values, array_position(metadata_names, 'job_configuration_id')) as evaluator_id,
+        metadata['job_configuration_id'] as evaluator_id,
         sum(COALESCE(total_cost, 0)) as total_cost
       FROM events_full
       WHERE project_id = {projectId: String}
-        AND element_at(metadata_values, array_position(metadata_names, 'job_configuration_id')) IN ({evaluatorIds: Array(String)})
+        AND metadata['job_configuration_id'] IN ({evaluatorIds: Array(String)})
         AND type = 'GENERATION'
         AND start_time > DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-      GROUP BY element_at(metadata_values, array_position(metadata_names, 'job_configuration_id'))
+      GROUP BY metadata['job_configuration_id']
     `;
 
   const rows = await queryDoris<{
