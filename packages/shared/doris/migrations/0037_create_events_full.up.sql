@@ -192,7 +192,14 @@ CREATE TABLE if not exists events_full (
 -- old HASH(project_id) which put a whole project in one bucket.
 DUPLICATE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
-DISTRIBUTED BY HASH(`trace_id`) BUCKETS 90
+-- BUCKETS AUTO: per-deployment data volume is unknown up front, so each new
+-- day-partition gets its bucket count sized from the previous partitions'
+-- actual data volume instead of a fixed guess (a fixed count either starves
+-- large tenants or wastes tablets on small ones). Verified on 4.0.6 together
+-- with AUTO PARTITION. Existing deployments migrate forward via
+--   ALTER TABLE events_full MODIFY DISTRIBUTION DISTRIBUTED BY HASH(trace_id) BUCKETS AUTO;
+-- (applies to newly created partitions; existing partitions keep their count).
+DISTRIBUTED BY HASH(`trace_id`) BUCKETS AUTO
 PROPERTIES (
     "replication_allocation" = "tag.location.default: 1"
 );
