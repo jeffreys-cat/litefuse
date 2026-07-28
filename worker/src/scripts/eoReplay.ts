@@ -43,7 +43,10 @@ const usage = (): never => {
 // Wrapped in main(): the worker tsc build targets CJS, where a file-level
 // top-level await is a compile error.
 const main = async () => {
-  const [cmd, shard, arg] = process.argv.slice(2);
+  // pnpm passes the `--` separator through literally — tolerate both forms.
+  const argv = process.argv.slice(2);
+  if (argv[0] === "--") argv.shift();
+  const [cmd, shard, arg] = argv;
   if (!cmd || !shard || !arg) usage();
 
   const redis = createNewRedisInstance();
