@@ -24,8 +24,14 @@ if [ -z "$DIRECT_URL" ]; then
     export DIRECT_URL="${DATABASE_URL}"
 fi
 
+# Rebrand compatibility: the app env schema defines LITEFUSE_*-prefixed
+# names (what docker-compose passes); accept them with LANGFUSE_* fallback.
+AUTO_PG_MIGRATION_DISABLED="${LITEFUSE_AUTO_POSTGRES_MIGRATION_DISABLED:-$LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED}"
+AUTO_DORIS_MIGRATION_DISABLED="${LITEFUSE_AUTO_DORIS_MIGRATION_DISABLED:-$LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED}"
+ANALYTICS_BACKEND="${LITEFUSE_ANALYTICS_BACKEND:-$LANGFUSE_ANALYTICS_BACKEND}"
+
 # Always execute the postgres migration, except when disabled.
-if [ "$LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED" != "true" ]; then
+if [ "$AUTO_PG_MIGRATION_DISABLED" != "true" ]; then
     prisma db execute --url "$DIRECT_URL" --file "./packages/shared/scripts/cleanup.sql"
 
     # Apply migrations
@@ -41,10 +47,10 @@ if [ $status -ne 0 ]; then
 fi
 
 # Execute the Doris migration, except when disabled.
-if [ "$LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED" != "true" ]; then
+if [ "$AUTO_DORIS_MIGRATION_DISABLED" != "true" ]; then
     # Check if DORIS_FE_HTTP_URL is configured
     if [ -z "$DORIS_FE_HTTP_URL" ]; then
-        echo "Warning: LANGFUSE_ANALYTICS_BACKEND is 'doris' but DORIS_FE_HTTP_URL is not configured. Skipping Doris migrations."
+        echo "Warning: analytics backend is 'doris' but DORIS_FE_HTTP_URL is not configured. Skipping Doris migrations."
     else
         echo "Applying Doris migrations..."
         # Apply Doris migrations
@@ -60,8 +66,8 @@ if [ "$LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED" != "true" ]; then
             exit $status
         fi
     fi
-elif [ "$LANGFUSE_ANALYTICS_BACKEND" = "doris" ]; then
-    echo "Info: LANGFUSE_ANALYTICS_BACKEND is 'doris' but LANGFUSE_AUTO_DORIS_MIGRATION_DISABLED is also true. Skipping Doris migrations."
+elif [ "$ANALYTICS_BACKEND" = "doris" ]; then
+    echo "Info: analytics backend is 'doris' but auto Doris migration is disabled. Skipping Doris migrations."
 fi
 
 # Run the command passed to the docker image on start
