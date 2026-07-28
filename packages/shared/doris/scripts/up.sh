@@ -64,8 +64,16 @@ echo "Connecting to Doris at ${DORIS_HTTP_PROTOCOL}://${DORIS_HOST}:${DORIS_PORT
 echo "Debug: DORIS_USER=${DORIS_USER}, DORIS_PASSWORD=${DORIS_PASSWORD}"
 
 # Build MySQL connection arguments
-# --ssl-mode=DISABLED: mysql client 9.x removed the old --ssl flag
-MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP --ssl-mode=DISABLED"
+# SSL-off flag differs by client flavor and neither is universal:
+# Oracle mysql 8/9 only accepts --ssl-mode=DISABLED (--ssl was removed),
+# MariaDB / older mysql clients only accept --ssl=0 (--ssl-mode unknown).
+# Probe the client's help output and pick the flag it supports.
+if mysql --help 2>&1 | grep -q -- "--ssl-mode"; then
+    SSL_ARG="--ssl-mode=DISABLED"
+else
+    SSL_ARG="--ssl=0"
+fi
+MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP ${SSL_ARG}"
 if [ -n "${DORIS_PASSWORD}" ]; then
     MYSQL_ARGS="${MYSQL_ARGS} -p${DORIS_PASSWORD}"
 fi
