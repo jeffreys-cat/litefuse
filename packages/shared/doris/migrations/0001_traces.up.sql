@@ -29,5 +29,5 @@ UNIQUE KEY(project_id, timestamp_date,id)
 AUTO PARTITION BY RANGE (date_trunc(`timestamp_date`, 'month')) ()
 DISTRIBUTED BY HASH(project_id) BUCKETS 8
 PROPERTIES (
-"replication_allocation" = "tag.location.default: 1"
+"replication_allocation" = "tag.location.default: 3"
 );

@@ -201,5 +201,5 @@ AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
 -- (applies to newly created partitions; existing partitions keep their count).
 DISTRIBUTED BY HASH(`trace_id`) BUCKETS AUTO
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1"
+    "replication_allocation" = "tag.location.default: 3"
 );

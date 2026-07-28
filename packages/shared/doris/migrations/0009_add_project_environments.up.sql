@@ -8,5 +8,5 @@ CREATE TABLE IF NOT EXISTS project_environments (
 DUPLICATE KEY(project_id)
 DISTRIBUTED BY HASH(project_id) BUCKETS AUTO
 PROPERTIES (
-"replication_allocation" = "tag.location.default: 1"
+"replication_allocation" = "tag.location.default: 3"
 );

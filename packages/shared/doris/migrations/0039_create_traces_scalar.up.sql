@@ -64,7 +64,7 @@ AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
 -- BUCKETS AUTO: sized per new partition from observed volume (see 0037 note).
 DISTRIBUTED BY HASH(`id`) BUCKETS AUTO
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1",
+    "replication_allocation" = "tag.location.default: 3",
     "enable_unique_key_merge_on_write" = "true"
 );
 
