@@ -9,6 +9,7 @@ import {
 import {
   computeGroupId,
   eventsFullLabelForGroup,
+  labelForGroupTable,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
   type StreamLoadBodySource,
@@ -114,11 +115,20 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(events.options).not.toHaveProperty("max_filter_ratio");
     expect(events.rows).toHaveLength(4); // 2 files × 2 records
 
+    // ALL loads carry deterministic labels — a group's lifetime FE
+    // label-registry footprint is exactly 3 slots regardless of retries
+    // (random per-attempt labels flooded the registry and evicted events
+    // labels: duplicate-data incident 2026-07-28).
     expect(scalar.table).toBe("traces_scalar");
-    expect(scalar.options).not.toHaveProperty("label"); // MoW, no label
+    expect(scalar.options.label).toBe(
+      labelForGroupTable(payload.groupId, "traces_scalar"),
+    );
 
     // Ledger is the LAST load — its existence certifies end-to-end completion.
     expect(ledger.table).toBe("blob_storage_file_log");
+    expect(ledger.options.label).toBe(
+      labelForGroupTable(payload.groupId, "blob_storage_file_log"),
+    );
     expect(ledger.rows).toHaveLength(2);
     expect(ledger.rows[0]).toMatchObject({
       entity_type: "otel-file",

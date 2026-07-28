@@ -4,6 +4,7 @@ import pLimit from "p-limit";
 import {
   dorisClient,
   eventsFullLabelForGroup,
+  labelForGroupTable,
   formatRecordForDoris,
   getS3EventStorageClient,
   logger,
@@ -266,15 +267,21 @@ export const processOtelGroupJob = async (
     }
   }
   const tScalar = Date.now();
+  let scalarDeduped = false;
   if (scalarRows && scalarRowCount > 0 && !skipScalar) {
     const scalarBody = ndjsonBody(scalarRows);
     scalarRows = null;
-    await deps.streamLoadBody(
+    // Deterministic label (see labelForGroupTable): dedup here is a
+    // server-side no-op bonus on top of MoW folding — the DELETE-protection
+    // semantics still belong to the ledger gate above, which short-circuits
+    // before this load is even attempted.
+    const scalarOutcome = await deps.streamLoadBody(
       "traces_scalar",
       scalarBody,
       scalarRowCount,
-      LOAD_OPTS,
+      { ...LOAD_OPTS, label: labelForGroupTable(groupId, "traces_scalar") },
     );
+    scalarDeduped = scalarOutcome.dedupedByLabel;
   }
   scalarRows = null;
   const scalarMs = Date.now() - tScalar;
@@ -338,9 +345,11 @@ export const processOtelGroupJob = async (
       : "none";
   const scalarPart = skipScalar
     ? "SKIPPED(gate)"
-    : scalarRowCount > 0
-      ? `${scalarMs}ms ${scalarRowCount}rows`
-      : "none";
+    : scalarDeduped
+      ? "LABEL_DEDUP"
+      : scalarRowCount > 0
+        ? `${scalarMs}ms ${scalarRowCount}rows`
+        : "none";
   logger.info(
     `[OtelGroupJob] group=${groupId.slice(0, 12)} files=${entries.length}${deadFiles > 0 ? ` dead_files=${deadFiles}` : ""} | transform=${transformMs}ms | events_full: ${eventsPart} | scalar: ${scalarPart} | ledger=${ledgerMs}ms | total=${totalMs}ms e2e_lag=${((Date.now() - oldestTs) / 1000).toFixed(1)}s`,
   );
@@ -363,12 +372,18 @@ const writeLedger = async (
     bucket_path: e.fileKey,
   }));
   // blob_storage_file_log is UNIQUE KEY(project_id, entity_type, entity_id,
-  // event_id) — replayed ledger writes fold, no label needed.
+  // event_id) — replayed ledger writes fold. The deterministic label is NOT
+  // needed for correctness here; it caps the group's FE label-registry
+  // footprint (see labelForGroupTable — retry storms with random labels
+  // evicted events labels and caused duplicate loads).
   await deps.streamLoadBody(
     "blob_storage_file_log",
     ndjsonBody(rows),
     rows.length,
-    LOAD_OPTS,
+    {
+      ...LOAD_OPTS,
+      label: labelForGroupTable(payload.groupId, "blob_storage_file_log"),
+    },
   );
 };
 

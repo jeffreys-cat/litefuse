@@ -75,9 +75,26 @@ export const sha1Hex = (s: string): string =>
 export const computeGroupId = (fileKeys: string[]): string =>
   sha1Hex([...fileKeys].sort().join(","));
 
+/**
+ * Deterministic stream-load label for a group's load into `table`.
+ *
+ * ALL THREE loads of a group job (events_full / traces_scalar /
+ * blob_storage_file_log) use deterministic labels — not only events_full.
+ * The FE label registry is a CAPACITY-bounded shared resource
+ * (label_num_threshold, default 2000): random per-attempt labels made every
+ * retry burn fresh registry slots (ABORTED transactions occupy slots too),
+ * and a sustained retry storm was measured to shrink the registry's memory
+ * to ~15 minutes — evicting the events label long before its replay arrived
+ * and re-loading a committed batch (duplicate-data incident, 2026-07-28).
+ * Deterministic labels cap a group's lifetime registry footprint at exactly
+ * 3 slots no matter how often it retries.
+ */
+export const labelForGroupTable = (groupId: string, table: string): string =>
+  `lf2_${sha1Hex(`${groupId}_${table}`)}`;
+
 /** Deterministic stream-load label for a group's events_full batch. */
 export const eventsFullLabelForGroup = (groupId: string): string =>
-  `lf2_${sha1Hex(`${groupId}_events_full`)}`;
+  labelForGroupTable(groupId, "events_full");
 
 // ---------------------------------------------------------------------------
 // Lua scripts
