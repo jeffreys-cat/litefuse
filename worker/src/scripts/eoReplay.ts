@@ -23,8 +23,8 @@ import {
   QueueJobs,
   createNewRedisInstance,
   registerOtelFile,
-  dorisClient,
 } from "@langfuse/shared/src/server";
+import { prisma } from "@langfuse/shared/src/db";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
 
 const usage = (): never => {
@@ -71,19 +71,18 @@ const main = async () => {
       console.log(`attempt ${i + 1}: admitted=${admitted}`);
     }
   } else if (cmd === "re-add-job") {
-    const rows = await dorisClient().query(
-      `SELECT entity_id, project_id FROM blob_storage_file_log WHERE event_id = '${arg.replace(/'/g, "''")}' AND entity_type = 'otel-file'`,
-    );
-    const entries = (Array.isArray(rows) ? rows : []).map(
-      (r: Record<string, unknown>) => ({
-        v: 1 as const,
-        fileKey: String(r.entity_id),
-        size: 0,
-        spanCount: 0,
-        ts: Date.now(),
-        projectId: String(r.project_id),
-      }),
-    );
+    const rows = await prisma.otelFileLedger.findMany({
+      where: { groupId: arg },
+      select: { fileKey: true, projectId: true },
+    });
+    const entries = rows.map((r) => ({
+      v: 1 as const,
+      fileKey: r.fileKey,
+      size: 0,
+      spanCount: 0,
+      ts: Date.now(),
+      projectId: r.projectId,
+    }));
     if (entries.length === 0) {
       throw new Error(
         `groupId not found in ledger (need the FULL 40-char sha1; logs only print the first 12): ${arg}`,

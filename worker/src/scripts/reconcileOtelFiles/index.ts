@@ -93,6 +93,13 @@ const main = async () => {
       "--older-than-hours >= registered-key TTL: the auto-reinject category degenerates (registration evidence expires first); everything unexplained will fall to manual audit",
     );
   }
+  const ledgerRetentionMs =
+    env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS * 24 * 3600_000;
+  if (OLDER_THAN_MS >= ledgerRetentionMs) {
+    throw new Error(
+      `--older-than-hours (${OLDER_THAN_MS / 3600_000}h) must stay BELOW the ledger retention (LITEFUSE_OTEL_LEDGER_RETENTION_DAYS = ${env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS}d): a completed file whose ledger row already expired would classify as reinject and be re-ingested — the backstop would manufacture duplicates`,
+    );
+  }
 
   // Same topology-aware factory the pipeline itself uses (connection string /
   // sentinel / cluster / TLS all honored, no ioredis keyPrefix) — a hand-rolled
@@ -160,19 +167,17 @@ const main = async () => {
     ),
   );
 
-  // ③ Ledger membership, batched IN queries (multiple rows per fileKey are
-  // possible — event_id is part of the UNIQUE KEY — membership only).
+  // ③ Ledger membership (PG otel_file_ledger; multiple rows per fileKey are
+  // possible — reconcile reinjection creates a second (fileKey, groupId)
+  // pair — membership only).
   const withLedger = new Set<string>();
   for (let i = 0; i < files.length; i += BATCH) {
     const batch = files.slice(i, i + BATCH);
-    const inList = batch
-      .map((f) => `'${f.file.replace(/'/g, "''")}'`)
-      .join(",");
-    const rows = await client.query(
-      `SELECT DISTINCT entity_id FROM blob_storage_file_log
-       WHERE entity_type = 'otel-file' AND entity_id IN (${inList})`,
-    );
-    for (const r of rows ?? []) withLedger.add(String(r.entity_id));
+    const rows = await prisma.otelFileLedger.findMany({
+      where: { fileKey: { in: batch.map((f) => f.file) } },
+      select: { fileKey: true },
+    });
+    for (const r of rows) withLedger.add(r.fileKey);
   }
 
   // ④ Classify + act.

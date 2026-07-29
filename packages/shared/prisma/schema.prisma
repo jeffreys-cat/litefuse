@@ -1655,3 +1655,22 @@ model OtelPoisonJob {
   @@index([createdAt])
   @@map("otel_poison_jobs")
 }
+
+// EO completion ledger (design §3.5 v3.2): one row = "this fileKey completed
+// end-to-end as part of groupId". Moved from Doris blob_storage_file_log —
+// the per-group 2-row stream loads concentrated tablet versions and tripped
+// max_tablet_version_num (E-235, 2026-07-28 incident); PG handles small
+// frequent inserts natively and is already on the group job's critical path
+// (trace_sessions upsert precedes the ledger write).
+model OtelFileLedger {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  fileKey   String   @map("file_key")
+  groupId   String   @map("group_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([fileKey, groupId])
+  @@index([groupId])
+  @@index([createdAt])
+  @@map("otel_file_ledger")
+}

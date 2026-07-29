@@ -107,6 +107,13 @@ const EnvSchema = z.object({
     .default(3 * 24 * 60 * 60 * 1000),
   LITEFUSE_OTEL_DLQ_MAX_REDRIVES: z.coerce.number().positive().default(5),
   LITEFUSE_OTEL_DLQ_BATCH_LIMIT: z.coerce.number().positive().default(500),
+  // PG completion-ledger retention. MUST stay ABOVE the reconcile re-inject
+  // threshold (--older-than-hours, default 80h) or the backstop manufactures
+  // duplicates: a completed file whose ledger row expired, but whose
+  // registered key (4d TTL) is still alive, classifies as reinject and gets
+  // re-ingested. Ideally >= the reconcile scan window (8d) so completed
+  // files never even degrade into audit noise. Default 10 days.
+  LITEFUSE_OTEL_LEDGER_RETENTION_DAYS: z.coerce.number().positive().default(10),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()

@@ -78,8 +78,9 @@ export const computeGroupId = (fileKeys: string[]): string =>
 /**
  * Deterministic stream-load label for a group's load into `table`.
  *
- * ALL THREE loads of a group job (events_full / traces_scalar /
- * blob_storage_file_log) use deterministic labels — not only events_full.
+ * BOTH Doris loads of a group job (events_full / traces_scalar) use
+ * deterministic labels — not only events_full. (The completion ledger moved
+ * to PG otel_file_ledger and needs no label at all.)
  * The FE label registry is a CAPACITY-bounded shared resource
  * (label_num_threshold, default 2000): random per-attempt labels made every
  * retry burn fresh registry slots (ABORTED transactions occupy slots too),
@@ -87,7 +88,7 @@ export const computeGroupId = (fileKeys: string[]): string =>
  * to ~15 minutes — evicting the events label long before its replay arrived
  * and re-loading a committed batch (duplicate-data incident, 2026-07-28).
  * Deterministic labels cap a group's lifetime registry footprint at exactly
- * 3 slots no matter how often it retries.
+ * 2 slots no matter how often it retries.
  */
 export const labelForGroupTable = (groupId: string, table: string): string =>
   `lf2_${sha1Hex(`${groupId}_${table}`)}`;

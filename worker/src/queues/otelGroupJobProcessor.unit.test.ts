@@ -93,6 +93,21 @@ const makeDeps = (
       };
     }),
     ledgerExists: vi.fn(async () => overrides.ledger ?? false),
+    // PG completion ledger (moved off Doris — the tiny per-group stream
+    // loads were the tablet-version incident trigger). Recorded into the
+    // same timeline as loads so ordering assertions still work.
+    persistLedger: vi.fn(async ({ groupId, entries }) => {
+      loads.push({
+        table: "pg:otel_file_ledger",
+        rows: entries.map((e: OtelPendingEntryType) => ({
+          fileKey: e.fileKey,
+          projectId: e.projectId,
+          groupId,
+        })),
+        count: entries.length,
+        options: {},
+      });
+    }),
     upsertSessions: vi.fn(async () => {}),
     transformConcurrency: 2,
     ...overrides,
@@ -115,8 +130,8 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(events.options).not.toHaveProperty("max_filter_ratio");
     expect(events.rows).toHaveLength(4); // 2 files × 2 records
 
-    // ALL loads carry deterministic labels — a group's lifetime FE
-    // label-registry footprint is exactly 3 slots regardless of retries
+    // Both Doris loads carry deterministic labels — a group's lifetime FE
+    // label-registry footprint is exactly 2 slots regardless of retries
     // (random per-attempt labels flooded the registry and evicted events
     // labels: duplicate-data incident 2026-07-28).
     expect(scalar.table).toBe("traces_scalar");
@@ -124,17 +139,13 @@ describe("processOtelGroupJob (core EO semantics)", () => {
       labelForGroupTable(payload.groupId, "traces_scalar"),
     );
 
-    // Ledger is the LAST load — its existence certifies end-to-end completion.
-    expect(ledger.table).toBe("blob_storage_file_log");
-    expect(ledger.options.label).toBe(
-      labelForGroupTable(payload.groupId, "blob_storage_file_log"),
-    );
+    // Ledger (PG) is written LAST — its existence certifies end-to-end
+    // completion.
+    expect(ledger.table).toBe("pg:otel_file_ledger");
     expect(ledger.rows).toHaveLength(2);
     expect(ledger.rows[0]).toMatchObject({
-      entity_type: "otel-file",
-      entity_id: "f1.json",
-      event_id: payload.groupId,
-      is_deleted: 0,
+      fileKey: "f1.json",
+      groupId: payload.groupId,
     });
     expect(deps.upsertSessions).toHaveBeenCalledTimes(1);
   });
@@ -166,7 +177,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     const events = loads.find((l) => l.table === "events_full")!;
     expect(events.rows).toHaveLength(1); // only good.json's record
     // Ledger still covers BOTH files (bad one is dead-lettered, not retried).
-    const ledger = loads.find((l) => l.table === "blob_storage_file_log")!;
+    const ledger = loads.find((l) => l.table === "pg:otel_file_ledger")!;
     expect(ledger.rows).toHaveLength(2);
   });
 
@@ -191,7 +202,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     );
 
     await processOtelGroupJob(payload, deps);
-    expect(loads.map((l) => l.table)).toEqual(["blob_storage_file_log"]);
+    expect(loads.map((l) => l.table)).toEqual(["pg:otel_file_ledger"]);
   });
 
   it("C6 replay: label deduped + ledger MISSING → scalar MUST be loaded", async () => {
@@ -205,7 +216,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(loads.map((l) => l.table)).toEqual([
       "events_full",
       "traces_scalar",
-      "blob_storage_file_log",
+      "pg:otel_file_ledger",
     ]);
   });
 
@@ -216,7 +227,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     await processOtelGroupJob(payload, deps);
     expect(loads.map((l) => l.table)).toEqual([
       "events_full",
-      "blob_storage_file_log",
+      "pg:otel_file_ledger",
     ]);
   });
 

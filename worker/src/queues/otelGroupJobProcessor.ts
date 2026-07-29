@@ -11,7 +11,6 @@ import {
   recordHistogram,
   recordIncrement,
   traceException,
-  convertDateToAnalyticsDateTime,
   OtelIngestionProcessor,
   type EventRecordInsertType,
   type OtelGroupIngestionEventType,
@@ -138,6 +137,11 @@ export type GroupJobDeps = {
     options: Record<string, unknown>,
   ) => Promise<StreamLoadOutcome>;
   ledgerExists: (groupId: string) => Promise<boolean>;
+  /** Idempotent PG write of the completion ledger (one row per fileKey). */
+  persistLedger: (params: {
+    groupId: string;
+    entries: OtelPendingEntryType[];
+  }) => Promise<void>;
   upsertSessions: (
     sessions: Array<{ id: string; projectId: string; environment: string }>,
   ) => Promise<void>;
@@ -355,36 +359,22 @@ export const processOtelGroupJob = async (
   );
 };
 
+// The ledger lives in POSTGRES (otel_file_ledger), not Doris. Its Doris
+// incarnation was a per-group 2-row stream load — tablet versions piled up on
+// the tiny table's few tablets and tripped max_tablet_version_num (E-235,
+// the 2026-07-28 incident trigger). PG absorbs small frequent inserts
+// natively, replays fold via the (file_key, group_id) unique key
+// (createMany skipDuplicates), no label needed — and PG is already on this
+// job's critical path (upsertSessions precedes the ledger write), so this
+// adds zero new failure modes.
 const writeLedger = async (
   payload: OtelGroupIngestionEventType,
   deps: GroupJobDeps,
 ): Promise<void> => {
-  const now = convertDateToAnalyticsDateTime(new Date());
-  const rows = payload.entries.map((e) => ({
-    project_id: e.projectId,
-    entity_type: "otel-file",
-    entity_id: e.fileKey,
-    event_id: payload.groupId,
-    event_ts: now,
-    is_deleted: 0,
-    id: e.fileKey,
-    bucket_name: sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET ?? "",
-    bucket_path: e.fileKey,
-  }));
-  // blob_storage_file_log is UNIQUE KEY(project_id, entity_type, entity_id,
-  // event_id) — replayed ledger writes fold. The deterministic label is NOT
-  // needed for correctness here; it caps the group's FE label-registry
-  // footprint (see labelForGroupTable — retry storms with random labels
-  // evicted events labels and caused duplicate loads).
-  await deps.streamLoadBody(
-    "blob_storage_file_log",
-    ndjsonBody(rows),
-    rows.length,
-    {
-      ...LOAD_OPTS,
-      label: labelForGroupTable(payload.groupId, "blob_storage_file_log"),
-    },
-  );
+  await deps.persistLedger({
+    groupId: payload.groupId,
+    entries: payload.entries,
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -421,10 +411,21 @@ export const buildGroupJobDeps = (params: {
       });
     },
     ledgerExists: async (groupId) => {
-      const rows = await client.query(
-        `SELECT 1 AS e FROM blob_storage_file_log WHERE event_id = '${groupId.replace(/'/g, "''")}' AND entity_type = 'otel-file' LIMIT 1`,
-      );
-      return Array.isArray(rows) && rows.length > 0;
+      const row = await prisma.otelFileLedger.findFirst({
+        where: { groupId },
+        select: { id: true },
+      });
+      return row !== null;
+    },
+    persistLedger: async ({ groupId, entries }) => {
+      await prisma.otelFileLedger.createMany({
+        data: entries.map((e) => ({
+          projectId: e.projectId,
+          fileKey: e.fileKey,
+          groupId,
+        })),
+        skipDuplicates: true,
+      });
     },
     upsertSessions: async (sessions) => {
       await prisma.traceSession.createMany({
