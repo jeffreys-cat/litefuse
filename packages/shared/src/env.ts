@@ -97,6 +97,20 @@ const EnvSchema = z.object({
   LITEFUSE_AUTO_DORIS_MIGRATION_DISABLED: z
     .enum(["true", "false"])
     .default("false"),
+  // Per-project table split (docs/project-per-table-implementation-design.md):
+  //   none                 — no split; every project uses the shared tables
+  //                          (current behaviour, and the rollback position).
+  //   project_id           — every project gets its own events_full_<pid> /
+  //                          traces_scalar_<pid> (only for bounded project
+  //                          counts — lane/table count is unbounded).
+  //   project_id_with_rule — split only projects flagged in the PG control
+  //                          table doris_project_table_split (unlisted →
+  //                          shared).
+  // Stage 0 ships this switch defaulting to none: tableFor/laneFor are the
+  // identity of today's behaviour until Stage 1 wires the control table.
+  LITEFUSE_DORIS_TABLE_SPLIT_MODE: z
+    .enum(["none", "project_id", "project_id_with_rule"])
+    .default("none"),
 
   // Analytics backend selection (Doris only)
   LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
