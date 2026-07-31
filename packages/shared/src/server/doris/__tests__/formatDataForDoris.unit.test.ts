@@ -182,6 +182,58 @@ describe("formatDataForDoris", () => {
     });
   });
 
+  // Under LITEFUSE_DORIS_TABLE_SPLIT_MODE the writer targets physical names
+  // (events_full_<pid>). DATE_FIELD_MAPPINGS is keyed on logical names, so the
+  // physical name must be reversed with toLogicalTable BEFORE the lookup — else
+  // events_full_<pid> falls to the dual-column fallback and injects stray
+  // timestamp_date/start_time_date columns that events_full has no slot for.
+  describe("date field generation for split physical table names", () => {
+    const PID = "cmqiwxsca0006pj070fdkn0vd";
+
+    it("events_full_<pid> injects NO date columns (logical events_full → null mapping)", () => {
+      const result = formatDataForDoris(
+        [
+          {
+            timestamp: "2024-06-15T12:00:00.000Z",
+            start_time: "2024-06-16T12:00:00.000Z",
+          },
+        ],
+        `events_full_${PID}`,
+      );
+      // The dirty-column hazard: neither derived date column may appear.
+      expect((result[0] as any).timestamp_date).toBeUndefined();
+      expect((result[0] as any).start_time_date).toBeUndefined();
+    });
+
+    it("traces_scalar_<pid> derives start_time_date only (no stray timestamp_date)", () => {
+      const result = formatDataForDoris(
+        [
+          {
+            timestamp: "2024-06-15T12:00:00.000Z",
+            start_time: "2024-06-16T12:00:00.000Z",
+          },
+        ],
+        `traces_scalar_${PID}`,
+      );
+      expect((result[0] as any).start_time_date).toBeDefined();
+      expect((result[0] as any).timestamp_date).toBeUndefined();
+    });
+
+    it("shared logical names are unaffected (mode=none identity)", () => {
+      const result = formatDataForDoris(
+        [
+          {
+            timestamp: "2024-06-15T12:00:00.000Z",
+            start_time: "2024-06-16T12:00:00.000Z",
+          },
+        ],
+        "events_full",
+      );
+      expect((result[0] as any).timestamp_date).toBeUndefined();
+      expect((result[0] as any).start_time_date).toBeUndefined();
+    });
+  });
+
   describe("metadata normalization for Doris MAP parsing", () => {
     it("should parse JSON object values to native objects (structure preserved)", () => {
       const result = formatDataForDoris([

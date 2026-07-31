@@ -42,10 +42,10 @@ export function parseAnalyticsDateTimeFormat(dateString: string): Date {
 /**
  * Convert Date to analytics backend DateTime format
  */
-export function convertDateToAnalyticsDateTime(date: Date): string {
-  // Doris stores UTC time
-  return date.toISOString().replace("T", " ").replace("Z", "");
-}
+// Re-exported from the leaf module so every `import … from "./analytics"` site
+// keeps working while parameterProcessor imports the leaf directly (breaks the
+// analytics ↔ doris ↔ parameterProcessor require cycle).
+export { convertDateToAnalyticsDateTime } from "./analyticsDateTime";
 
 /**
  * Get the current analytics backend name
@@ -61,21 +61,7 @@ export function getAnalyticsBackend(): string {
 //   return true;
 // }
 
-// Doris reserved words that need backtick quoting
-const DORIS_RESERVED = new Set([
-  "release",
-  "public",
-  "user",
-  "key",
-  "value",
-  "index",
-  "type",
-]);
-
-/**
- * Quote a column name for Doris if it's a reserved word.
- * Returns `col` as-is for non-reserved words, or wraps in backticks.
- */
-export function dq(col: string): string {
-  return DORIS_RESERVED.has(col.toLowerCase()) ? "`" + col + "`" : col;
-}
+// dq moved to the analyticsDateTime leaf (module-init callers must not trigger
+// analytics's own require cycle) — re-exported so `import { dq } from "./analytics"`
+// still resolves for non-module-init callers.
+export { dq } from "./analyticsDateTime";

@@ -519,6 +519,15 @@ export type DefaultView = {
   view_name: string;
   view_id: string;
 };
+export type DorisProjectTableSplit = {
+  project_id: string;
+  split: Generated<boolean>;
+  retention_days: number | null;
+  note: string | null;
+  schema_version: number | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Timestamp;
+};
 export type EvalTemplate = {
   id: string;
   created_at: Generated<Timestamp>;
@@ -1008,6 +1017,7 @@ export type DB = {
   datasets: Dataset;
   default_llm_models: DefaultLlmModel;
   default_views: DefaultView;
+  doris_project_table_split: DorisProjectTableSplit;
   eval_templates: EvalTemplate;
   job_configurations: JobConfiguration;
   job_executions: JobExecution;

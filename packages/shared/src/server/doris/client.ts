@@ -9,6 +9,7 @@ import { getCurrentSpan } from "../instrumentation";
 import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
+import { toLogicalTable } from "./tableRouting";
 
 // Doris reports charset 33 (utf8) in MySQL protocol column metadata, but stores
 // utf8mb4. mysql2 maps charset 33 to 'cesu8' (3-byte), so 4-byte chars (emoji)
@@ -1264,8 +1265,16 @@ export const formatRecordForDoris = <T extends Record<string, any>>(
   // Step 2: Generate date fields based on table type. A listed table with a
   // null mapping (events_full) needs no derived date field; only UNKNOWN
   // tables fall to the dual-column fallback.
-  if (tableName && tableName in DATE_FIELD_MAPPINGS) {
-    const mapping = DATE_FIELD_MAPPINGS[tableName];
+  //
+  // DATE_FIELD_MAPPINGS is keyed on LOGICAL table names. Under table split the
+  // writer targets physical names (events_full_<pid>), which are absent from
+  // the map and would fall to the dual-column fallback — injecting stray
+  // timestamp_date/start_time_date columns that events_full has no slot for
+  // (dirty write). toLogicalTable reverses the projectId suffix first; it is
+  // identity for the shared logical names, so mode=none is unaffected.
+  const logicalTable = tableName ? toLogicalTable(tableName) : undefined;
+  if (logicalTable && logicalTable in DATE_FIELD_MAPPINGS) {
+    const mapping = DATE_FIELD_MAPPINGS[logicalTable];
     if (mapping) {
       generateDateField(formatted, mapping.sourceField, mapping.dateField);
     }

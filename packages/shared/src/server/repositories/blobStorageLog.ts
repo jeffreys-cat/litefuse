@@ -2,6 +2,7 @@ import { BlobStorageFileRefRecordReadType } from "./definitions";
 // Add Doris imports
 import { convertDateToAnalyticsDateTime } from "./analytics";
 import { queryDoris, queryDorisStream } from "./doris";
+import { tableFor } from "../doris/tableRouting";
 
 export const getBlobStorageByProjectAndEntityId = async (
   projectId: string,
@@ -124,7 +125,7 @@ export const getBlobStorageByProjectIdAndTraceIds = (
           id as entity_id,
           project_id as project_id,
           'trace' as entity_type
-        from traces_scalar
+        from ${tableFor(projectId, "traces_scalar")}
         where project_id = {projectId: String}
           and id in ({traceIds: Array(String)})
       ), filtered_observations as (
@@ -132,7 +133,7 @@ export const getBlobStorageByProjectIdAndTraceIds = (
           span_id as entity_id,
           project_id as project_id,
           'observation' as entity_type
-        from events_full
+        from ${tableFor(projectId, "events_full")}
         where project_id = {projectId: String}
           and trace_id in ({traceIds: Array(String)})
       ), filtered_scores as (

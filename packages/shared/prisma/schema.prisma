@@ -1674,3 +1674,26 @@ model OtelFileLedger {
   @@index([createdAt])
   @@map("otel_file_ledger")
 }
+
+// Per-project Doris table-split control table (docs/project-per-table-*.md).
+// One row per project that gets its own events_full_<pid> / traces_scalar_<pid>
+// / trace_metrics_agg_<pid> tables. Consulted (cached) by isSplitProject when
+// LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
+//   - split         : the table-split is LIVE for this project (only flipped
+//                     true once the physical tables + MV are ready — Stage 1.2).
+//   - retentionDays  : per-project TTL (days); null = use the global default.
+//   - note           : free-text operator note (why split, ticket, etc.).
+model DorisProjectTableSplit {
+  projectId     String   @id @map("project_id")
+  split         Boolean  @default(false)
+  retentionDays Int?     @map("retention_days")
+  note          String?
+  // Template/schema version the physical tables were provisioned at (Stage 1.2c
+  // readiness gate). Set when provisioning flips split=true; a later bump of
+  // SPLIT_SCHEMA_VERSION signals those tables need a schema migration.
+  schemaVersion Int?     @map("schema_version")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("doris_project_table_split")
+}

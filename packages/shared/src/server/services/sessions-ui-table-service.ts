@@ -13,6 +13,7 @@ import {
 import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import { parseDorisStringArray } from "../utils/dorisArrays";
+import { tableFor } from "../doris/tableRouting";
 
 export type SessionDataReturnType = {
   session_id: string;
@@ -187,7 +188,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
   const filters = [];
   if (traceTimestampFilter) {
     // traces_scalar uses start_time (not timestamp). The CTE this filter
-    // lands inside is FROM traces_scalar t, so the bare column reference
+    // lands inside is FROM ${tableFor(projectId, "traces_scalar")} t, so the bare column reference
     // resolves against the traces_scalar schema.
     filters.push(
       new DorisDateTimeFilter({
@@ -337,7 +338,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
       select === "count"
         ? `
         SELECT count(DISTINCT session_id) as count
-        FROM traces_scalar
+        FROM ${tableFor(projectId, "traces_scalar")}
         WHERE project_id = {projectId: String}
           AND session_id IS NOT NULL AND session_id != ''
           ${sharedClause ? `AND ${sharedClause}` : ""}
@@ -346,7 +347,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
         : `
         WITH top_sessions AS (
           SELECT session_id, MIN(start_time) AS min_timestamp
-          FROM traces_scalar
+          FROM ${tableFor(projectId, "traces_scalar")}
           WHERE project_id = {projectId: String}
             AND session_id IS NOT NULL AND session_id != ''
             ${sharedClause ? `AND ${sharedClause}` : ""}
@@ -368,7 +369,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
             count(*) as trace_count,
             array_remove(group_array_union(t.tags), '') AS trace_tags,
             any_value(t.environment) as trace_environment
-          FROM traces_scalar t
+          FROM ${tableFor(projectId, "traces_scalar")} t
           INNER JOIN top_sessions s ON t.session_id = s.session_id
           WHERE t.project_id = {projectId: String}
             ${sharedClause ? `AND ${sharedClause}` : ""}
@@ -405,7 +406,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           SELECT id, session_id, project_id,
                  bookmarked, start_time,
                  COALESCE(user_id, '') AS user_id, tags, environment, event_ts
-          FROM traces_scalar t
+          FROM ${tableFor(projectId, "traces_scalar")} t
           WHERE t.project_id = {projectId: String}
             AND t.session_id IS NOT NULL AND t.session_id != ''
             ${singleTraceFilter?.query ? ` AND ${singleTraceFilter.query}` : ""}
@@ -441,7 +442,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
                   SUM(input_cost_calculated) as sum_input_cost,
                   SUM(output_cost_calculated) as sum_output_cost,
                   SUM(total_cost) as sum_total_cost
-            FROM events_full
+            FROM ${tableFor(projectId, "events_full")}
             WHERE project_id = {projectId: String}
             ${traceTimestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({observationsStartTime: DateTime}, INTERVAL 2 DAY), 'day')` : ""}
             GROUP BY project_id, trace_id

@@ -112,6 +112,11 @@ const EnvSchema = z.object({
     .enum(["none", "project_id", "project_id_with_rule"])
     .default("none"),
 
+  // Replication factor for per-project split tables (mirrors the doris/up.sh
+  // DORIS_REPLICATION_NUM the shared-table migrations use): 3 for reliability,
+  // 1 for single-BE dev boxes and compute-storage-separated / cloud Doris.
+  DORIS_REPLICATION_NUM: z.coerce.number().int().positive().default(3),
+
   // Analytics backend selection (Doris only)
   LITEFUSE_ANALYTICS_BACKEND: z.enum(["doris"]).default("doris"),
 

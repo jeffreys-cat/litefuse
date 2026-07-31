@@ -8,6 +8,7 @@ import { FilterState } from "../../types";
 import { FilterList } from "../queries";
 import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
 import { dashboardColumnDefinitions } from "../tableMappings";
+import { tableFor } from "../doris/tableRouting";
 
 export type DateTrunc = "month" | "week" | "day" | "hour" | "minute";
 
@@ -18,7 +19,7 @@ export type DateTrunc = "month" | "week" | "day" | "hour" | "minute";
 // apply unchanged. traces_scalar stores NULL where events_full root rows
 // stored '' — COALESCE back to '' preserves the previous filter semantics.
 // Doris prunes unreferenced derived-table columns, so unused fields are free.
-const TRACES_SCALAR_JOIN_TARGET = `(
+const tracesScalarJoinTarget = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -33,7 +34,7 @@ const TRACES_SCALAR_JOIN_TARGET = `(
         start_time AS \`timestamp\`,
         bookmarked,
         \`public\`
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
     )`;
 
 const extractEnvironmentFilterFromFilters = (
@@ -91,7 +92,7 @@ export const getScoreAggregate = async (
         s.source,
         s.data_type
       FROM scores s
-      ${hasTraceFilter ? `JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON t.trace_id = s.trace_id AND t.project_id = s.project_id` : ""}
+      ${hasTraceFilter ? `JOIN ${tracesScalarJoinTarget(projectId)} t ON t.trace_id = s.trace_id AND t.project_id = s.project_id` : ""}
       WHERE s.project_id = {projectId: String}
       ${dorisFilterApplied.query ? `AND ${dorisFilterApplied.query}` : ""}
       ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -171,10 +172,10 @@ export const getObservationCostByTypeByTime = async (
               ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "o.start_time", "start_time")},
               keys_exploded.cost_key as cost_key, 
               SUM(values_exploded.cost_value) AS cost_sum
-          FROM events_full o
+          FROM ${tableFor(projectId, "events_full")} o
           LATERAL VIEW posexplode(map_keys(cost_details)) keys_exploded AS key_pos, cost_key
           LATERAL VIEW posexplode(map_values(cost_details)) values_exploded AS value_pos, cost_value
-          ${tracesFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
+          ${tracesFilter ? `LEFT JOIN ${tracesScalarJoinTarget(projectId)} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}
@@ -302,10 +303,10 @@ export const getObservationUsageByTypeByTime = async (
               ${selectTimeseriesColumnDoris(bucketSizeInSeconds, "o.start_time", "start_time")},
               keys_exploded.usage_key as usage_key, 
               SUM(values_exploded.usage_value) AS usage_sum
-          FROM events_full o
+          FROM ${tableFor(projectId, "events_full")} o
           LATERAL VIEW posexplode(map_keys(usage_details)) keys_exploded AS key_pos, usage_key
           LATERAL VIEW posexplode(map_values(usage_details)) values_exploded AS value_pos, usage_value
-          ${tracesFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
+          ${tracesFilter ? `LEFT JOIN ${tracesScalarJoinTarget(projectId)} t ON o.trace_id = t.trace_id AND o.project_id = t.project_id` : ""}
           WHERE o.project_id = {projectId: String}
           ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
           ${environmentFilter.query ? `AND ${environmentFilter.query}` : ""}

@@ -11,6 +11,7 @@ import { ExperimentCreateQueue } from "./experimentCreateQueue";
 import { SecondaryIngestionQueue } from "./ingestionQueue";
 import { TraceDeleteQueue } from "./traceDelete";
 import { ProjectDeleteQueue } from "./projectDelete";
+import { DorisSplitTableProvisioningQueue } from "./dorisSplitTableProvisioningQueue";
 import { PostHogIntegrationQueue } from "./postHogIntegrationQueue";
 import { PostHogIntegrationProcessingQueue } from "./postHogIntegrationProcessingQueue";
 import { MixpanelIntegrationQueue } from "./mixpanelIntegrationQueue";
@@ -57,6 +58,8 @@ export function getQueue(
       return TraceDeleteQueue.getInstance();
     case QueueName.ProjectDelete:
       return ProjectDeleteQueue.getInstance();
+    case QueueName.DorisSplitTableProvisioningQueue:
+      return DorisSplitTableProvisioningQueue.getInstance();
     case QueueName.PostHogIntegrationQueue:
       return PostHogIntegrationQueue.getInstance();
     case QueueName.PostHogIntegrationProcessingQueue:

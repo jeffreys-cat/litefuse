@@ -27,7 +27,10 @@ import { parseDorisStringArray } from "../utils/dorisArrays";
 import { recordDistribution } from "../instrumentation";
 import { scoresColumnsTableUiColumnDefinitionsForDoris } from "../tableMappings/mapScoresColumnsTable";
 import { scoresTableCols } from "../../tableDefinitions/scoresTable";
-import { convertDateToAnalyticsDateTime, dq } from "./analytics";
+import {
+  convertDateToAnalyticsDateTime,
+  dq,
+} from "./analyticsDateTime";
 import {
   queryDoris,
   upsertDoris,
@@ -40,6 +43,7 @@ import {
   getDorisProjectIdDefaultFilter,
 } from "../queries/doris-sql/factory";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
+import { tableFor } from "../doris/tableRouting";
 
 // Helper function to parse timestamps from different backends
 const parseTimestamp = (timestamp: string | Date): Date => {
@@ -914,7 +918,7 @@ export async function getScoresUiTable<
 // COALESCE back to '' so both projections and filters keep the previous
 // semantics. metadata is a native Map here (no metadata_names/values arrays).
 // Doris prunes unreferenced derived-table columns, so unused fields are free.
-const TRACES_SCALAR_JOIN_TARGET = `(
+const tracesScalarJoinTarget = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -930,7 +934,7 @@ const TRACES_SCALAR_JOIN_TARGET = `(
         start_time AS ${dq("timestamp")},
         bookmarked,
         ${dq("public")}
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
     )`;
 
 const getScoresUiGeneric = async <T>(props: {
@@ -1061,7 +1065,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${orderBySQL}
             ${limitSQL}
         ) sm
-        LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t
+        LEFT JOIN ${tracesScalarJoinTarget(projectId)} t
             ON sm.trace_id = t.trace_id AND t.project_id = sm.project_id
         ${traceWhere}
         ORDER BY sm.timestamp DESC
@@ -1095,7 +1099,7 @@ const getScoresUiGeneric = async <T>(props: {
             ${hasMetadataSQL}
             ${traceSelect}
         FROM scores s
-        ${performTracesJoin ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
+        ${performTracesJoin ? `LEFT JOIN ${tracesScalarJoinTarget(projectId)} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
         ${flatWhere}
         ${orderBySQL}
         ${limitSQL}
@@ -1403,7 +1407,7 @@ export const getNumericScoreHistogram = async (
   const query = `
       SELECT s.value
       FROM scores s
-      ${traceFilter ? `LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
+      ${traceFilter ? `LEFT JOIN ${tracesScalarJoinTarget(projectId)} t ON s.trace_id = t.trace_id AND t.project_id = s.project_id` : ""}
       WHERE s.project_id = {projectId: String}
       ${traceFilter ? `AND t.project_id = {projectId: String}` : ""}
       ${dorisFilterRes?.query ? `AND ${dorisFilterRes.query}` : ""}
@@ -1443,7 +1447,7 @@ export const getAggregatedScoresForPrompts = async (
         s.data_type,
         s.comment,
         CASE WHEN s.metadata IS NOT NULL AND map_size(s.metadata) > 0 THEN 1 ELSE 0 END AS has_metadata
-      FROM scores s LEFT JOIN events_full o
+      FROM scores s LEFT JOIN ${tableFor(projectId, "events_full")} o
         ON o.trace_id = s.trace_id
         AND o.project_id = s.project_id
         ${fetchScoreRelation === "observation" ? "AND o.span_id = s.observation_id" : ""}
@@ -1656,7 +1660,7 @@ export const getScoresForAnalyticsIntegrations = async function* (
         t.tags as trace_tags,
         t.metadata['$posthog_session_id'] as posthog_session_id
       FROM scores s
-      LEFT JOIN ${TRACES_SCALAR_JOIN_TARGET} t ON s.trace_id = t.trace_id AND s.project_id = t.project_id
+      LEFT JOIN ${tracesScalarJoinTarget(projectId)} t ON s.trace_id = t.trace_id AND s.project_id = t.project_id
       WHERE s.project_id = {projectId: String}
       AND t.project_id = {projectId: String}
       AND s.timestamp >= {minTimestamp: DateTime}

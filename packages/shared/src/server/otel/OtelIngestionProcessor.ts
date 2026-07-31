@@ -28,7 +28,12 @@ import { LangfuseOtelSpanAttributes } from "./attributes";
 import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
 import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
-import { registerOtelFile } from "../redis/otelPendingGroups";
+import {
+  registerOtelFile,
+  addLaneToIndex,
+} from "../redis/otelPendingGroups";
+import { laneFor } from "../doris/tableRouting";
+import { isSplitCacheReady } from "../doris/tableSplitCache";
 import { isValidDateString, flattenJsonToPathArrays } from "./utils";
 
 // Type definitions for internal processor state
@@ -215,15 +220,38 @@ export class OtelIngestionProcessor {
           "Redis not available — cannot register otel file for grouping",
         );
       }
-      // Random shard spread, deliberately independent of REDIS_CLUSTER_ENABLED
-      // (the legacy job path only spreads in cluster mode; the pending lists
-      // must spread wherever more than one shard is configured).
+      // fail-and-retry gate (Stage 1.3): in project_id_with_rule mode a cold
+      // split-cache cannot be trusted — laneFor would misroute a split project
+      // to the shared shard (stranding its rows). Never guess: throw so the
+      // route answers 5xx and the SDK re-sends once the cache is warm (the same
+      // EO re-send contract as any registration failure; a re-send is a new
+      // fileKey, the orphan S3 object is reconciled).
+      if (
+        env.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule" &&
+        !isSplitCacheReady()
+      ) {
+        throw new Error(
+          "otel registration deferred: split-cache not ready (retry to avoid misrouting a split project)",
+        );
+      }
+
+      // Split project → its dedicated lane (a group cut from it is naturally
+      // single-project); otherwise a random shard from the shared pool. Random
+      // shard spread is deliberately independent of REDIS_CLUSTER_ENABLED (the
+      // pending lists must spread wherever more than one shard is configured).
+      const lane = laneFor(this.projectId);
       const shardNames = OtelIngestionQueue.getShardNames();
-      const shard =
-        shardNames[Math.floor(Math.random() * shardNames.length)] as string;
+      const groupingKey =
+        lane ??
+        (shardNames[Math.floor(Math.random() * shardNames.length)] as string);
+      // Register the lane in the discovery index so the grouper full-scan finds
+      // it (idempotent SADD; only for split projects).
+      if (lane) {
+        await addLaneToIndex(groupingRedis, lane);
+      }
       await registerOtelFile({
         redis: groupingRedis,
-        shard,
+        groupingKey,
         ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
         entry: {
           v: 1,

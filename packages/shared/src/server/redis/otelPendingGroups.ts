@@ -14,12 +14,16 @@ import { env } from "../../env";
  *   grouper ── CUT_GROUP (fence → members → staging → LTRIM, one atomic Lua)
  *           ── queue.add(jobId=groupId) ── DEL staging
  *
- * Key layout: every key of a shard shares the shard's tag (deployment prefix
- * + shard name; cluster mode wraps it in {braces} so the multi-key Lua stays
- * on one slot).
+ * A "grouping key" identifies one pending pipeline — today a BullMQ shard name
+ * (shared pool), under table split a per-project lane `lane-<pid>`. The key
+ * builders make no shape assumption about it (F4), so both forms work.
+ *
+ * Key layout: every key of a grouping key shares that key's tag (deployment
+ * prefix + grouping key; cluster mode wraps it in {braces} so the multi-key Lua
+ * stays on one slot).
  *
  * CONNECTION CONTRACT: the key builders below return FULL key strings —
- * REDIS_KEY_PREFIX is already embedded in the shard tag. They must therefore
+ * REDIS_KEY_PREFIX is already embedded in the grouping-key tag. They must therefore
  * run on connections WITHOUT an ioredis-level `keyPrefix` (which would
  * prefix a second time and split producers/consumers into disjoint
  * keyspaces). Use getUnprefixedRedis() / createNewRedisInstance(), NEVER the
@@ -34,39 +38,49 @@ import { env } from "../../env";
 // ---------------------------------------------------------------------------
 
 /**
- * Base tag for a shard's pipeline keys — always unique per shard:
- *   no prefix        → "<shard>"
- *   non-cluster+pfx  → "<prefix>:<shard>"   (getQueuePrefix returns the BARE
+ * Base tag for a grouping key's pipeline keys — always unique per grouping key:
+ *   no prefix        → "<groupingKey>"
+ *   non-cluster+pfx  → "<prefix>:<groupingKey>"   (getQueuePrefix returns the BARE
  *                       prefix in this mode — BullMQ appends the queue name
- *                       itself — so the shard name must be appended here or
- *                       every shard's keys would collide on one string)
- *   cluster          → "{<prefix>:<shard>}" (hash tag from getQueuePrefix)
+ *                       itself — so the grouping key must be appended here or
+ *                       every grouping key's keys would collide on one string)
+ *   cluster          → "{<prefix>:<groupingKey>}" (hash tag from getQueuePrefix)
  */
-const shardTag = (shardName: string): string => {
-  const prefix = getQueuePrefix(shardName);
-  if (!prefix) return shardName;
+const groupingTag = (groupingKey: string): string => {
+  const prefix = getQueuePrefix(groupingKey);
+  if (!prefix) return groupingKey;
   if (env.REDIS_CLUSTER_ENABLED === "true") return prefix;
-  return `${prefix}:${shardName}`;
+  return `${prefix}:${groupingKey}`;
 };
 
-export const otelPendingListKey = (shard: string) =>
-  `${shardTag(shard)}:otel-pending`;
-export const otelGrouperLockKey = (shard: string) =>
-  `${shardTag(shard)}:otel-grouper-lock`;
+export const otelPendingListKey = (groupingKey: string) =>
+  `${groupingTag(groupingKey)}:otel-pending`;
+export const otelGrouperLockKey = (groupingKey: string) =>
+  `${groupingTag(groupingKey)}:otel-grouper-lock`;
 /**
- * Staging is ONE hash per shard: field = groupId, value = manifest JSON.
+ * Staging is ONE hash per grouping key: field = groupId, value = manifest JSON.
  * Directory and content are the same structure, so "register the group" and
  * "persist its manifest" are a single HSET (command-level atomic — no
  * dangling directory entry can exist) and cleanup is a single HDEL. HKEYS
  * is the recovery scan.
  */
-export const otelStagingHashKey = (shard: string) =>
-  `${shardTag(shard)}:otel-staging`;
-export const otelQuarantineKey = (shard: string) =>
-  `${shardTag(shard)}:otel-quarantine`;
-export const otelRegisteredKey = (shard: string, fileKey: string) =>
+export const otelStagingHashKey = (groupingKey: string) =>
+  `${groupingTag(groupingKey)}:otel-staging`;
+export const otelQuarantineKey = (groupingKey: string) =>
+  `${groupingTag(groupingKey)}:otel-quarantine`;
+export const otelRegisteredKey = (groupingKey: string, fileKey: string) =>
   // sha1 keeps the key short & charset-safe regardless of the S3 path shape.
-  `${shardTag(shard)}:otel-reg:${sha1Hex(fileKey)}`;
+  `${groupingTag(groupingKey)}:otel-reg:${sha1Hex(fileKey)}`;
+
+/**
+ * Global discovery SET of per-project lanes that have received registrations
+ * (Stage 1.3). The grouper full-scans (lane-index ∪ PG split list) − tombstones
+ * to know which lanes to tick — SMEMBERS is O(lanes), unlike a SCAN over the
+ * millions of registration keys. One global key (its own hash slot in cluster
+ * mode is fine — every op targets the same key).
+ */
+export const otelLaneIndexKey = () =>
+  `${groupingTag("otel-lane-index")}:otel-lane-index`;
 
 export const sha1Hex = (s: string): string =>
   createHash("sha1").update(s).digest("hex");
@@ -96,6 +110,26 @@ export const labelForGroupTable = (groupId: string, table: string): string =>
 /** Deterministic stream-load label for a group's events_full batch. */
 export const eventsFullLabelForGroup = (groupId: string): string =>
   labelForGroupTable(groupId, "events_full");
+
+/** Labels a single group burns in the FE registry over its lifetime — one per
+ * Doris load (events_full + traces_scalar), deterministic so retries reuse them. */
+export const LABELS_PER_GROUP = 2;
+
+/**
+ * Minimum Doris `label_num_threshold` the FE must be configured with (capacity
+ * gate, Stage 1.8 / design §4.5). Each group holds LABELS_PER_GROUP labels for
+ * the keep window; at a sustained group rate the registry must fit them all, or
+ * labels get evicted early and a replay re-loads a committed batch (the
+ * 2026-07-28 duplicate-data incident). Total group rate rises with lane count
+ * (shared pool + Σ per-project lane cut rates) — plug the T8-measured rate in.
+ */
+export const requiredLabelNumThreshold = (params: {
+  groupsPerSecond: number;
+  labelKeepMs: number;
+}): number =>
+  Math.ceil(
+    params.groupsPerSecond * LABELS_PER_GROUP * (params.labelKeepMs / 1000),
+  );
 
 // ---------------------------------------------------------------------------
 // Lua scripts
@@ -134,7 +168,7 @@ return 0
  *
  * Undecodable entries are moved to the quarantine list (kept, alarmed via the
  * quarantine depth metric) instead of failing the script — a poison head
- * entry must never stall the shard.
+ * entry must never stall the pipeline.
  *
  * The DISPATCH GATE lives inside the script too (the caller just invokes it
  * every tick): the cut happens only when the head window is "ripe" — byte or
@@ -349,7 +383,7 @@ const ensureCommands = (redis: RedisHandle): PipelineCommands => {
 // ---------------------------------------------------------------------------
 
 /**
- * Idempotently register an uploaded otel file into a shard's pending list.
+ * Idempotently register an uploaded otel file into a grouping key's pending list.
  * Returns true when this call registered the file, false when the fileKey was
  * already registered inside the TTL window (idempotent success — the caller
  * treats both as OK; the reconciliation tool is the only caller that must
@@ -357,19 +391,39 @@ const ensureCommands = (redis: RedisHandle): PipelineCommands => {
  */
 export const registerOtelFile = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   entry: OtelPendingEntryType;
   ttlMs: number;
 }): Promise<boolean> => {
-  const { redis, shard, entry, ttlMs } = params;
+  const { redis, groupingKey, entry, ttlMs } = params;
   const parsed = OtelPendingEntry.parse(entry);
   const result = await ensureCommands(redis).otelRegister(
-    otelRegisteredKey(shard, parsed.fileKey),
-    otelPendingListKey(shard),
+    otelRegisteredKey(groupingKey, parsed.fileKey),
+    otelPendingListKey(groupingKey),
     JSON.stringify(parsed),
     ttlMs,
   );
   return result === 1;
+};
+
+/** Add a lane to the discovery index (idempotent SADD) — called at registration. */
+export const addLaneToIndex = async (
+  redis: RedisHandle,
+  lane: string,
+): Promise<void> => {
+  await redis.sadd(otelLaneIndexKey(), lane);
+};
+
+/** All lanes ever registered (grouper full-scan candidate source). */
+export const getLaneIndex = async (redis: RedisHandle): Promise<string[]> =>
+  redis.smembers(otelLaneIndexKey());
+
+/** Drop a lane from the index (un-split / project deletion cleanup). */
+export const removeLaneFromIndex = async (
+  redis: RedisHandle,
+  lane: string,
+): Promise<void> => {
+  await redis.srem(otelLaneIndexKey(), lane);
 };
 
 export type OtelGroupCut = {
@@ -389,14 +443,14 @@ const parseManifest = (
 };
 
 /**
- * Atomically cut the next group from the shard's pending list (see
+ * Atomically cut the next group from the grouping key's pending list (see
  * CUT_GROUP_LUA — the dispatch gate is inside). Returns null when fenced
  * (lost the lease), the list is empty, the head window is not ripe yet, or
  * it held nothing valid. Call it every tick; the script decides.
  */
 export const cutOtelGroup = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   token: string;
   targetBytes: number;
   targetRows: number;
@@ -405,13 +459,13 @@ export const cutOtelGroup = async (params: {
   flushMs: number;
   now?: number;
 }): Promise<OtelGroupCut | null> => {
-  const { redis, shard, token, targetBytes, targetRows, maxFiles, flushMs } =
+  const { redis, groupingKey, token, targetBytes, targetRows, maxFiles, flushMs } =
     params;
   const result = await ensureCommands(redis).otelCutGroup(
-    otelGrouperLockKey(shard),
-    otelPendingListKey(shard),
-    otelStagingHashKey(shard),
-    otelQuarantineKey(shard),
+    otelGrouperLockKey(groupingKey),
+    otelPendingListKey(groupingKey),
+    otelStagingHashKey(groupingKey),
+    otelQuarantineKey(groupingKey),
     token,
     targetBytes,
     targetRows,
@@ -435,29 +489,29 @@ export const cutOtelGroup = async (params: {
  */
 export const reconcileOtelPending = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   rawEntries: string[];
   windowSize: number;
 }): Promise<number> => {
-  const { redis, shard, rawEntries, windowSize } = params;
+  const { redis, groupingKey, rawEntries, windowSize } = params;
   if (rawEntries.length === 0) return 0;
   return ensureCommands(redis).otelReconcile(
-    otelPendingListKey(shard),
+    otelPendingListKey(groupingKey),
     Math.max(windowSize, rawEntries.length),
     ...rawEntries,
   );
 };
 
-/** Try to acquire the shard's grouper lease (SET NX PX). */
+/** Try to acquire the grouping key's grouper lease (SET NX PX). */
 export const acquireOtelGrouperLease = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   token: string;
   ttlMs: number;
 }): Promise<boolean> => {
-  const { redis, shard, token, ttlMs } = params;
+  const { redis, groupingKey, token, ttlMs } = params;
   const res = await redis.set(
-    otelGrouperLockKey(shard),
+    otelGrouperLockKey(groupingKey),
     token,
     "PX",
     ttlMs,
@@ -466,16 +520,34 @@ export const acquireOtelGrouperLease = async (params: {
   return res === "OK";
 };
 
+/**
+ * Write a grouping key's lock = token (plain SET PX, no NX) — the lane-lock
+ * TOKEN CARRIER for the lane domain (Stage 1.4 / design F1). Mutual exclusion
+ * across workers is already guaranteed by the single LANE_DOMAIN_LEASE, so this
+ * is NOT a contended lock — it only stamps the current domain leader's token
+ * into each lane's lock key so the (unchanged) cut Lua fence `GET lock==token`
+ * passes. A leader handover overwrites it, fencing the old leader's late cut.
+ */
+export const setOtelGrouperLease = async (params: {
+  redis: RedisHandle;
+  groupingKey: string;
+  token: string;
+  ttlMs: number;
+}): Promise<void> => {
+  const { redis, groupingKey, token, ttlMs } = params;
+  await redis.set(otelGrouperLockKey(groupingKey), token, "PX", ttlMs);
+};
+
 /** Renew the lease iff we still own it (fence-safe). */
 export const renewOtelGrouperLease = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   token: string;
   ttlMs: number;
 }): Promise<boolean> => {
-  const { redis, shard, token, ttlMs } = params;
+  const { redis, groupingKey, token, ttlMs } = params;
   const res = await ensureCommands(redis).otelRenewLease(
-    otelGrouperLockKey(shard),
+    otelGrouperLockKey(groupingKey),
     token,
     ttlMs,
   );
@@ -485,9 +557,9 @@ export const renewOtelGrouperLease = async (params: {
 /** List the groupIds with staging manifests (HKEYS — the recovery scan). */
 export const scanStagedOtelGroups = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
 }): Promise<string[]> => {
-  return params.redis.hkeys(otelStagingHashKey(params.shard));
+  return params.redis.hkeys(otelStagingHashKey(params.groupingKey));
 };
 
 /**
@@ -498,11 +570,11 @@ export const scanStagedOtelGroups = async (params: {
  */
 export const readOtelStagingManifest = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   groupId: string;
 }): Promise<OtelGroupCut | null> => {
-  const { redis, shard, groupId } = params;
-  const manifest = await redis.hget(otelStagingHashKey(shard), groupId);
+  const { redis, groupingKey, groupId } = params;
+  const manifest = await redis.hget(otelStagingHashKey(groupingKey), groupId);
   if (manifest == null) return null;
   try {
     const { entries, rawEntries } = parseManifest(manifest);
@@ -511,7 +583,7 @@ export const readOtelStagingManifest = async (params: {
     // A manifest that no longer parses is a bug, but it must not wedge the
     // recovery scan: surface loudly and let the operator inspect the field.
     logger.error(
-      `otel staging manifest unparsable (groupId=${groupId}, shard=${shard}): ${e instanceof Error ? e.message : String(e)}`,
+      `otel staging manifest unparsable (groupId=${groupId}, groupingKey=${groupingKey}): ${e instanceof Error ? e.message : String(e)}`,
     );
     return null;
   }
@@ -523,22 +595,22 @@ export const readOtelStagingManifest = async (params: {
  */
 export const clearOtelStagingManifest = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   groupId: string;
 }): Promise<void> => {
-  await params.redis.hdel(otelStagingHashKey(params.shard), params.groupId);
+  await params.redis.hdel(otelStagingHashKey(params.groupingKey), params.groupId);
 };
 
 /** Depth probes for monitoring (pending backlog / quarantine). */
 export const otelPendingDepth = async (params: {
   redis: RedisHandle;
-  shard: string;
-}): Promise<number> => params.redis.llen(otelPendingListKey(params.shard));
+  groupingKey: string;
+}): Promise<number> => params.redis.llen(otelPendingListKey(params.groupingKey));
 
 export const otelQuarantineDepth = async (params: {
   redis: RedisHandle;
-  shard: string;
-}): Promise<number> => params.redis.llen(otelQuarantineKey(params.shard));
+  groupingKey: string;
+}): Promise<number> => params.redis.llen(otelQuarantineKey(params.groupingKey));
 
 /**
  * Age of the OLDEST pending entry (ms), or null when the list is empty.
@@ -546,10 +618,10 @@ export const otelQuarantineDepth = async (params: {
  */
 export const otelPendingOldestAgeMs = async (params: {
   redis: RedisHandle;
-  shard: string;
+  groupingKey: string;
   now?: number;
 }): Promise<number | null> => {
-  const head = await params.redis.lindex(otelPendingListKey(params.shard), 0);
+  const head = await params.redis.lindex(otelPendingListKey(params.groupingKey), 0);
   if (head == null) return null;
   try {
     const entry = OtelPendingEntry.parse(JSON.parse(head));

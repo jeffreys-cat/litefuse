@@ -10,7 +10,10 @@ import { ScoreAggregate } from "../../features/scores";
 import { TracingSearchType } from "../../interfaces/search";
 import { ObservationLevelType, TraceDomain } from "../../domain";
 // Doris imports
-import { convertDateToAnalyticsDateTime, dq } from "../repositories/analytics";
+import {
+  convertDateToAnalyticsDateTime,
+  dq,
+} from "../repositories/analyticsDateTime";
 import { queryDoris } from "../repositories/doris";
 import { parseDorisUTCDateTimeFormat } from "../repositories/doris";
 import {
@@ -24,6 +27,7 @@ import {
 } from "../queries/doris-sql/doris-filter";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
+import { tableFor } from "../doris/tableRouting";
 
 export type TracesTableReturnType = Pick<
   TraceRecordReadType,
@@ -276,10 +280,10 @@ const MV_INNER_AGG_SELECT = `
       SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) AS debug_count,
       MAX(event_ts) AS event_ts`;
 
-const buildMvInnerCte = (whereParts: string[]): string => `
+const buildMvInnerCte = (projectId: string, whereParts: string[]): string => `
     trace_by_day AS (
       SELECT ${MV_INNER_AGG_SELECT}
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE ${whereParts.join(" AND ")}
       GROUP BY project_id, trace_id, start_time_date
     )`;
@@ -712,7 +716,7 @@ const runScalarRowsFastPath = async (params: {
       environment,
       session_id,
       ${dq("public")}
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE ${whereParts.join(" AND ")}
     ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
     ${pagination}
@@ -767,7 +771,7 @@ const runScalarIdentifiersFastPath = async (params: {
       id,
       project_id AS projectId,
       start_time AS ${dq("timestamp")}
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE ${whereParts.join(" AND ")}
     ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
     ${pagination}
@@ -804,7 +808,7 @@ const runScalarCountFastPath = async (params: {
   // One row per trace → count(*) needs no dedup/grouping.
   const query = `
     SELECT count(*) AS count
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE ${whereParts.join(" AND ")}
   `;
 
@@ -832,7 +836,7 @@ const runScalarCountFastPath = async (params: {
 //             0040) — Doris transparently rewrites the scan onto the rollup
 //             (a handful of per-day rows per trace), with the metric filters
 //             as HAVING and the metric aliases projected for ORDER BY;
-//   outer  s: JOIN traces_scalar for display columns + scalar filters,
+//   outer  s: JOIN ${tableFor(projectId, "traces_scalar")} for display columns + scalar filters,
 //             ORDER BY metric alias or timestamp, LIMIT/OFFSET.
 // A trace missing from either side drops out via the inner join — the same
 // outcome the MV path's metric HAVING produces (no metrics → filtered out).
@@ -937,13 +941,15 @@ const canUseMetricListFastPath = (params: {
 };
 
 const buildMetricListQuery = (params: {
+  projectId: string;
   select: "rows" | "count";
   filter: FilterState;
   orderBy?: OrderByState;
   searchQuery?: string;
   withPagination: boolean;
 }): { query: string; timeParams: Record<string, unknown> } => {
-  const { select, filter, orderBy, searchQuery, withPagination } = params;
+  const { projectId, select, filter, orderBy, searchQuery, withPagination } =
+    params;
 
   // Scalar-side WHERE (bare column names resolve to s — the inner subquery
   // only projects trace_id + metric aliases, so nothing is ambiguous).
@@ -1008,7 +1014,7 @@ const buildMetricListQuery = (params: {
         ${AGG_ROLLUP_LEVEL_COUNTS.warningCount} AS warning_count,
         ${AGG_ROLLUP_LEVEL_COUNTS.defaultCount} AS default_count,
         ${AGG_ROLLUP_LEVEL_COUNTS.debugCount} AS debug_count
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE ${innerWhere.join(" AND ")}
       GROUP BY trace_id
       ${havingRes?.query ? `HAVING ${havingRes.query}` : ""}`;
@@ -1017,7 +1023,7 @@ const buildMetricListQuery = (params: {
     return {
       query: `
     SELECT count(*) AS count
-    FROM traces_scalar s
+    FROM ${tableFor(projectId, "traces_scalar")} s
     JOIN (${inner}
     ) m ON m.trace_id = s.id
     WHERE ${whereParts.join(" AND ")}
@@ -1050,7 +1056,7 @@ const buildMetricListQuery = (params: {
       s.environment,
       s.session_id,
       s.${dq("public")}
-    FROM traces_scalar s
+    FROM ${tableFor(projectId, "traces_scalar")} s
     JOIN (${inner}
     ) m ON m.trace_id = s.id
     WHERE ${whereParts.join(" AND ")}
@@ -1077,6 +1083,7 @@ const runMetricListRowsFastPath = async (params: {
   );
   const withPagination = limit !== undefined && page !== undefined;
   const { query, timeParams } = buildMetricListQuery({
+    projectId,
     select: "rows",
     filter,
     orderBy,
@@ -1113,6 +1120,7 @@ const runMetricListCountFastPath = async (params: {
     searchQuery,
   );
   const { query, timeParams } = buildMetricListQuery({
+    projectId,
     select: "count",
     filter,
     searchQuery,
@@ -1325,7 +1333,7 @@ const runMvRowsFastPath = async (params: {
   // transparently rewrites onto traces_mv + union-compensates stale partitions);
   // outer rolls up to one row per trace. See buildMvInnerCte.
   const query = `
-    WITH ${buildMvInnerCte(whereParts)}
+    WITH ${buildMvInnerCte(projectId, whereParts)}
     SELECT
       id,
       project_id,
@@ -1378,7 +1386,7 @@ const runMvCountFastPath = async (params: {
   const queryParams: Record<string, unknown> = { projectId, ...filterParams };
 
   const query = `
-    WITH ${buildMvInnerCte(whereParts)}
+    WITH ${buildMvInnerCte(projectId, whereParts)}
     SELECT count(*) AS count FROM (
       SELECT id
       FROM trace_by_day
@@ -1519,7 +1527,7 @@ const runAggMetricsFastPath = async (params: {
       ${AGG_ROLLUP_LEVEL_COUNTS.defaultCount} AS default_count,
       ${AGG_ROLLUP_LEVEL_COUNTS.debugCount} AS debug_count,
       SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS observation_count
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE ${whereParts.join(" AND ")}
     GROUP BY project_id, trace_id
     ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
@@ -1580,7 +1588,7 @@ const runMvMetricsFastPath = async (params: {
   // components; level + counts from SUM of the per-day counts. scores are NOT
   // here — the tRPC layer fetches them separately (getScoresForTraces).
   const query = `
-    WITH ${buildMvInnerCte(whereParts)}
+    WITH ${buildMvInnerCte(projectId, whereParts)}
     SELECT
       id,
       project_id,
@@ -2027,7 +2035,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
             WHEN sum(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) > 0 THEN 'DEFAULT'
             ELSE 'DEBUG'
           END AS aggregated_level
-        FROM events_full o
+        FROM ${tableFor(projectId, "events_full")} o
         WHERE project_id = {projectId: String}
         ${timeStampFilter ? `AND start_time >= DATE(DATE_SUB({traceTimestamp: DateTime}, INTERVAL 2 DAY))` : ""}
         ${observationFilterRes ? `AND ${observationFilterRes.query}` : ""}
@@ -2103,7 +2111,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const query = `
       ${withClause ? `WITH ${withClause}` : ""}
       SELECT ${dorisHint} ${sqlSelect}
-      FROM events_full t
+      FROM ${tableFor(projectId, "events_full")} t
       ${select === "metrics" || requiresObservationsJoin ? `LEFT JOIN observations_stats os on os.project_id = t.project_id and os.trace_id = t.trace_id` : ""}
       ${requiresScoresJoin ? `LEFT JOIN scores_avg s on s.project_id = t.project_id and s.trace_id = t.trace_id` : ""}
       WHERE t.project_id = {projectId: String}

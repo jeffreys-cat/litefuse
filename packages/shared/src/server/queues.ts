@@ -378,6 +378,7 @@ export enum QueueName {
   EntityChangeQueue = "entity-change-queue",
   EventPropagationQueue = "event-propagation-queue",
   NotificationQueue = "notification-queue",
+  DorisSplitTableProvisioningQueue = "doris-split-table-provisioning-queue",
 }
 
 export enum QueueJobs {
@@ -408,6 +409,7 @@ export enum QueueJobs {
   EntityChangeJob = "entity-change-job",
   EventPropagationJob = "event-propagation-job",
   NotificationJob = "notification-job",
+  DorisSplitTableProvisioningJob = "doris-split-table-provisioning-job",
 }
 
 export type TQueueJobTypes = {
@@ -566,5 +568,11 @@ export type TQueueJobTypes = {
     id: string;
     payload: NotificationEventType;
     name: QueueJobs.NotificationJob;
+  };
+  [QueueName.DorisSplitTableProvisioningQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: { projectId: string };
+    name: QueueJobs.DorisSplitTableProvisioningJob;
   };
 };
