@@ -147,6 +147,10 @@ export async function getDatasetRunItemsSinceLastRun(
       -- LEFT ANTI JOIN below excludes these so backfill only enriches DRIs
       -- whose target trace is not yet experiment-tagged.
       select distinct project_id, trace_id
+      -- CROSS-PROJECT (no project_id filter — scans all projects for
+      -- experiment-tagged traces) — deliberately NOT routed through tableFor.
+      -- Under table split this must fan out over every split project's
+      -- events_full_<pid> UNION the shared table (design §五). Do not "fix" it.
       from events_full
       where start_time > {lastRun: DateTime64(3)} - interval 1 day
         and experiment_id != ''
@@ -289,6 +293,10 @@ export async function getRelevantObservations(
           PARTITION BY o.project_id, o.span_id
           ORDER BY o.event_ts DESC
         ) AS rn
+      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
+      -- NOT routed through tableFor; it has no single projectId. Under table
+      -- split this must fan out over each split project's events_full_<pid>
+      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
@@ -385,6 +393,10 @@ export async function getRelevantTraces(
           PARTITION BY o.project_id, o.trace_id
           ORDER BY o.event_ts DESC
         ) AS rn
+      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
+      -- NOT routed through tableFor; it has no single projectId. Under table
+      -- split this must fan out over each split project's events_full_<pid>
+      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})

@@ -23,6 +23,7 @@ import {
   prepareScoresForOutput,
 } from "./getDatabaseReadStream";
 import { fetchCommentsForExport } from "./fetchCommentsForExport";
+import { tableFor } from "@langfuse/shared/src/server";
 
 const BATCH_SIZE = 1000; // Fetch comments in batches for efficiency
 
@@ -159,7 +160,7 @@ export const getTraceStream = async (props: {
         MAX_BY(IF(environment <> '', environment, NULL), event_ts) AS environment,
         MAX_BY(IF(is_root = 1, bookmarked, NULL), event_ts) AS bookmarked,
         MAX(\`public\`) AS \`public\`
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
         ${appliedTracesFilter.query ? `AND ${appliedTracesFilter.query}` : ""}
         ${search.query}
@@ -185,7 +186,7 @@ export const getTraceStream = async (props: {
             PARTITION BY trace_id, project_id
             ORDER BY event_ts DESC
           ) AS rn
-        FROM events_full
+        FROM ${tableFor(projectId, "events_full")}
         WHERE project_id = {projectId: String}
           AND is_root = 1
       ) ranked

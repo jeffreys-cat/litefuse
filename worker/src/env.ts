@@ -89,6 +89,13 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(10_000),
+  // Lane-domain lease TTL (Stage 1.4 / design F7): the single leader for all
+  // project lanes. Kept SHORTER than the per-shard lock so a stalled leader is
+  // taken over fast (≤ this) — data waits in pending, only cut latency spikes.
+  LITEFUSE_OTEL_LANE_DOMAIN_LEASE_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(5_000),
   LITEFUSE_OTEL_GROUPER_TICK_MS: z.coerce.number().positive().default(200),
   // Self-contained group job (design §3.3): per-worker semaphores.
   // TRANSFORM bounds concurrent S3 download + JSON.parse (event-loop/heap
@@ -273,6 +280,9 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED: z
+    .enum(["true", "false"])
+    .default("true"),
+  QUEUE_CONSUMER_DORIS_SPLIT_TABLE_PROVISIONING_QUEUE_IS_ENABLED: z
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_BATCH_EXPORT_QUEUE_IS_ENABLED: z

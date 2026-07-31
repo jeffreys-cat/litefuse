@@ -11,6 +11,7 @@ import {
   recordIncrement,
   acquireOtelGrouperLease,
   renewOtelGrouperLease,
+  setOtelGrouperLease,
   cutOtelGroup,
   scanStagedOtelGroups,
   readOtelStagingManifest,
@@ -19,10 +20,25 @@ import {
   otelPendingDepth,
   otelQuarantineDepth,
   otelPendingOldestAgeMs,
+  getLaneIndex,
+  getSplitProjectIds,
+  isSplitProject,
+  getShardIndex,
   type OtelGroupCut,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
+
+/**
+ * The single Redis lease key that elects ONE domain leader for ALL project
+ * lanes (design §4.2 / F1/F7). Its value is a groupingKey passed to the shared
+ * lease helpers — it is NOT a shard and NOT a lane, just the domain election key.
+ */
+const LANE_DOMAIN_LEASE = "otel-lane-domain";
+
+/** `lane-<pid>` → `<pid>`. */
+const laneToProjectId = (lane: string): string =>
+  lane.startsWith("lane-") ? lane.slice("lane-".length) : lane;
 import { groupJobLoadLimiter } from "../../queues/otelGroupJobProcessor";
 
 type RedisHandle = Redis | Cluster;
@@ -33,13 +49,19 @@ export type OtelGrouperConfig = {
   maxFiles: number;
   flushMs: number;
   lockTtlMs: number;
+  laneDomainLeaseTtlMs: number;
   tickMs: number;
 };
 
 type Deps = {
   redis?: RedisHandle;
-  /** Test seam — replaces the BullMQ publish. */
-  addGroupJob?: (shard: string, cut: OtelGroupCut) => Promise<void>;
+  /** Test seam — replaces the BullMQ publish. The first arg is the groupingKey
+   * (shard or lane) for logging only; the queue is chosen from the groupId. */
+  addGroupJob?: (groupingKey: string, cut: OtelGroupCut) => Promise<void>;
+  /** Test seam — lane readiness (MV FINISHED). Default lazily calls
+   * getSplitTablesReadiness (kept out of the static import graph to avoid the
+   * repositories/doris require cycle under dd-trace). */
+  isLaneReady?: (projectId: string) => Promise<boolean>;
   config?: Partial<OtelGrouperConfig>;
   shardNames?: string[];
 };
@@ -71,7 +93,7 @@ export class OtelGrouper {
   private readonly cfg: OtelGrouperConfig;
   private readonly shardNames: string[];
   private readonly addGroupJob: (
-    shard: string,
+    groupingKey: string,
     cut: OtelGroupCut,
   ) => Promise<void>;
   private redis: RedisHandle | null = null;
@@ -81,8 +103,11 @@ export class OtelGrouper {
   private tickInFlight: Promise<void> | null = null;
   private tickCount = 0;
   private healthLineCounter = 0;
-  /** shard → we believe we currently hold its lease (renew before re-acquire). */
+  /** shard/domain → we believe we currently hold its lease (renew before re-acquire). */
   private held = new Set<string>();
+  /** Lanes whose MV build has FINISHED (monotonic — checked once, then cached).
+   * The grouper must not cut a lane until its rollup is live (Stage 1.2c gate). */
+  private readyLanes = new Set<string>();
 
   constructor(private readonly deps: Deps = {}) {
     this.cfg = {
@@ -91,11 +116,26 @@ export class OtelGrouper {
       maxFiles: env.LITEFUSE_OTEL_GROUP_MAX_FILES,
       flushMs: env.LITEFUSE_OTEL_GROUP_FLUSH_MS,
       lockTtlMs: env.LITEFUSE_OTEL_GROUPER_LOCK_TTL_MS,
+      laneDomainLeaseTtlMs: env.LITEFUSE_OTEL_LANE_DOMAIN_LEASE_TTL_MS,
       tickMs: env.LITEFUSE_OTEL_GROUPER_TICK_MS,
       ...deps.config,
     };
     this.shardNames = deps.shardNames ?? OtelIngestionQueue.getShardNames();
     this.addGroupJob = deps.addGroupJob ?? this.publishToQueue.bind(this);
+    this.isLaneReady = deps.isLaneReady ?? this.defaultIsLaneReady.bind(this);
+  }
+
+  private readonly isLaneReady: (projectId: string) => Promise<boolean>;
+
+  /** Default readiness: lazy-import getSplitTablesReadiness (its doris-query
+   * chain must stay out of the grouper's static graph — dd-trace require-cycle
+   * TDZ); the barrel is already cached at runtime so this is a no-cost lookup. */
+  private async defaultIsLaneReady(projectId: string): Promise<boolean> {
+    const { getSplitTablesReadiness } = await import(
+      "@langfuse/shared/src/server"
+    );
+    const r = await getSplitTablesReadiness(projectId).catch(() => null);
+    return r?.ready ?? false;
   }
 
   public async start(): Promise<void> {
@@ -242,6 +282,236 @@ export class OtelGrouper {
         );
       }
     }
+
+    // ── B. project-lane domain (Stage 1.4) ──
+    if (this.stopped) return;
+    // Lane backlog gauges are leadership-INDEPENDENT (like shards — #10): EVERY
+    // worker emits them, so a dead domain leader surfaces as a RISING gauge, not
+    // as gauge absence. A lane has no backpressure — pending_depth/oldest_age is
+    // the only pre-OOM early warning and must not go dark exactly when the leader
+    // is down. Only the cut/recover work in tickLanes() needs the domain lease.
+    const laneGaugeRedis = this.redis;
+    if (
+      emitGauges &&
+      sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE !== "none" &&
+      laneGaugeRedis
+    ) {
+      try {
+        for (const lane of await this.candidateLanes(laneGaugeRedis)) {
+          if (this.stopped) return;
+          // #9: one lane's gauge failure must not starve the rest.
+          try {
+            await this.emitLaneGauges(lane);
+          } catch (e) {
+            logger.error(
+              `[OtelGrouper] lane ${lane} gauge failed: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+      } catch (e) {
+        logger.error(
+          `[OtelGrouper] lane gauge scan failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    try {
+      await this.tickLanes();
+    } catch (e) {
+      logger.error(
+        `[OtelGrouper] lane domain tick failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  /**
+   * Project-lane domain tick (design §4.2). A SINGLE domain leader (elected via
+   * LANE_DOMAIN_LEASE) full-scans every project lane (≤100 short-term). Two
+   * phases (F2): probe each lane's staging residue in parallel, then cut the
+   * residue-free majority and serially recover the few with residue (cut must
+   * follow recover — recovering is multi-RTT + can't pipeline with cut).
+   */
+  private async tickLanes(): Promise<void> {
+    if (sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "none") return;
+    const redis = this.redis!;
+    // One leader for ALL lanes (shorter TTL → fast takeover of a stalled leader).
+    // NOTE: lane backlog gauges are emitted BEFORE this gate, in tickAll(), by
+    // EVERY worker (#10) — only the cut/recover work below needs the lease.
+    if (
+      !(await this.acquireOrRenew(
+        LANE_DOMAIN_LEASE,
+        this.cfg.laneDomainLeaseTtlMs,
+      ))
+    )
+      return;
+
+    const lanes = await this.candidateLanes(redis);
+    if (lanes.length === 0) return;
+
+    // Readiness gate: only cut a lane whose MV build has FINISHED. Checked once
+    // per lane (Doris query) then cached — ready is monotonic, so a warm lane
+    // costs nothing on later ticks.
+    const ready: string[] = [];
+    for (const lane of lanes) {
+      if (this.readyLanes.has(lane)) {
+        ready.push(lane);
+        continue;
+      }
+      try {
+        if (await this.isLaneReady(laneToProjectId(lane))) {
+          this.readyLanes.add(lane);
+          ready.push(lane);
+        }
+        // not ready (MV still building / tables absent) → skip this tick
+      } catch (e) {
+        // #9: a readiness-probe error (Doris blip) skips only THIS lane, not
+        // the whole domain tick.
+        logger.error(
+          `[OtelGrouper] lane ${lane} readiness check failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    if (ready.length === 0) return;
+
+    // Phase 1 (F2): batch-probe staging residue.
+    const probes = await Promise.all(
+      ready.map((lane) =>
+        scanStagedOtelGroups({ redis, groupingKey: lane })
+          .then((ids) => ({ lane, residue: ids.length > 0 }))
+          // A probe failure is treated as residue → serial recover (safe): we
+          // never cut a lane we couldn't confirm is clean.
+          .catch(() => ({ lane, residue: true })),
+      ),
+    );
+
+    // Phase 2b: lanes WITH residue → serial recover, no cut this tick.
+    for (const { lane, residue } of probes) {
+      if (!residue || this.stopped) continue;
+      try {
+        await this.recoverStaged(lane);
+      } catch (e) {
+        // #9: recover failure is per-lane — the lane keeps its residue and is
+        // retried next tick (it is never cut while dirty).
+        logger.error(
+          `[OtelGrouper] lane ${lane} recover failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    // Phase 2a: residue-free lanes → one cut each (fair: one group per lane/tick).
+    for (const { lane, residue } of probes) {
+      if (residue || this.stopped) continue;
+      // #6: re-confirm domain ownership before EACH cut. A long tick (per-lane
+      // readiness Doris queries + serial recovers) can outlast the short
+      // domain-lease TTL; without this, an expired leader keeps cutting
+      // alongside the freshly elected one (dual-leader), defeating F1's fence —
+      // the per-lane token is a plain SET that the stale leader re-stamps. The
+      // renew also keeps a genuinely-live leader's lease fresh so a slow-but-
+      // alive tick is not spuriously taken over.
+      if (
+        !(await this.acquireOrRenew(
+          LANE_DOMAIN_LEASE,
+          this.cfg.laneDomainLeaseTtlMs,
+        ))
+      ) {
+        logger.warn(
+          "[OtelGrouper] lost lane-domain lease mid-tick — stopping cuts (a new leader now owns the domain)",
+        );
+        return;
+      }
+      try {
+        await this.tickLaneCut(lane);
+      } catch (e) {
+        // #9: cut failure is per-lane (tickLaneCut reconciles its own cut-Lua
+        // errors; this guards a publish/stamp failure from starving the rest).
+        logger.error(
+          `[OtelGrouper] lane ${lane} cut failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Candidate lanes = (PG split list ∪ lane-index) still split. lane-index is
+   * the PG-outage fallback; filtering by isSplitProject drops un-split /
+   * tombstoned projects (design F6 — never cut into a table about to be
+   * dropped; their residual keys are cleaned by the deletion flow §4.4).
+   */
+  /** Per-lane backlog gauges (the lane counterpart of emitShardGauges). Tagged
+   * with the lane as `shard` so dashboards read both pools on one metric. */
+  private async emitLaneGauges(lane: string): Promise<void> {
+    const redis = this.redis!;
+    const [depth, quarantine, oldestAge, staged] = await Promise.all([
+      otelPendingDepth({ redis, groupingKey: lane }),
+      otelQuarantineDepth({ redis, groupingKey: lane }),
+      otelPendingOldestAgeMs({ redis, groupingKey: lane }),
+      scanStagedOtelGroups({ redis, groupingKey: lane }),
+    ]);
+    recordGauge("langfuse.otel_grouper.pending_depth", depth, { shard: lane });
+    recordGauge("langfuse.otel_grouper.quarantine_depth", quarantine, {
+      shard: lane,
+    });
+    recordGauge("langfuse.otel_grouper.staging_count", staged.length, {
+      shard: lane,
+    });
+    recordGauge("langfuse.otel_grouper.pending_oldest_age_ms", oldestAge ?? 0, {
+      shard: lane,
+    });
+  }
+
+  private async candidateLanes(redis: RedisHandle): Promise<string[]> {
+    const fromPg = getSplitProjectIds().map((pid) => `lane-${pid}`);
+    const fromIndex = await getLaneIndex(redis).catch(() => [] as string[]);
+    const seen = new Set<string>();
+    const lanes: string[] = [];
+    for (const lane of [...fromPg, ...fromIndex]) {
+      if (seen.has(lane)) continue;
+      seen.add(lane);
+      if (isSplitProject(laneToProjectId(lane))) lanes.push(lane);
+    }
+    return lanes;
+  }
+
+  /**
+   * Cut one group from a lane. F1: stamp this domain leader's token into the
+   * lane's lock (plain SET — the domain lease already guarantees a single
+   * writer) so the unchanged cut Lua fence `GET lock==token` passes; a handover
+   * overwrites it, fencing the old leader's late cut.
+   */
+  private async tickLaneCut(lane: string): Promise<void> {
+    const redis = this.redis!;
+    await setOtelGrouperLease({
+      redis,
+      groupingKey: lane,
+      token: this.token,
+      ttlMs: this.cfg.laneDomainLeaseTtlMs,
+    });
+    const cut = await cutOtelGroup({
+      redis,
+      groupingKey: lane,
+      token: this.token,
+      targetBytes: this.cfg.targetBytes,
+      targetRows: this.cfg.targetRows,
+      maxFiles: this.cfg.maxFiles,
+      flushMs: this.cfg.flushMs,
+    }).catch(async (e) => {
+      logger.error(
+        `[OtelGrouper] cut failed on lane ${lane} (reconciling): ${e instanceof Error ? e.message : String(e)}`,
+      );
+      await this.recoverStaged(lane);
+      return null;
+    });
+    if (!cut) return;
+
+    recordIncrement("langfuse.otel_grouper.groups_cut", 1, { shard: lane });
+    recordIncrement("langfuse.otel_grouper.files_grouped", cut.entries.length, {
+      shard: lane,
+    });
+    const bytes = cut.entries.reduce((a, e) => a + e.size, 0);
+    const spans = cut.entries.reduce((a, e) => a + e.spanCount, 0);
+    const waitedMs = Date.now() - Math.min(...cut.entries.map((e) => e.ts));
+    logger.info(
+      `[OtelGrouper] cut lane=${lane} group=${cut.groupId.slice(0, 12)} files=${cut.entries.length} bytes=${(bytes / (1024 * 1024)).toFixed(1)}MB spans=${spans} waited=${waitedMs}ms`,
+    );
+    await this.publish(lane, cut);
   }
 
   private async tickShard(shard: string): Promise<void> {
@@ -257,7 +527,7 @@ export class OtelGrouper {
 
     const cut = await cutOtelGroup({
       redis,
-      shard,
+      groupingKey: shard,
       token: this.token,
       targetBytes: this.cfg.targetBytes,
       targetRows: this.cfg.targetRows,
@@ -309,19 +579,21 @@ export class OtelGrouper {
    * stays in staging and the next tick's recovery republishes it (jobId
    * dedup + load label make every retry idempotent).
    */
-  private async publish(shard: string, cut: OtelGroupCut): Promise<void> {
+  private async publish(groupingKey: string, cut: OtelGroupCut): Promise<void> {
     try {
-      await this.addGroupJob(shard, cut);
+      await this.addGroupJob(groupingKey, cut);
     } catch (e) {
-      recordIncrement("langfuse.otel_grouper.publish_errors", 1, { shard });
+      recordIncrement("langfuse.otel_grouper.publish_errors", 1, {
+        shard: groupingKey,
+      });
       logger.error(
-        `[OtelGrouper] publish failed for group ${cut.groupId} on ${shard} (manifest retained for republish): ${e instanceof Error ? e.message : String(e)}`,
+        `[OtelGrouper] publish failed for group ${cut.groupId} on ${groupingKey} (manifest retained for republish): ${e instanceof Error ? e.message : String(e)}`,
       );
       return;
     }
     await clearOtelStagingManifest({
       redis: this.redis!,
-      shard,
+      groupingKey,
       groupId: cut.groupId,
     });
   }
@@ -344,12 +616,12 @@ export class OtelGrouper {
   private async recoverStaged(shard: string): Promise<boolean> {
     const redis = this.redis!;
     let clean = true;
-    const groupIds = await scanStagedOtelGroups({ redis, shard });
+    const groupIds = await scanStagedOtelGroups({ redis, groupingKey: shard });
     for (const groupId of groupIds) {
       try {
         const manifest = await readOtelStagingManifest({
           redis,
-          shard,
+          groupingKey: shard,
           groupId,
         });
         if (!manifest) continue;
@@ -357,7 +629,7 @@ export class OtelGrouper {
         // LTRIM never ran): idempotent LREM of every manifest member.
         await reconcileOtelPending({
           redis,
-          shard,
+          groupingKey: shard,
           rawEntries: manifest.rawEntries,
           // Head-window bound for the residue scan (see RECONCILE_LUA):
           // members can only live within the cut window, so recovery cost is
@@ -382,39 +654,41 @@ export class OtelGrouper {
     return clean;
   }
 
-  private async acquireOrRenew(shard: string): Promise<boolean> {
+  private async acquireOrRenew(
+    groupingKey: string,
+    ttlMs: number = this.cfg.lockTtlMs,
+  ): Promise<boolean> {
     const redis = this.redis!;
-    const { lockTtlMs } = this.cfg;
-    if (this.held.has(shard)) {
+    if (this.held.has(groupingKey)) {
       if (
         await renewOtelGrouperLease({
           redis,
-          shard,
+          groupingKey,
           token: this.token,
-          ttlMs: lockTtlMs,
+          ttlMs,
         })
       ) {
         return true;
       }
-      this.held.delete(shard); // lost it (expiry/takeover) — fall through
+      this.held.delete(groupingKey); // lost it (expiry/takeover) — fall through
     }
     const acquired = await acquireOtelGrouperLease({
       redis,
-      shard,
+      groupingKey,
       token: this.token,
-      ttlMs: lockTtlMs,
+      ttlMs,
     });
-    if (acquired) this.held.add(shard);
+    if (acquired) this.held.add(groupingKey);
     return acquired;
   }
 
   private async emitShardGauges(shard: string): Promise<void> {
     const redis = this.redis!;
     const [depth, quarantine, oldestAge, staged] = await Promise.all([
-      otelPendingDepth({ redis, shard }),
-      otelQuarantineDepth({ redis, shard }),
-      otelPendingOldestAgeMs({ redis, shard }),
-      scanStagedOtelGroups({ redis, shard }),
+      otelPendingDepth({ redis, groupingKey: shard }),
+      otelQuarantineDepth({ redis, groupingKey: shard }),
+      otelPendingOldestAgeMs({ redis, groupingKey: shard }),
+      scanStagedOtelGroups({ redis, groupingKey: shard }),
     ]);
     recordGauge("langfuse.otel_grouper.pending_depth", depth, { shard });
     recordGauge("langfuse.otel_grouper.quarantine_depth", quarantine, {
@@ -481,12 +755,22 @@ export class OtelGrouper {
   }
 
   private async publishToQueue(
-    shard: string,
+    groupingKey: string,
     cut: OtelGroupCut,
   ): Promise<void> {
-    const queue = OtelIngestionQueue.getInstance({ shardName: shard });
+    // F3: the consumer queue is DECOUPLED from the groupingKey (shard or lane).
+    // A lane name would NaN → shard 0 (consumption skew); instead pick the shard
+    // deterministically from the groupId, so a lane's groups spread evenly AND
+    // every replay / DLQ redrive of the same group hits the same queue.
+    const shardNames = OtelIngestionQueue.getShardNames();
+    const shardName =
+      shardNames[getShardIndex(cut.groupId, shardNames.length)] ??
+      shardNames[0];
+    const queue = OtelIngestionQueue.getInstance({ shardName });
     if (!queue) {
-      throw new Error(`otel queue instance unavailable for shard ${shard}`);
+      throw new Error(
+        `otel queue instance unavailable (group ${cut.groupId}, groupingKey ${groupingKey})`,
+      );
     }
     await queue.add(
       QueueJobs.OtelIngestionJob,

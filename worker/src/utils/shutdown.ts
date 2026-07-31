@@ -1,5 +1,5 @@
 import { DorisClientManager, logger } from "@langfuse/shared/src/server";
-import { redis } from "@langfuse/shared/src/server";
+import { redis, stopSplitCacheRefresh } from "@langfuse/shared/src/server";
 
 import { DorisWriter } from "../services/DorisWriter";
 import { setSigtermReceived } from "../features/health";
@@ -62,6 +62,10 @@ export const onShutdown: NodeJS.SignalsListener = async (signal) => {
   // Flush all pending writes to Doris AFTER closing ingestion queue worker that is writing to it
   await DorisWriter.getInstance().shutdown();
   logger.info("Doris writer has been shut down.");
+
+  // Close the split-cache refresh timer + its dedicated pub/sub connections
+  // (they are not the shared `redis`, so the disconnect below would leak them).
+  stopSplitCacheRefresh();
 
   redis?.disconnect();
   logger.info("Redis connection has been closed.");

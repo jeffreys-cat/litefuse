@@ -12,6 +12,10 @@ import {
   recordIncrement,
   traceException,
   OtelIngestionProcessor,
+  isSplitProject,
+  tableFor,
+  splitRetentionDays,
+  handleMissingSplitTable,
   type EventRecordInsertType,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
@@ -71,6 +75,12 @@ export const isDeterministicIngestError = (e: unknown): boolean => {
   if (e instanceof SyntaxError) return true;
   if (e instanceof ForbiddenError) return true;
   return false;
+};
+
+/** Doris "target table doesn't exist" — the split-table three-way trigger. */
+const isMissingTableError = (e: unknown): boolean => {
+  const m = e instanceof Error ? e.message : String(e);
+  return /does not exist|unknown table|table.*not found|TableNotFound/i.test(m);
 };
 
 const deadLetterRow = (params: {
@@ -175,6 +185,42 @@ export const processOtelGroupJob = async (
     return true;
   });
 
+  // Target tables (Stage 1.6). A group is homogeneous: a project lane holds one
+  // split project (→ events_full_<pid>); a shared shard holds only non-split
+  // projects (→ shared events_full). So the target derives from any entry's
+  // projectId — tableFor returns the shared name for a non-split project and the
+  // per-project name for a split one. Registration's fail-and-retry gate (1.3)
+  // guarantees a split project's files never land in a shared shard group.
+  const targetProjectId = entries[0]?.projectId;
+  const split = targetProjectId ? isSplitProject(targetProjectId) : false;
+  const eventsTable = targetProjectId
+    ? tableFor(targetProjectId, "events_full")
+    : "events_full";
+  const scalarTable = targetProjectId
+    ? tableFor(targetProjectId, "traces_scalar")
+    : "traces_scalar";
+
+  // Retention filter (SPLIT targets only, design §4.3): a split table is
+  // dynamic_partition — a row older than the project's retention would be
+  // committed then silently TTL-dropped (tablet-version churn, the E-235
+  // incident). Drop such rows before the load (row-level dead letter). Shared
+  // targets skip: no dynamic_partition, deletion is the batch cleaner's job, and
+  // filtering here would wrongly kill a shared project's historical replay.
+  // The cutoff is anchored to the group's newest registration ts (deterministic
+  // across replays — I5), not Date.now().
+  const retentionDays = split ? splitRetentionDays(targetProjectId!) : null;
+  const nowRef =
+    entries.length > 0 ? Math.max(...entries.map((e) => e.ts)) : Date.now();
+  const retentionCutoffMs =
+    retentionDays != null ? nowRef - retentionDays * 86_400_000 : null;
+  let overWindowRows = 0;
+  const withinRetention = (startTimeMs: number): boolean => {
+    if (retentionCutoffMs === null || startTimeMs >= retentionCutoffMs)
+      return true;
+    overWindowRows++;
+    return false;
+  };
+
   // ① Download + transform under the transform semaphore. Deterministic
   // errors dead-letter the FILE (its rows are skipped, the rest of the group
   // lives on); anything else fails the job → BullMQ replay.
@@ -220,13 +266,26 @@ export const processOtelGroupJob = async (
   // them during the remaining (slow, up-to-600s) loads instead of holding
   // ~5-6x the source size until the function exits.
   let eventRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.eventRecords.map((r) => formatRecordForDoris(r, "events_full")),
+    t.eventRecords
+      .filter((r) => withinRetention(r.start_time))
+      .map((r) => formatRecordForDoris(r, eventsTable)),
   );
   let scalarRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.scalarRecords.map((r) => formatRecordForDoris(r, "traces_scalar")),
+    t.scalarRecords
+      .filter((r) => withinRetention(r.start_time))
+      .map((r) => formatRecordForDoris(r, scalarTable)),
   );
   const eventRowCount = eventRows.length;
   const scalarRowCount = scalarRows.length;
+  if (overWindowRows > 0) {
+    recordIncrement(
+      "langfuse.otel_group.retention_filtered_rows",
+      overWindowRows,
+    );
+    logger.warn(
+      `event=otel_retention_filtered group=${groupId.slice(0, 12)} project=${targetProjectId} rows=${overWindowRows} retentionDays=${retentionDays} — rows older than retention dropped before load`,
+    );
+  }
 
   // ② Empty group (every file dead-lettered): nothing to load — write the
   // ledger so the files never resurface in reconciliation, and ack.
@@ -247,12 +306,33 @@ export const processOtelGroupJob = async (
   const hadEventsBody = eventsBody !== null;
   const eventsBytes = eventsBody?.byteLength ?? 0;
   const tEvents = Date.now();
-  const outcome = eventsBody
-    ? await deps.streamLoadBody("events_full", eventsBody, eventRowCount, {
-        ...LOAD_OPTS,
-        label,
-      })
-    : { dedupedByLabel: false };
+  let outcome: StreamLoadOutcome;
+  try {
+    outcome = eventsBody
+      ? await deps.streamLoadBody(eventsTable, eventsBody, eventRowCount, {
+          ...LOAD_OPTS,
+          label,
+        })
+      : { dedupedByLabel: false };
+  } catch (e) {
+    // "Table doesn't exist" three-way (design §4.2 / Stage 1.2d): a split
+    // target's table is gone. handleMissingSplitTable classifies via PG —
+    // reprovision+retry (live project), pg-error→retry (never guess), or
+    // skip (tombstoned project → dead-letter the group so it doesn't retry
+    // forever recreating a table the deletion flow is dropping).
+    if (split && isMissingTableError(e)) {
+      const action = await handleMissingSplitTable(targetProjectId!);
+      if (action === "skip") {
+        deadLetterRow({
+          fileKey: `group:${groupId}`,
+          reason: `split tables missing for tombstoned project ${targetProjectId}`,
+        });
+        await writeLedger(payload, deps);
+        return;
+      }
+    }
+    throw e; // transient / reprovision → BullMQ replay
+  }
   eventsBody = null; // release the group-sized Buffers before the scalar load
   const eventsMs = Date.now() - tEvents;
 
@@ -279,13 +359,38 @@ export const processOtelGroupJob = async (
     // server-side no-op bonus on top of MoW folding — the DELETE-protection
     // semantics still belong to the ledger gate above, which short-circuits
     // before this load is even attempted.
-    const scalarOutcome = await deps.streamLoadBody(
-      "traces_scalar",
-      scalarBody,
-      scalarRowCount,
-      { ...LOAD_OPTS, label: labelForGroupTable(groupId, "traces_scalar") },
-    );
-    scalarDeduped = scalarOutcome.dedupedByLabel;
+    try {
+      const scalarOutcome = await deps.streamLoadBody(
+        scalarTable,
+        scalarBody,
+        scalarRowCount,
+        { ...LOAD_OPTS, label: labelForGroupTable(groupId, "traces_scalar") },
+      );
+      scalarDeduped = scalarOutcome.dedupedByLabel;
+    } catch (e) {
+      // Same "table doesn't exist" three-way as the events load (③). Reachable
+      // only when traces_scalar_<pid> is lost AFTER go-live (ops DROP, rebuild
+      // window, replica loss) — the flip gate keeps split=true from ever being
+      // set with a base table missing, so this is never a provisioning race.
+      // events_full is ALREADY committed here, so on reprovision+retry the
+      // replay label-dedups events and the scalar gate (ledger still absent)
+      // re-attempts THIS load once the table is back. A tombstoned project →
+      // dead-letter + ledger (events already in; the deletion flow drops the
+      // rest), so the job doesn't retry forever recreating a table being torn
+      // down.
+      if (split && isMissingTableError(e)) {
+        const action = await handleMissingSplitTable(targetProjectId!);
+        if (action === "skip") {
+          deadLetterRow({
+            fileKey: `group:${groupId}`,
+            reason: `scalar table missing for tombstoned project ${targetProjectId}`,
+          });
+          await writeLedger(payload, deps);
+          return;
+        }
+      }
+      throw e; // transient / reprovision → BullMQ replay
+    }
   }
   scalarRows = null;
   const scalarMs = Date.now() - tScalar;

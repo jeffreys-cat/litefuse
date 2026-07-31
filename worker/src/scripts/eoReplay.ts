@@ -56,7 +56,7 @@ const main = async () => {
     for (let i = 0; i < 5; i++) {
       const admitted = await registerOtelFile({
         redis,
-        shard,
+        groupingKey: shard,
         ttlMs: sharedEnv.LITEFUSE_OTEL_REGISTERED_TTL_MS,
         entry: {
           v: 1,
