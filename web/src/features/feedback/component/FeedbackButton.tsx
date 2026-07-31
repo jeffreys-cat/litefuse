@@ -9,8 +9,8 @@ import {
   DialogPortal,
   DialogBody,
 } from "@/src/components/ui/dialog";
+import { LITEFUSE_GITHUB_ISSUES_URL } from "@/src/utils/constants";
 import { useState } from "react";
-import Link from "next/link";
 import { Bug, Sparkles } from "lucide-react";
 
 interface FeedbackDialogProps {
@@ -45,16 +45,24 @@ export function FeedbackButtonWrapper({
           </DialogHeader>
           <DialogBody>
             <div className="flex flex-row flex-wrap items-center justify-center gap-3 sm:justify-start">
-              <Link href="https://litefuse.ai/ideas" target="_blank">
-                <Button variant="secondary">
+              <Button variant="secondary" asChild>
+                <a
+                  href={LITEFUSE_GITHUB_ISSUES_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   <Sparkles className="mr-2 h-4 w-4" /> Submit Feature Request
-                </Button>
-              </Link>
-              <Link href="https://litefuse.ai/issues" target="_blank">
-                <Button variant="secondary">
+                </a>
+              </Button>
+              <Button variant="secondary" asChild>
+                <a
+                  href={LITEFUSE_GITHUB_ISSUES_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   <Bug className="mr-2 h-4 w-4" /> Report a Bug
-                </Button>
-              </Link>
+                </a>
+              </Button>
             </div>
           </DialogBody>
         </DialogContent>

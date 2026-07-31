@@ -1,726 +1,435 @@
 # Litefuse Billing 当前计量计费逻辑
 
-> 基于 `billing` 分支 commit `e580405` 的当前代码梳理。
->
-> Litefuse Billing 存在两套相关但不完全一致的账：
->
-> - **Litefuse 内部账**：用于 Billing 页面、Developer 额度和 ingestion 阻断，会从 Doris 当前数据重新计算，删除数据后可能下降。
-> - **Stripe 计费账**：按小时把原始 units 上报给 Stripe；某小时一旦成功提交，当前代码不会因为后续删除数据而自动冲销。
-
-## 1. 总体数据流
-
-```mermaid
-flowchart LR
-  Ingestion["Ingestion"] --> Doris["Doris events_full / scores"]
-  Doris --> Meter["每小时 :05 Stripe Metering"]
-  Meter --> Backup["BillingMeterBackup"]
-  Meter --> Stripe["Stripe litefuse_units Meter"]
-
-  Doris --> Threshold["每小时 :35 当前账期重算"]
-  Threshold --> Org["Organization usage/state"]
-  Org --> Auth["API Key Auth Cache"]
-  Auth --> Guard["Ingestion 403 Guard"]
-
-  UI["Litefuse Billing 页面"] --> Status["Billing tRPC"]
-  Status --> Org
-  Status --> Stripe
-  Stripe --> Webhook["Stripe Webhook"]
-  Webhook --> Org
-```
-
-主要入口：
-
-- Billing UI、tRPC 和 Stripe service：`web/src/features/billing/`
-- Stripe webhook：`web/src/app/api/billing/stripe-webhook/route.ts`
-- Worker 计量和阈值处理：`worker/src/features/billing/`
-- Billing 队列：`worker/src/queues/cloudBillingQueues.ts`
-- 队列生产者：`packages/shared/src/server/redis/cloudUsageMeteringQueue.ts`、`cloudFreeTierUsageThresholdQueue.ts`
-- Billing 聚合查询：`packages/shared/src/server/repositories/billing.ts`
-- Billing 数据结构：`packages/shared/prisma/schema.prisma`
-
-## 2. Units 统计口径
-
-当前公式为：
-
-```text
-units = traces + observations + scores
-```
-
-具体定义：
-
-- `events_full.parent_span_id = ''` 的根事件计 1 个 trace unit。
-- `events_full` 中每一行事件计 1 个 observation unit，根事件也包含在内。
-- `scores` 中每一行计 1 个 score unit。
-- Organization 下所有 `deletedAt = null` 的 Project 汇总并共享额度。
-- 使用服务端 `created_at` 归属小时和账期，不使用客户端业务 `timestamp` 或 `start_time`。
-
-因此：
-
-```text
-1 个根事件 + 1 个子事件 + 1 个 score
-= 1 trace + 2 observations + 1 score
-= 4 units
-```
-
-相关实现：
-
-- `packages/shared/src/server/repositories/billing.ts`
-- `packages/shared/src/server/repositories/traces.ts`
-- `packages/shared/src/server/repositories/observations.ts`
-- `packages/shared/src/server/repositories/scores.ts`
-
-## 3. Billing 数据结构
-
-Organization 保存：
-
-- `cloudBillingCycleAnchor`
-- `cloudBillingCycleUpdatedAt`
-- `cloudCurrentCycleUsage`
-- `cloudFreeTierUsageThresholdState`
-- `cloudConfig`
-
-`cloudConfig` 中 Billing 相关结构：
-
-```text
-cloudConfig.plan                           // 人工套餐覆盖
-cloudConfig.stripe.customerId
-cloudConfig.stripe.activeSubscriptionId
-cloudConfig.stripe.activeProductId
-cloudConfig.stripe.activeUsageProductId
-cloudConfig.stripe.activeTeamsAddonProductId
-cloudConfig.stripe.resolvedPlan            // Stripe 解析出的 Pro / Team
-cloudConfig.stripe.subscriptionStatus
-cloudConfig.stripe.cancelAtPeriodEnd
-cloudConfig.stripe.currentPeriodEnd
-```
-
-此外还有：
-
-- `BillingMeterBackup`：保存每个 Stripe Customer 每小时的聚合值和提交 checkpoint。
-- `StripeWebhookEvent`：保存 webhook payload、处理状态、错误和幂等记录。
-- `CronJobs`：保存全局 Stripe usage metering 的小时 checkpoint。
-
-## 4. 账期计算
-
-规则：
+> 本文基于 2026-07-31 的当前实现，说明 Billing 的业务规则、数据流和已知边界，不展开具体代码结构。
 
-- Developer 默认以 Organization 创建日作为月度锚点。
-- 付费订阅使用 Stripe subscription `current_period_start`。
-- 付费服务结束后使用 subscription period end；缺失时回退当前时间。
-- 账期锚点真正改变时清零 `cloudCurrentCycleUsage`。
-- 同一账期内重复 subscription 或 invoice webhook 不重复清零。
-- 29、30、31 日锚点在短月份调整为当月最后一天。
-- 应用会把锚点归一到 UTC 当天 `00:00`，Stripe 原始时分秒不会参与应用账期边界。
+## 1. 核心结论
 
-实现位于：
+Litefuse 保留两个定时 Job，但它们承担不同职责：
 
-```text
-packages/shared/src/server/utils/billingCycleHelpers.ts
-web/src/features/billing/server/billingService.ts
-```
+- Metering Job 负责把 Pro 用量上报给 Stripe。
+- Threshold Job 负责 Developer 免费额度、预警和 ingestion 阻断。
 
-## 5. Stripe Usage Meter 上报
+这两个 Job 不会再共同覆盖同一个用量数字。
 
-### 5.1 调度
+Developer 和 Pro 也不再共用同一种用量存储方式：
 
-`cloud-usage-metering-queue`：
+- Developer 使用定期计算的免费额度快照。
+- Pro 使用“已成功提交 Stripe 的用量”加“尚未上报的实时用量”。
 
-- 每小时第 5 分钟触发。
-- Worker 启动时添加一个 bootstrap job。
-- consumer concurrency 为 1。
-- BullMQ job 最多尝试 5 次并使用指数退避。
-- 单次 Stripe API 调用内部最多重试 3 次。
-- 队列注册要求 consumer flag 为 `true` 且存在 `STRIPE_SECRET_KEY`。
-- 不要求配置 Cloud Region。
+因此，Pro 页面主用量始终满足：
 
-### 5.2 小时处理
+**当前用量 = 已上报用量 + 待上报用量。**
 
-Worker 使用 `CronJobs.cloud-usage-metering-hourly`，一次处理一个完整小时 `[start, end)`：
+## 2. Units 如何计算
 
-1. 初始 checkpoint 指向上一个完整小时。
-2. 小时结束后预留 5 分钟数据落库时间。
-3. 使用 30 分钟 processing lease 和数据库 CAS 防止并发处理同一区间。
-4. 只处理同时存在以下数据的 Organization：
-   - Stripe Customer；
-   - active subscription；
-   - Stripe resolved plan。
-5. 汇总当前未删除 Project 的 trace、observation、score。
-6. 零用量不创建 meter event，但仍推进 checkpoint。
-7. 非零用量先 upsert `BillingMeterBackup`，再调用 Stripe。
-8. 所有 Organization 成功后才推进全局 checkpoint。
-9. 如果落后多个小时，会立即追加 job 逐小时追赶。
+Organization 下所有未删除 Project 的用量会合并计算。
 
-### 5.3 幂等性
+计量口径为：
 
-本地 backup 唯一键：
+- 每个根事件贡献 1 个 trace unit。
+- 每个事件贡献 1 个 observation unit，根事件也包含在内。
+- 每个 score 贡献 1 个 score unit。
 
-```text
-stripeCustomerId + meterId + startTime + endTime
-```
+例如，一个根事件、一个子事件和一个 score 会产生：
 
-Stripe identifier：
+- 1 个 trace unit；
+- 2 个 observation units；
+- 1 个 score unit；
+- 合计 4 units。
 
-```text
-litefuse:{orgId}:{intervalStartUnixSeconds}
-```
+所有计量都使用服务端创建时间，不使用客户端提供的业务时间。这样可以避免通过回填历史时间把新写入的数据计入旧账期。
 
-行为：
+## 3. 套餐和额度
 
-- `submittedAt != null` 时跳过再次提交。
-- 某个 Organization 成功、后续 Organization 失败时，重试会跳过已成功的 backup。
-- Stripe 成功但本地 checkpoint 写入失败时，重试仍使用相同 identifier。
-- 整个小时没有完整成功前，不推进 `CronJobs.lastRun`。
+| 套餐       |         固定月费 |    每月包含量 | 超出后处理                      |
+| ---------- | ---------------: | ------------: | ------------------------------- |
+| Developer  |             免费 | 100,000 units | 达到上限后可触发 ingestion 阻断 |
+| Pro        |             $199 | 200,000 units | 每个额外 unit 收取 $0.00004     |
+| Teams      | Pro 加历史附加项 |      继承 Pro | 仅兼容已有订阅，不开放自助购买  |
+| Enterprise |         合同约定 |      合同约定 | 不走自助 Checkout               |
 
-### 5.4 Stripe payload
+Pro 每额外 100,000 units 收取 $4。
 
-应用始终上报原始 units，不预先扣除 Pro 包含的 200,000 units：
+应用始终向 Stripe 上报原始 units，不会先减去 200,000 免费额度。免费层和超额价格由 Stripe 的阶梯价格负责计算。
 
-```json
-{
-  "event_name": "litefuse_units",
-  "identifier": "litefuse:{orgId}:{intervalStartUnixSeconds}",
-  "timestamp": "intervalEndUnixSeconds",
-  "payload": {
-    "stripe_customer_id": "cus_...",
-    "value": "本小时原始 units"
-  }
-}
-```
+Billing 页面展示的超额金额只是税前、折扣前估算。最终税费、优惠、发票和应收金额以 Stripe 为准。
 
-## 6. 套餐和价格
+## 4. 账期如何计算
 
-| 套餐 | 固定月费 | 包含量 | 超额 |
-| --- | ---: | ---: | ---: |
-| Developer / `cloud:hobby` | $0 | 100,000 | 达到上限后阻断，不产生 usage 费用 |
-| Pro | $199 | 200,000 | $0.00004/unit，即额外 100k 为 $4 |
-| Teams | Pro + $300 add-on | 继承 Pro | 仅兼容既有订阅，不开放自助购买 |
-| Enterprise | 合同 | 合同 | 不走自助 Checkout |
+### Developer
 
-当前自助目标只接受：
+Developer 默认以 Organization 创建时间作为月度账期锚点。
 
-```text
-targetPlan = "cloud:pro"
-```
+账期保留完整 UTC 时间，包括时、分、秒和毫秒，不会截断到当天零点。
 
-Pro Checkout 包含两个 line item：
+### Pro
 
-- `STRIPE_PRO_MONTHLY_PRICE_ID`：固定 quantity 1。
-- `STRIPE_USAGE_PRICE_ID`：metered price，不传固定 quantity。
+升级 Pro 后，以 Stripe 当前订阅账期开始时间作为月度账期锚点。
 
-`STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID` 只用于识别既有 Teams 订阅。
+计费生命周期还会记录订阅真正开始和结束的精确时间，用来排除升级前和订阅结束后的数据。
 
-应用仅检查 Price ID 是否以 `price_` 开头，不会验证 Stripe Price 的真实金额、计费方式或 tiers。Stripe 中的 Usage Price 应配置为：
+例如在 10:37 升级：
 
-- Graduated tiers；
-- 0–200,000 units 单价为 0；
-- 200,001 以上为 `$0.00004/unit`；
-- meter event name 为 `litefuse_units`；
-- aggregation 为 Sum。
+- 10:37 之前的数据属于 Developer 阶段；
+- 10:37 之后的数据才进入 Pro metering；
+- 不会因为 Job 按整小时执行，就把 10:00 到 10:37 的数据计入 Pro。
 
-## 7. 超额计算
+### 月末处理
 
-Litefuse Billing 页面计算：
+如果锚点位于 29、30 或 31 日，较短月份会使用该月最后一天，同时继续保留原始时分秒。
 
-```text
-overageUnits = max(0, currentUnits - includedUnits)
-```
+例如 1 月 31 日 10:37 的锚点，在闰年 2 月会落到 2 月 29 日 10:37。
 
-Pro 预计超额：
+### 账期变化时
 
-```text
-estimatedOverageUsd = overageUnits × 0.00004
-```
+账期锚点真正变化后，旧的 Developer 用量快照会被标记为失效。
 
-例如：
+系统不会写入一个看似刚计算完成的 0。这样可以避免升级后页面在 0 和旧数据之间交替显示。
 
-```text
-300,000 units
-= $199 base + 100,000 × $0.00004
-= $203
-```
+同一账期的重复 webhook 不会触碰用量快照。
 
-该金额只是税前、折扣前估算。最终金额、税、折扣、优惠券、发票和币种精度由 Stripe 处理。
+## 5. Developer 用量逻辑
 
-## 8. Developer 预警和超额阻断
+Developer 用量快照只由 Threshold Job 更新。
 
-`cloud-free-tier-usage-threshold-queue` 每小时第 35 分钟运行，重新计算每个 Organization 的当前账期用量。
+Threshold Job 每小时第 35 分钟运行，计算 Organization 当前账期内所有有效 Project 的总 units。
 
-| 当前账期 Units | State |
-| ---: | --- |
-| 0–79,999 | `null` |
-| 80,000–99,999 | `WARNING` |
-| ≥100,000 | `BLOCKED` |
+状态规则为：
 
-### Shadow mode
+|   当前账期用量 | 状态    |
+| -------------: | ------- |
+|       0–79,999 | 正常    |
+|  80,000–99,999 | WARNING |
+| 100,000 及以上 | BLOCKED |
 
-当：
+### Shadow 模式
 
-```text
-LITEFUSE_FREE_TIER_USAGE_THRESHOLD_ENFORCEMENT_ENABLED=false
-```
+默认测试阶段建议关闭 enforcement。
 
-系统：
+关闭时：
 
-- 更新当前用量；
-- 更新最后计算时间；
-- state 保持为空；
-- 不发邮件；
+- 仍然计算和保存用量；
+- 不发送预警邮件；
+- 不进入 WARNING 或 BLOCKED；
 - 不阻断 ingestion。
 
-### Enforcement mode
+### Enforcement 模式
 
-启用后：
+开启后：
 
-- 首次进入 WARNING 时向 Organization OWNER、ADMIN 发送预警邮件。
-- 首次进入 BLOCKED 时发送阻断邮件。
-- 进入或退出 BLOCKED 时清除 Organization API Key 的 Redis 缓存。
-- API Key 下次认证时得到 `isIngestionSuspended=true`。
-- 受控 ingestion 写入返回 HTTP 403。
-- 读取接口、Billing 页面、Stripe Portal 和升级入口仍可使用。
+- 首次进入 WARNING 时通知 Organization OWNER 和 ADMIN。
+- 首次进入 BLOCKED 时发送阻断通知。
+- 进入或退出 BLOCKED 时刷新 API Key 权限缓存。
+- 受控 ingestion 写入返回 403。
+- 已有数据读取、Billing 页面、Stripe Portal 和升级入口仍然可用。
 
-人工非 Hobby 套餐或有效 Stripe 付费订阅不会进入 Developer BLOCKED。
+### 如何避免升级竞态
 
-### 当前接入阻断的接口
+Threshold Job 开始计算时会记住 Organization 的版本和账期锚点。
 
-- `/api/public/ingestion`
-- `/api/public/otel/v1/traces`
-- `/api/public/scores` 的 v1 POST
-- `/api/public/media` 的 POST
+写入结果时会再次确认这两个值没有变化。如果计算期间发生升级、订阅同步或账期切换，旧计算结果会被丢弃。
 
-### 当前已知未接入
+因此，Developer 的旧用量不会在升级后重新覆盖 Pro 状态，也不会把已经升级的 Organization 再次变为 BLOCKED。
 
-- v2 score POST/PUT
-- MCP prompt 等写操作
+付费 Organization 不会被 Threshold Job 写入用量快照。Job 只会按需清除遗留的免费层阻断状态。
 
-因此 BLOCKED 不是全系统统一只读锁。
+## 6. Pro 用量逻辑
 
-## 9. 套餐解析和 Stripe 订阅状态
+Pro 页面把用量分成两部分。
 
-### 9.1 套餐优先级
+### Reported to Stripe
 
-Cloud 环境：
+这是当前精确账期内已经成功提交给 Stripe API 的用量。
 
-1. `cloudConfig.plan` 人工套餐覆盖优先。
-2. 否则要求 Stripe 同时存在 `activeSubscriptionId` 和 `resolvedPlan`。
-3. 都没有时为 Developer。
+它来自本地提交账本，只统计提交成功且已经位于 metering checkpoint 之前的记录。
 
-非 Cloud 环境解析为 `oss`。
+“Reported to Stripe”只表示 Stripe API 已经接受，不表示 Stripe Dashboard 已完成异步聚合。Dashboard 可能稍后才显示相同结果。
 
-人工套餐覆盖存在时：
+### Pending
 
-- 禁止 Checkout；
-- 禁止自助套餐变更；
-- 禁止取消和恢复；
-- 禁止创建 Stripe Portal；
-- webhook 仍可能更新 `cloudConfig.stripe.*`，但不会覆盖人工套餐字段。
+这是 metering checkpoint 之后，到当前时刻之间的 Doris 用量。
 
-### 9.2 有效付费状态
+如果刚升级且 checkpoint 早于升级时间，Pending 会从升级时间开始计算，不会包含升级前数据。
 
-以下状态保留 Pro/Teams 权益：
+### Current
 
-- `active`
-- `trialing`
-- `past_due`
+页面主数字是 Reported 和 Pending 之和。
 
-以下状态不视为有效付费：
+预计超额也基于这个主数字计算，因此页面既包含已经上报的用量，也包含尚未等到下一个小时 Job 的新用量。
 
-- `unpaid`
-- `canceled`
-- `incomplete`
-- `incomplete_expired`
-- `paused`
-- 其他未列入付费状态的值
+Developer 页面不显示 Reported 和 Pending，只显示免费层当前累计。
 
-`past_due` 期间页面显示付款异常提示，但暂时保留付费权益。
+## 7. Metering Job 如何工作
 
-### 9.3 Subscription line items 解析
+Metering Job 每小时第 5 分钟触发，Worker 启动时也会执行一次追赶检查。
 
-只有 subscription 同时包含当前配置识别出的 Pro Price 和 Usage Price，才解析为 Pro。
+它一次认领一个已经结束的完整小时，并预留 5 分钟等待数据落入 Doris。
 
-在此基础上包含 Teams add-on Price，才解析为 Team。
+### 防止两个 Worker 重复处理
 
-未知 Price 会被忽略。应用保存的是对应 Product ID：
+每个小时只有一个 Worker 可以成功认领。
 
-- `activeProductId`
-- `activeUsageProductId`
-- `activeTeamsAddonProductId`
+认领使用数据库状态和租约保护。第二个 Worker 如果发现该小时已经被处理，会直接退出，不会重复提交 Stripe。
 
-## 10. Subscription 生命周期
+### 与订阅生命周期求交
 
-### Developer → Pro
+Job 会把目标小时与每个 Organization 的订阅有效时间求交。
 
-1. 确认没有人工套餐覆盖和 active subscription。
-2. 创建或复用 Stripe Customer。
-3. 创建包含 Pro 固定费和 Usage Price 的 Checkout Session。
-4. Checkout 返回后等待 Stripe webhook 同步。
+可能得到以下结果：
 
-### Pro 再选 Pro
+- 整个小时都有效，按完整小时统计；
+- 只在小时中途开始，排除开始前数据；
+- 只在小时中途结束，排除结束后数据；
+- 与订阅生命周期完全不相交，不做任何上报。
 
-返回 no-op，不创建新 subscription 或 schedule。
+### 跨月账期拆分
 
-### 历史 Teams → Pro
+如果月度账期边界落在小时中间，该小时会被拆成两个独立 segment。
 
-创建 Stripe Subscription Schedule：
+每个 segment 都有自己的开始时间、结束时间、本地提交记录和 Stripe 幂等标识，确保前后两部分进入正确账期。
 
-- 当前 phase 保持原 line items；
-- 下个 period 开始使用 Pro + Usage；
-- 即账期末移除 Teams add-on。
+### 零用量
 
-### 取消
+零用量 segment 不创建 Stripe meter event，但不会阻止小时 checkpoint 继续推进。
 
-设置：
+### 失败和重试
 
-```text
-cancel_at_period_end = true
-```
+每次 Stripe API 调用会自动重试。整个 Job 也有 BullMQ 重试。
 
-当前账期内继续保留付费权益，账期结束后降为 Developer。
+只有该小时所有 Organization、所有 segment 都成功后，全局 checkpoint 才会推进。
 
-### 恢复
+如果某些 segment 已成功，而后续 segment 失败，下一次重试会跳过已提交部分，不会重复计费。
 
-清除：
+如果 Worker 落后多个小时，会按小时依次追赶，而不是把多个小时合成一个大区间。
 
-```text
-cancel_at = ""
-cancel_at_period_end = false
-```
+## 8. Webhook 和订阅同步
 
-### Keep current plan
+Billing 会处理 Checkout、订阅创建、订阅更新、订阅删除和发票状态事件。
 
-- 释放 active/not_started Subscription Schedule。
-- 如果还存在待取消状态，同时清除取消标记。
+### Event 幂等
 
-### Stripe Portal
+每个 Stripe event 都会记录处理状态：
 
-为已有 Customer 创建 Customer Portal Session，用于：
+- 已处理事件再次到达时直接视为重复事件。
+- 正在处理的事件有短期租约，防止并发重复执行。
+- 处理失败或租约超时后可以重新认领。
 
-- 付款方式；
-- 税务信息；
-- 发票；
-- Stripe 支持的客户资料。
+### 使用 Stripe 当前状态
 
-## 11. Stripe metadata 和区域隔离
+收到 webhook 后，系统优先重新读取 Stripe 当前订阅，而不是完全相信事件中可能已经过期的订阅快照。
 
-Customer metadata：
+Checkout、subscription 和 invoice 等不同事件即使乱序到达，最终也会尽量同步 Stripe 的最新状态。
 
-```text
-orgId
-cloudRegion
-```
+### Organization 行锁
 
-Checkout Session metadata：
+订阅同步会锁定目标 Organization，并在锁内重新读取当前状态后再更新。
 
-```text
-orgId
-userId
-targetPlan
-cloudRegion
-```
+因此多个不同 event ID 同时到达时，不会都基于同一份旧数据互相覆盖。
 
-Subscription metadata：
+### 旧删除事件保护
 
-```text
-orgId
-targetPlan
-cloudRegion
-```
+删除事件只会清理与当前 Organization 订阅 ID 相同的订阅。
 
-webhook 处理 subscription 时：
+如果 Organization 已经切换到新订阅，旧订阅延迟到达的删除事件会被忽略，不会清掉新订阅。
 
-- subscription 带有 `cloudRegion`；
-- 当前部署也配置了 region；
-- 两者不一致；
+### 区域隔离
 
-则忽略该 subscription。
+Stripe Customer、Checkout 和 Subscription 都携带 Organization 和 Cloud Region 信息。
 
-如果 subscription 没有 region，或者当前环境没有 region，则不会因区域被拒绝。
+如果订阅所属 Region 与当前部署不一致，Webhook 不会更新本地 Organization，避免跨区域串单。
 
-Organization 查找顺序：
+## 9. 订阅生命周期
 
-1. Subscription metadata `orgId`；
-2. `cloudConfig.stripe.customerId`。
+### Developer 升级 Pro
 
-## 12. Stripe Webhook
+升级会创建包含 Pro 固定月费和 Usage Price 的 Stripe Checkout。
 
-端点：
+付款完成后，由 webhook 确认最新订阅状态并把 Organization 切换为 Pro。
 
-```text
-POST /api/billing/stripe-webhook
-```
+升级发生的精确时间同时成为 Pro metering 的起点。
 
-处理事件：
+### Pro 再次选择 Pro
 
-- `checkout.session.completed`
-- `customer.subscription.created`
-- `customer.subscription.updated`
-- `customer.subscription.deleted`
-- `invoice.payment_failed`
-- `invoice.paid`
+不会创建新的订阅，也不会创建重复的套餐变更。
 
-流程：
+### 历史 Teams 切换 Pro
 
-1. 使用 raw body、`stripe-signature` 和 `STRIPE_WEBHOOK_SECRET` 验签。
-2. 以 Stripe event ID 创建 `StripeWebhookEvent`。
-3. 首次状态为 `processing`。
-4. 已经 `processed` 的事件直接返回 duplicate。
-5. `processing` 状态持有 5 分钟 lease。
-6. lease 内并发投递不会重复处理。
-7. `failed` 或超过 lease 的 processing 事件可以重新 claim。
-8. 成功写入 `processed` 和 `processedAt`。
-9. 失败写入 `failed` 和错误信息，并返回 500 供 Stripe 重试。
-10. 不支持的 event 记录日志后也会标记 processed。
+当前账期继续保留 Teams 权益，在下个账期开始时移除 Teams 附加项。
 
-subscription deleted 使用 `forceClear=true`，无论 event object 中的状态如何都清除 active subscription 和 resolved plan。
+### 账期末取消
 
-## 13. Litefuse Billing 页面
+取消不会立即降级。当前账期内继续保留 Pro 权益，到期后切回 Developer。
 
-入口：
+### 恢复订阅
 
-```text
-/organization/{orgId}/settings/billing
-```
+在取消真正生效前可以恢复订阅，清除账期末取消标记。
 
-页面展示：
+### 保持当前套餐
 
-- 当前套餐；
-- Stripe subscription status；
-- 当前账期 units；
-- 套餐包含量；
-- 重置日期；
-- Pro 预计超额；
-- past_due 提示；
-- Developer BLOCKED 提示；
-- 待取消或待降级；
-- 人工套餐覆盖；
-- Stripe 未配置或 Price ID 错误；
-- Developer、Pro、Enterprise 套餐卡片。
+如果存在待生效套餐变更，可以取消该计划并继续当前套餐。
 
-页面操作：
+### 付款异常
 
-- Upgrade/Switch to Pro；
-- Payment methods & invoices；
-- Cancel at period end；
-- Reactivate subscription；
-- Keep current plan；
-- Contact sales。
+Active、Trialing 和 Past Due 状态仍保留付费权益。
 
-### 页面刷新
+Unpaid、Canceled、Incomplete Expired 等终止状态会清除付费套餐并回到 Developer。
 
-- 每 60 秒调用一次 `getBillingStatus`。
-- 窗口重新 focus 时立即刷新。
-- tab 重新 visible 时立即刷新。
-- 从 Stripe Portal 返回时立即刷新。
-- Billing usage 有 5 分钟服务端缓存。
-- active subscription 存在时，服务端会实时 retrieve Stripe subscription，并修复可能漏掉的 webhook 状态。
+Past Due 期间页面会提醒更新付款方式，但不会立即失去 Pro 权益。
 
-### 当前实际权限
+## 10. Billing 页面展示
 
-普通 Organization 角色中：
+Billing 页面每 60 秒自动刷新。窗口重新获得焦点、标签页重新可见或从 Stripe Portal 返回时也会刷新。
 
-- OWNER 拥有 `langfuseCloudBilling:CRUD`。
-- ADMIN、MEMBER、VIEWER 当前都没有该 scope。
-- 系统级 admin 可以绕过。
+### Developer 页面
 
-但 Developer 阈值通知邮件会发送给 OWNER 和 ADMIN。
+页面优先使用 5 分钟内的免费额度快照。
 
-## 14. 删除数据后的处理
+快照过期后，页面可以直接查询 Doris 得到较新的估算值，但页面查询不会把结果写回 Organization。
 
-这是内部账和 Stripe 账最容易产生差异的部分。
+因此页面查看本身不会与 Threshold Job 争抢快照写入权。
 
-| 删除场景 | Litefuse 内部当前用量 | 已上报 Stripe 用量 |
-| --- | --- | --- |
-| 删除 trace | Doris 删除 trace、关联 observations/scores 后，下次重算下降 | 已提交小时不冲销 |
-| 删除单个 score | 下次重算减少相应 score unit | 已提交小时不冲销 |
-| 删除 Project | soft delete 后立即从有效 Project 列表排除 | 未处理小时可能不再上报；已提交小时不变 |
-| Retention 清理 | Doris 物理删除后，下次重算下降 | 已提交小时不变 |
-| 删除 Organization | 先立即取消 Stripe subscription，再删除本地 Organization | 历史 meter events、Customer、invoice 不删除 |
+### Pro 页面
 
-### 14.1 删除发生在 Stripe 上报前
+页面每次根据当前账期的已提交账本和 Doris Pending 计算：
 
-- Stripe metering 查询 Doris 当前结果。
-- 已删除的 trace、observation、score 不再被统计。
-- Project 一旦 soft delete，即使物理数据尚未删除，也会因为不在有效 Project 列表而被排除。
-- backup 已创建但 `submittedAt` 为空时，重跑会 upsert 最新聚合值后提交。
+- 当前总用量；
+- Reported to Stripe；
+- Pending；
+- 已包含额度；
+- 超额 units；
+- 预计超额金额；
+- 重置日期。
 
-### 14.2 删除发生在 Stripe 上报后
+如果 Stripe Dashboard 尚未完成异步聚合，页面 Reported 可能暂时比 Dashboard 先更新。
 
-一旦 `BillingMeterBackup.submittedAt` 已写入，当前代码没有：
+## 11. 删除数据后的影响
 
-- meter event adjustment；
-- 负数 meter event；
-- 自动撤回；
-- 自动退款；
-- credit note。
+删除对 Developer、Pro Pending 和 Pro Reported 的影响不同。
 
-删除只会改变 Litefuse 内部当前用量，不会改变 Stripe 已收到的小时用量。
+| 删除发生的位置            | Developer          | Pro Pending        | Pro Reported / Stripe                            |
+| ------------------------- | ------------------ | ------------------ | ------------------------------------------------ |
+| 上报前删除 trace 或 score | 下次计算后下降     | 下降               | 最终不会上报被删除部分                           |
+| 上报后删除 trace 或 score | 下次计算后下降     | 不涉及已提交区间   | 已提交用量不自动冲销                             |
+| 删除 Project              | 立即从后续计算排除 | 不再包含该 Project | 历史已提交用量保持不变                           |
+| Retention 清理            | 下次计算后下降     | 只影响尚未提交部分 | 历史已提交用量保持不变                           |
+| 删除 Organization         | 页面不再可用       | 页面不再可用       | 历史 Customer、meter event 和 invoice 不自动删除 |
 
-因此可能出现：
+### 删除发生在上报前
 
-```text
-Litefuse Billing 页面当前用量 < Stripe 当前账期 meter summary
-```
+Metering 和 Pending 都查询 Doris 当前数据。
 
-### 14.3 删除后解除 BLOCKED
+如果数据已经删除，或者 Project 已被软删除，该部分不会进入最终 Stripe 上报。
 
-内部用量下降后：
+### 删除发生在上报后
 
-- Billing 页面缓存过期后可能先显示较低的 current units。
-- 页面刷新只更新用量，不更新 `cloudFreeTierUsageThresholdState`。
-- 必须等下一次每小时第 35 分钟 threshold job 才重新计算 state。
-- BLOCKED 降为 WARNING/null 时会清除 API Key 缓存并恢复受控 ingestion。
-- BLOCKED → WARNING 会按当前代码再次发送 WARNING 邮件。
+已经成功提交的用量不会自动产生负数调整、退款或 credit note。
 
-因此可能短暂出现：
+正常情况下，checkpoint 只向前推进，因此系统也不会重新计算已经提交的 segment。
 
-```text
-页面显示低于 100,000 units，但 ingestion 仍返回 403
-```
+### Developer 解除 BLOCKED
 
-### 14.4 Project 删除
+删除数据后，Developer 页面可能先显示较低用量，但 BLOCKED 状态要等下一次 Threshold Job 才会更新。
 
-Project 删除分两步：
+因此可能短暂出现页面低于 100,000 units，但 ingestion 仍返回 403 的情况。
 
-1. Web 将 `Project.deletedAt` 设为当前时间并删除 Project API Key。
-2. ProjectDeleteQueue 异步删除 Doris、S3、media 和 PostgreSQL 数据。
+## 12. Project Transfer 的影响
 
-Billing 的 Project 查询只选择 `deletedAt = null`，因此 soft delete 后就不再计算该 Project，而不是等待物理删除完成。
+Project Transfer 没有专门的账务拆分。
 
-### 14.5 Retention 清理
+- Developer 会在下次计算时，按 Project 当前所属 Organization 和新 Organization 的账期重新归属历史数据。
+- Pro 尚未上报的 Pending 会按 Project 当前所属 Organization 计算。
+- 已经提交 Stripe 的用量仍保留在原 Organization 对应的 Stripe Customer，不会随 Project 迁移。
+- 转移操作不会立即刷新来源和目标 Organization 的 Developer 快照。
 
-Project `retentionDays` 会异步删除：
+## 13. Data Retention 与数据访问
 
-- `traces`
-- `observations`
-- `scores`
-- `events_full`
-- media S3 对象和 PostgreSQL media
-- 启用 blob log 时的 ingestion blob 和 Doris 引用
+Pro 的 3 年数据访问窗口和 Project Data Retention 是两件不同的事。
 
-Retention 使用事件业务时间字段作为删除 cutoff，而 Billing 使用服务端 `created_at` 统计。最近创建但业务时间很旧的数据可能被 retention 删除，随后从内部 Billing 重算中消失。
+- 数据访问窗口决定用户最多可以查询多早的数据。
+- Data Retention 决定系统是否主动物理删除超过 Project 保留期限的数据。
 
-### 14.6 Organization 删除
+每个 Project 可以设置独立的保留天数。到期后，Worker 会异步清理事件、score、媒体和启用 blob log 时的 ingestion 文件。
 
-Organization 删除要求所有 Project 已完成删除，然后：
+Retention 删除发生在 Stripe 上报前时，会减少最终计费；发生在上报后时，不会自动冲销已提交用量。
 
-1. 如果存在 active Stripe subscription，调用 `subscriptions.cancel` 立即取消。
-2. Stripe 取消失败时中止 Organization 删除。
-3. Stripe 取消成功后删除本地 Organization。
-4. 清除 Organization API Key 缓存。
+## 14. 当前边界和运维注意事项
 
-不会自动删除：
+### 删除不冲销 Stripe
 
-- Stripe Customer；
-- 历史 meter events；
-- 历史 invoice；
-- `BillingMeterBackup`；
-- `StripeWebhookEvent`。
+已成功提交的 meter event 不会因为后续删除数据而回退。
 
-`BillingMeterBackup.orgId` 没有到 Organization 的外键，因此不会级联删除。
+### 不要人工回退已提交 checkpoint
 
-## 15. Project Transfer 的 Billing 影响
+正常流程只向前推进 metering checkpoint。
 
-Project transfer 只修改 `Project.orgId`，没有 Billing 专用结算或账期拆分。
+如果人工把 checkpoint 回退到已经提交的区间，Worker 可能按当前 Doris 数据更新本地提交记录，但因为该记录已标记成功，不会重新发送 Stripe。
 
-结果：
+如果区间数据已经删除，本地 Reported 和 Stripe 已接受值可能因此不一致。
 
-- Litefuse 内部当前账期重算时，Project 保留的历史数据会归属到新 Organization。
-- 之前已经提交给 Stripe 的小时 units 仍留在旧 Organization 的 Customer。
-- 后续尚未处理的小时会按处理时的当前 Project 所属 Organization 上报。
-- source/destination Organization 的 cached usage 不会在 transfer 时立即重算。
+### 全局 checkpoint
 
-## 16. Billing 页面与 Stripe 账单的关系
+一个 Organization 的 Stripe 提交失败，会阻止整个小时的 checkpoint 推进。其他 Organization 已成功的 segment 不会重复计费，但仍要等待失败部分恢复。
 
-Litefuse Billing 页面负责：
+### Stripe Dashboard 有聚合延迟
 
-- 套餐和 subscription 状态展示；
-- 当前 Doris 用量；
-- 包含量；
-- 预计超额；
-- Checkout、Portal、取消和恢复入口。
+页面 Reported 表示 Stripe API 已接受，不保证 Stripe Dashboard 已经展示相同 summary。
 
-Stripe 负责：
+### Project Transfer 不迁移历史账单
 
-- Customer；
-- Payment Method；
-- Subscription；
-- Usage Meter；
-- Price tiers；
-- 税费；
-- 折扣和优惠券；
-- 发票；
-- 最终应收金额。
+已上报 Stripe 的用量不会随 Project 转移到新 Organization。
 
-Litefuse 不保存完整 invoice 明细，也不使用 Billing 页面估算值覆盖 Stripe 最终结算。
+### Developer 阻断不是全系统只读锁
 
-## 17. 环境变量
+当前主要 ingestion、OTel traces、v1 score 和 media 写入已接入阻断。
 
-| 变量 | Web | Worker | 用途 |
-| --- | :-: | :-: | --- |
-| `STRIPE_SECRET_KEY` | 是 | 是 | Stripe API 和 usage meter 上报 |
-| `STRIPE_WEBHOOK_SECRET` | 是 | 否 | Webhook 验签 |
-| `STRIPE_PRO_MONTHLY_PRICE_ID` | 是 | 否 | Pro 固定月费 Price |
-| `STRIPE_USAGE_PRICE_ID` | 是 | 否 | Usage Price |
-| `STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID` | 是 | 否 | 历史 Teams add-on 兼容 |
-| `NEXT_PUBLIC_LITEFUSE_CLOUD_REGION` | 是 | 是 | Cloud 模式和区域信息 |
-| `QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED` | 否 | 是 | Stripe metering consumer |
-| `QUEUE_CONSUMER_FREE_TIER_USAGE_THRESHOLD_QUEUE_IS_ENABLED` | 否 | 是 | Developer threshold consumer |
-| `LITEFUSE_FREE_TIER_USAGE_THRESHOLD_ENFORCEMENT_ENABLED` | 否 | 是 | Shadow/full enforcement |
+部分 v2 score 和 MCP 写操作尚未统一接入，应继续作为 QA 覆盖缺口。
 
-## 18. 当前实现的重要边界和风险
+### Stripe 配置依赖外部正确性
 
-1. **删除不冲销 Stripe**
-   - 已成功提交的 meter event 不会因为后续数据删除而回退。
+应用可以确认 Price ID 格式，但不会替代 QA 检查 Stripe 中的固定月费、阶梯价格、免费额度和 meter 配置。
 
-2. **Project soft delete 立即停止计量**
-   - 可能在 Doris 物理删除前就排除整个 Project。
+### 正式历史数据需要兼容切换
 
-3. **Project transfer 没有账务拆分**
-   - 内部账可能重归属，已上报 Stripe 账不会迁移。
+当前精确时间和 segment 口径默认用于 billing/shadow 测试阶段。
 
-4. **订阅状态按处理时判断**
-   - Stripe metering 没有检查目标小时与 subscription 生效区间是否重叠。
-   - 小时中途升级可能把整小时统计到新订阅。
+如果已经存在正式客户历史 meter events，部署前需要按 Organization 和账期设计切换方案，不能直接改变已提交历史区间的计量口径。
 
-5. **账期边界精度不一致**
-   - Litefuse 使用 UTC 日期，Stripe 使用精确时间。
+## 15. 最小验证场景
 
-6. **Self-hosted 没有强制隔离 threshold**
-   - 队列注册和 Billing 页面没有硬性要求 Cloud Region。
-   - 默认 enforcement 为 false；若 self-hosted 主动开启，普通 Organization 也可能进入 Developer 阻断逻辑。
+### 升级
 
-7. **合同套餐额度没有独立模型**
-   - `getBillingStatus` 对任何非 `cloud:hobby` plan 都显示 200,000 included units。
+1. 创建新的 Developer Organization。
+2. 在升级前写入一些数据并确认 Developer 页面有用量。
+3. 在非整点时间升级 Pro。
+4. 确认 Pro 新账期不包含升级前数据。
+5. 确认页面不在 0 和旧数据之间交替。
 
-8. **Stripe 配置只验证 Price ID 前缀**
-   - 不验证 `$199`、Graduated tiers 或 200k 免费层是否正确。
+### Pending
 
-9. **BLOCKED guard 覆盖不完整**
-   - v2 score 和 MCP 写操作仍可能绕过 Developer ingestion suspension。
+升级后写入一个根事件、一个子事件和一个 score。
 
-10. **页面数字和阻断状态可能短暂不一致**
-    - 页面用量最多每 5 分钟重算，threshold state 每小时重算。
+页面应显示 4 个 Pending units，Reported 为 0，主用量为 4。
 
-## 19. 主要代码索引
+### Reported
 
-```text
-web/src/features/billing/components/BillingSettings.tsx
-web/src/features/billing/server/billingCatalogue.ts
-web/src/features/billing/server/billingRouter.ts
-web/src/features/billing/server/billingService.ts
-web/src/features/billing/server/billingUsageService.ts
-web/src/features/billing/server/stripeWebhookHandler.ts
-web/src/app/api/billing/stripe-webhook/route.ts
+等待目标小时结束并完成 Metering Job。
 
-worker/src/features/billing/constants.ts
-worker/src/features/billing/usageMetering.ts
-worker/src/features/billing/usageThresholds.ts
-worker/src/queues/cloudBillingQueues.ts
+页面应变为 Reported 4、Pending 0，主用量仍为 4。
 
-packages/shared/src/server/repositories/billing.ts
-packages/shared/src/server/utils/billingCycleHelpers.ts
-packages/shared/src/server/redis/cloudUsageMeteringQueue.ts
-packages/shared/src/server/redis/cloudFreeTierUsageThresholdQueue.ts
-packages/shared/src/server/queues.ts
-packages/shared/prisma/schema.prisma
-```
+Stripe meter summary 最终也应增加 4 units。
 
+### 幂等重放
+
+同一个已处理区间正常重试时，不应创建重复 Stripe meter event，Stripe summary 仍为 4。
+
+### 升级竞态
+
+让 Threshold Job 在 Developer 状态下开始计算，然后在写入前完成升级。
+
+旧 Developer 结果应被丢弃，Organization 不得重新进入 BLOCKED。
+
+### 旧删除事件
+
+先切换到新订阅，再投递旧订阅删除事件。
+
+Organization 应继续保留新订阅和 Pro 权益。

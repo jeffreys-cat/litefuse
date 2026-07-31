@@ -1,5 +1,5 @@
 import { Button } from "@/src/components/ui/button";
-import { useSupportDrawer } from "@/src/features/support-chat/SupportDrawerProvider";
+import { LITEFUSE_GITHUB_ISSUES_URL } from "@/src/utils/constants";
 import { AlertTriangle, X } from "lucide-react";
 
 interface ErrorNotificationProps {
@@ -19,20 +19,10 @@ export const ErrorNotification: React.FC<ErrorNotificationProps> = ({
   toast,
   path,
 }) => {
-  const { setOpen } = useSupportDrawer();
   const isError = type === "ERROR";
   const textColor = isError
     ? "text-destructive-foreground"
     : "text-dark-yellow";
-
-  // const handleReportIssueClick = () => {
-  //   if (chatAvailable) {
-  //     const currentUrl = window.location.href;
-  //     const message = `I received the following error:\n\nError: ${error}\nDescription: ${description}\n ${path ? `Path: ${path}\n` : ""}URL: ${currentUrl}`;
-  //     sendUserChatMessage(message);
-  //     dismissToast(toast);
-  //   }
-  // };
 
   return (
     <div className="flex justify-between">
@@ -60,11 +50,15 @@ export const ErrorNotification: React.FC<ErrorNotificationProps> = ({
           <Button
             variant="errorNotification"
             size={"sm"}
-            onClick={() => {
-              setOpen(true);
-            }}
+            asChild
           >
-            Report issue to Litefuse team
+            <a
+              href={LITEFUSE_GITHUB_ISSUES_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Report issue to Litefuse team
+            </a>
           </Button>
         )}
       </div>
