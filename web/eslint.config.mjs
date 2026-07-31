@@ -1,7 +1,12 @@
 import nextConfig from "@repo/eslint-config/next";
+import { tableRoutingRule } from "@repo/eslint-config/base";
 
 export default [
   ...nextConfig,
+
+  // Table-split guard: no bare events_full/traces_scalar SQL literals in the
+  // query-building layer (Stage 0.7 — route through tableFor/sharedTableFor).
+  tableRoutingRule(["src/features/query/**/*.ts"]),
 
   // Restrict react-icons imports
   {

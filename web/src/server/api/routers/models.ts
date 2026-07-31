@@ -21,6 +21,7 @@ import {
   queryDoris,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
+import { tableFor } from "@langfuse/shared/src/server";
 
 const ModelAllOptions = z.object({
   projectId: z.string(),
@@ -207,7 +208,7 @@ export const modelRouter = createTRPCRouter({
         SELECT
           model_id as modelId,
           MAX(start_time) as lastUsed
-        FROM events_full
+        FROM ${tableFor(projectId, "events_full")}
         WHERE project_id = {projectId: String}
           AND type = 'GENERATION'
           AND model_id IN ({modelIds: Array(String)})

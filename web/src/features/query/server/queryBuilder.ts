@@ -23,6 +23,7 @@ import {
   FilterList,
   createDorisFilterFromFilterState,
   createFilterFromFilterState,
+  toLogicalTable,
   type Filter,
 } from "@langfuse/shared/src/server";
 import { InvalidRequestError } from "@langfuse/shared";
@@ -152,13 +153,18 @@ export class QueryBuilder {
 
   private getViewDeclarationForDoris(
     viewName: z.infer<typeof views>,
+    projectId: string,
   ): ViewDeclarationType {
     if (!(viewName in viewDeclarationsDoris)) {
       throw new InvalidRequestError(
         `Invalid view for Doris. Must be one of ${Object.keys(viewDeclarationsDoris)}`,
       );
     }
-    return viewDeclarationsDoris[viewName];
+    // Per-request view resolution: each declaration is a factory that bakes the
+    // projectId-routed physical table names (tableFor) into baseCte/relations.
+    // mode=none returns the shared logical names, so the emitted SQL is
+    // byte-identical to the pre-split builder.
+    return viewDeclarationsDoris[viewName](projectId);
   }
 
   private mapDimensions(
@@ -1881,7 +1887,7 @@ export class QueryBuilder {
     const parameters: Record<string, unknown> = {};
 
     // Get view declaration (with FINAL removed for Doris)
-    const view = this.getViewDeclarationForDoris(query.view);
+    const view = this.getViewDeclarationForDoris(query.view, projectId);
 
     // Map dimensions and metrics
     const appliedDimensions = this.mapDimensions(query.dimensions, view);
@@ -2000,7 +2006,7 @@ export class QueryBuilder {
       const trimmed = query.rawSqlFilter.trim();
       const alias = this.tableAlias(view);
       const rewritten =
-        this.actualTableName(view) === "events_full"
+        toLogicalTable(this.actualTableName(view)) === "events_full"
           ? this.rewriteEventsFullMetadataAccess(trimmed, alias)
           : this.qualifyMetadataMapAccess(trimmed, alias);
       fromClause += ` AND (${rewritten})`;

@@ -10,6 +10,7 @@ import {
   dq,
 } from "@langfuse/shared/src/server";
 import { type FilterState, observationsTableCols } from "@langfuse/shared";
+import { tableFor } from "@langfuse/shared/src/server";
 
 type QueryType = {
   page: number;
@@ -72,9 +73,9 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.created_at,
       o.updated_at,
       o.event_ts
-    FROM events_full o
+    FROM ${tableFor(props.projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
-      ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
+      ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM ${tableFor(props.projectId, "events_full")} t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
       ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
     ORDER BY o.start_time DESC
     ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
@@ -134,9 +135,9 @@ export const getObservationsCountForPublicApi = async (props: QueryType) => {
 
   const query = `
     SELECT count(*) as count
-    FROM events_full o
+    FROM ${tableFor(props.projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
-    ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM events_full t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
+    ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM ${tableFor(props.projectId, "events_full")} t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}
     ${appliedObservationFilter.query ? `AND ${appliedObservationFilter.query}` : ""}
   `;
 
