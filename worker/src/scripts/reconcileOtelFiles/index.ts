@@ -37,8 +37,8 @@ import {
   otelRegisteredKey,
   scanStagedOtelGroups,
   otelPendingOldestAgeMs,
-  laneFor,
-  getSplitProjectIds,
+  laneForDesignated,
+  getDesignatedProjectIds,
   refreshSplitCache,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
@@ -129,11 +129,12 @@ const main = async () => {
   await refreshSplitCache();
   // Split projects register into a dedicated lane, not a shard — so the
   // "healthy pipeline" preflight and the re-inject target must both cover
-  // lanes. Derive them from the authoritative PG-split set (getSplitProjectIds
-  // reflects the refresh above), NOT the Redis lane index, which can itself be
+  // lanes. Derive them from the authoritative PG DESIGNATED set (live OR
+  // pending — a stuck/pending project's files must still re-inject into its
+  // lane, never a shared shard), NOT the Redis lane index, which can itself be
   // partially lost in the very DR scenario reconcile exists to repair.
-  const laneKeys = getSplitProjectIds()
-    .map((pid) => laneFor(pid))
+  const laneKeys = getDesignatedProjectIds()
+    .map((pid) => laneForDesignated(pid))
     .filter((k): k is string => k !== null);
 
   // ⓪ Execute-mode preflight: re-injection is only safe against a HEALTHY
@@ -221,7 +222,11 @@ const main = async () => {
     // project, then shards). Used for BOTH the registered-key evidence scan and
     // the DEL below — a split project's reg key is under lane-<pid>, invisible
     // to a shard-only scan, which would misclassify a lost file as `audit`.
-    const candidates = candidateGroupingKeys(projectId, shards);
+    const candidates = candidateGroupingKeys(
+      projectId,
+      shards,
+      laneForDesignated,
+    );
     let hasRegisteredKey = false;
     if (!withLedger.has(f.file)) {
       for (const key of candidates) {
@@ -255,6 +260,7 @@ const main = async () => {
         projectId,
         shards,
         (s) => s[Math.floor(Math.random() * s.length)] as string,
+        laneForDesignated,
       );
       // Force re-admission: the registered key would absorb the register as
       // an idempotent no-op (review: reconciliation × SETNX conflict). DEL

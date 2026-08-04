@@ -59,24 +59,35 @@ export const projectsRouter = createTRPCRouter({
           orgId: input.orgId,
         },
       });
+
+      // Billing-driven Doris table split: a new project under an already-paid
+      // org is split too. The client gets the project id only after this
+      // returns, so designating it BEFORE then guarantees its first rows can
+      // never leak to the shared table (the write path resolves the designation
+      // with a PG fallback). RELIABLE + compensating: if designation fails
+      // (a rare PG blip on the control-row write), delete the just-created
+      // project so the mutation fails cleanly instead of leaving an
+      // undesignated paid project that could ingest to the shared table. The
+      // provisioning enqueue/propagation inside upsert are best-effort. No-op
+      // unless mode = project_id_with_rule and the org is paid.
+      try {
+        await provisionSplitForNewProjectIfOrgPaid({
+          projectId: project.id,
+          orgId: input.orgId,
+        });
+      } catch (e) {
+        await ctx.prisma.project
+          .delete({ where: { id: project.id } })
+          .catch(() => undefined);
+        throw e;
+      }
+
       await auditLog({
         session: ctx.session,
         resourceType: "project",
         resourceId: project.id,
         action: "create",
         after: project,
-      });
-
-      // Billing-driven Doris table split: a new project under an already-paid
-      // org is split too. RELIABLE designation (no .catch): the client gets the
-      // project id only after this returns, so designating it before then
-      // guarantees its first rows can never leak to the shared table (the write
-      // path resolves the designation with a PG fallback). The control-row write
-      // is PG-reliable; the provisioning enqueue/propagation inside are
-      // best-effort. No-op unless mode = project_id_with_rule and the org is paid.
-      await provisionSplitForNewProjectIfOrgPaid({
-        projectId: project.id,
-        orgId: input.orgId,
       });
 
       return {

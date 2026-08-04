@@ -114,17 +114,27 @@ export const deleteDorisProjectTableSplit = async (
 export const PAID_SPLIT_RETENTION_DAYS = 3 * 365;
 
 /** Apply the paid default to Project.retentionDays only when unset (never
- * clobber a user-chosen value). Retention is single-sourced on Project. */
+ * clobber a user-chosen value). Retention is single-sourced on Project.
+ * BEST-EFFORT: a null retention just means "no TTL" (fine for a paid project),
+ * so this must never fail the caller — in particular the reliable designation of
+ * a new project (which sets the split guarantee) must not depend on it. */
 const applyPaidRetentionDefault = async (projectId: string): Promise<void> => {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { retentionDays: true },
-  });
-  if (project && project.retentionDays == null) {
-    await prisma.project.update({
+  try {
+    const project = await prisma.project.findUnique({
       where: { id: projectId },
-      data: { retentionDays: PAID_SPLIT_RETENTION_DAYS },
+      select: { retentionDays: true },
     });
+    if (project && project.retentionDays == null) {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { retentionDays: PAID_SPLIT_RETENTION_DAYS },
+      });
+    }
+  } catch (e) {
+    logger.error(
+      `[table-split] paid retention default for ${projectId} failed (non-fatal)`,
+      e,
+    );
   }
 };
 

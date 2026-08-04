@@ -100,6 +100,23 @@ export const getSplitProjectIds = (): string[] => {
   return out;
 };
 
+/** All DESIGNATED project ids (live OR pending). Used by the offline reconcile
+ * so a pending project's files re-inject into its lane (held) rather than a
+ * shared shard. */
+export const getDesignatedProjectIds = (): string[] => {
+  const s = getSnapshot();
+  return s ? [...s.keys()] : [];
+};
+
+/** Sync DESIGNATED test (live OR pending) against the loaded snapshot. */
+export const splitProjectDesignatedInCache = (projectId: string): boolean =>
+  getSnapshot()?.has(projectId) ?? false;
+
+// Bound the on-demand negative cache; it is never cleared on refresh (the
+// snapshot check precedes it, so a later-designated project is superseded
+// regardless), so cap its growth for a very-long-lived process.
+const NEGATIVE_CACHE_CAP = 100_000;
+
 /**
  * Resolve a project's INGESTION routing state (write path only). Cache-first;
  * on a cache MISS (a just-designated project whose pub/sub invalidation has not
@@ -125,7 +142,9 @@ export const resolveIngestionSplitState = async (
     select: { split: true },
   });
   if (!row) {
-    getNegativeCache().add(projectId);
+    const neg = getNegativeCache();
+    if (neg.size >= NEGATIVE_CACHE_CAP) neg.clear();
+    neg.add(projectId);
     return "not_split";
   }
   return row.split ? "live" : "pending";
@@ -140,7 +159,11 @@ export const refreshSplitCache = async (): Promise<void> => {
   const next = new Map<string, boolean>();
   for (const r of rows) next.set(r.projectId, r.split);
   splitCacheGlobal.litefuseDorisSplitSnapshot = next;
-  splitCacheGlobal.litefuseDorisSplitNegative = new Set();
+  // NOTE: the negative cache is deliberately NOT cleared here — the snapshot
+  // check in resolveIngestionSplitState precedes the negative check, so a
+  // just-designated project is picked up from `next` regardless of a stale
+  // negative entry. Clearing every refresh would re-probe PG for every active
+  // non-split project each cycle for no correctness gain.
 };
 
 /**

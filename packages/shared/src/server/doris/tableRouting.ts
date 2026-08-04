@@ -2,6 +2,7 @@ import { env } from "../../env";
 import { DorisTableName } from "./schema";
 import {
   splitProjectInCache,
+  splitProjectDesignatedInCache,
   resolveIngestionSplitState,
 } from "./tableSplitCache";
 
@@ -129,6 +130,17 @@ export const laneFor = (projectId: string): string | null =>
   isSplitProject(projectId) ? `lane-${projectId}` : null;
 
 /**
+ * DESIGNATED-aware lane (live OR pending), synchronous against the loaded
+ * snapshot. For the offline reconcile: a PENDING project's files must re-inject
+ * into its own lane (held until the tables exist) rather than a shared shard —
+ * so reconcile never loads a designated project's data into the shared table.
+ * Reconcile primes the cache (refreshSplitCache) up front, so no PG fallback is
+ * needed here. NOT for the live write path (use laneForIngestion).
+ */
+export const laneForDesignated = (projectId: string): string | null =>
+  splitProjectDesignatedInCache(projectId) ? `lane-${projectId}` : null;
+
+/**
  * ASYNC lane decision for the WRITE registration path (the only correct one for
  * ingestion). A project that is designated for split — whether LIVE (tables
  * ready) or PENDING (tables still provisioning) — registers into its dedicated
@@ -143,6 +155,21 @@ export const laneFor = (projectId: string): string | null =>
 export const laneForIngestion = async (
   projectId: string,
 ): Promise<string | null> => {
-  const state = await resolveIngestionSplitState(projectId);
-  return state === "live" || state === "pending" ? `lane-${projectId}` : null;
+  // Mode switch mirrors isSplitProject — never touch the cache / PG in the
+  // modes that don't use the control table (else `none`/`project_id`, which
+  // don't run the refresh loop, would PG-probe every project's first write).
+  switch (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE) {
+    case "none":
+      return null;
+    case "project_id":
+      return `lane-${projectId}`;
+    case "project_id_with_rule": {
+      const state = await resolveIngestionSplitState(projectId);
+      return state === "live" || state === "pending"
+        ? `lane-${projectId}`
+        : null;
+    }
+    default:
+      return null;
+  }
 };

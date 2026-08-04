@@ -69,7 +69,11 @@ describe("provisionSplitTablesForProject (idempotent MV)", () => {
     expect(issued[1]).toContain(
       `CREATE TABLE IF NOT EXISTS \`traces_scalar_${PID}\``,
     );
-    expect(issued[2]).toContain(
+    // TTL reconcile: ALTER both base tables to the current retention (Option A —
+    // so a Project.retentionDays change takes effect on existing tables).
+    expect(issued[2]).toContain(`ALTER TABLE \`events_full_${PID}\``);
+    expect(issued[3]).toContain(`ALTER TABLE \`traces_scalar_${PID}\``);
+    expect(issued[4]).toContain(
       `CREATE MATERIALIZED VIEW trace_metrics_agg_${PID}`,
     );
   });
@@ -83,8 +87,8 @@ describe("provisionSplitTablesForProject (idempotent MV)", () => {
     expect(issued.some((q) => q.includes("CREATE MATERIALIZED VIEW"))).toBe(
       false,
     );
-    // base tables are still (idempotently) issued
-    expect(issued).toHaveLength(2);
+    // base tables (CREATE ×2) + TTL reconcile (ALTER ×2) still issued
+    expect(issued).toHaveLength(4);
   });
 
   it("re-creates the MV when a prior build was CANCELLED", async () => {
