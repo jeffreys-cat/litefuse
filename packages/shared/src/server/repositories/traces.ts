@@ -593,6 +593,42 @@ export const getTraceCountsByProjectInCreationInterval = async ({
   }));
 };
 
+// Billing free-tier usage (billingUsageService): total trace units a set of
+// projects produced since a cutoff. traces_scalar is one row per trace, so this
+// is a plain row count — disjoint from the observation count (child spans), so
+// traces + observations never double-count the synthetic root span.
+// CROSS-PROJECT (project_id IN over many projects) — shared table, NOT tableFor;
+// under table split this must fan out over traces_scalar_<pid> (design §五).
+export const getTraceCountOfProjectsSinceCreationDate = async ({
+  projectIds,
+  start,
+}: {
+  projectIds: string[];
+  start: Date;
+}) => {
+  const query = `
+      SELECT count(*) as count
+      FROM ${sharedTableFor("traces_scalar")}
+      WHERE project_id IN ({projectIds: Array(String)})
+      AND created_at >= {start: DateTime}
+    `;
+
+  const rows = await queryDoris<{ count: string }>({
+    query,
+    params: {
+      projectIds,
+      start: convertDateToAnalyticsDateTime(start),
+    },
+    tags: {
+      feature: "tracing",
+      type: "trace",
+      kind: "analytic",
+    },
+  });
+
+  return Number(rows[0]?.count ?? 0);
+};
+
 /**
  * Retrieves a trace record by its ID and associated project ID, with optional
  * filtering by timestamp range. Hintless calls probe the last 7 days first
