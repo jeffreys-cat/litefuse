@@ -1702,7 +1702,9 @@ model OtelFileLedger {
 model DorisProjectTableSplit {
   projectId     String   @id @map("project_id")
   split         Boolean  @default(false)
-  retentionDays Int?     @map("retention_days")
+  // Per-project split-table TTL is single-sourced on Project.retentionDays
+  // (read at provisioning / ALTER time) — this table only tracks provisioned
+  // state + schema version, not retention.
   note          String?
   // Template/schema version the physical tables were provisioned at (Stage 1.2c
   // readiness gate). Set when provisioning flips split=true; a later bump of

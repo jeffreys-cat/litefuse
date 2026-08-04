@@ -523,7 +523,6 @@ export type DefaultView = {
 export type DorisProjectTableSplit = {
   project_id: string;
   split: Generated<boolean>;
-  retention_days: number | null;
   note: string | null;
   schema_version: number | null;
   created_at: Generated<Timestamp>;

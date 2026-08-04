@@ -4,6 +4,7 @@ import { logger } from "../logger";
 import {
   buildSplitTableStatements,
   buildTraceMetricsAggMV,
+  buildAlterTtlStatement,
 } from "./splitTableTemplates";
 
 /**
@@ -101,6 +102,22 @@ export const provisionSplitTablesForProject = async (params: {
     query: tracesScalar,
     tags: { feature: "table-split", kind: "create-traces-scalar", projectId },
   });
+
+  // Reconcile TTL to the CURRENT retention on both base tables. CREATE IF NOT
+  // EXISTS is a no-op for an already-existing table, so its dynamic_partition
+  // keeps the OLD retention — the ALTER makes a Project.retentionDays change
+  // (setRetention / billing) take effect. Harmless right after a fresh CREATE
+  // (re-sets the same value). This is why re-enqueuing provisioning is the
+  // retention-change propagation path.
+  for (const table of [names.eventsFull, names.tracesScalar]) {
+    await commandDoris({
+      query: buildAlterTtlStatement({
+        physicalTable: table,
+        retentionDays: params.retentionDays ?? null,
+      }),
+      tags: { feature: "table-split", kind: "alter-ttl", projectId },
+    });
+  }
 
   const mvStatus = await getSplitMvStatus(names.eventsFull, names.mv);
   if (mvStatus === "absent" || mvStatus === "cancelled") {

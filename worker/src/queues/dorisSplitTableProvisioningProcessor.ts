@@ -8,14 +8,16 @@ import {
   getSplitTablesReadiness,
   publishSplitCacheInvalidation,
   SPLIT_SCHEMA_VERSION,
+  getSplitRetentionDays,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 
 /**
  * Provision a split project's Doris tables + MV (Stage 1.2b). Idempotent and
- * retry-safe (jobId = projectId serialises per project). Reads the CURRENT
- * retention from the control table (source of truth) rather than the payload,
- * so a retention change re-provisions correctly.
+ * retry-safe (jobId = projectId serialises per project). The control row's
+ * EXISTENCE is the "designated to split" gate; the retention (TTL) is read
+ * fresh from Project.retentionDays (single source), so a setRetention / billing
+ * change re-provisions the TTL correctly (provisioning ALTERs it).
  *
  * The MV build is async; this job returns after CREATE has been issued. It logs
  * the readiness snapshot but does NOT block on the MV finishing — the readiness
@@ -31,7 +33,7 @@ export const dorisSplitTableProvisioningProcessor: Processor = async (
 
   const control = await prisma.dorisProjectTableSplit.findUnique({
     where: { projectId },
-    select: { retentionDays: true },
+    select: { projectId: true },
   });
   if (!control) {
     // No control row → the project is no longer designated to split (e.g. the
@@ -42,12 +44,16 @@ export const dorisSplitTableProvisioningProcessor: Processor = async (
     return;
   }
 
+  // Retention (split-table TTL) is single-sourced on Project.retentionDays,
+  // floor-clamped (helper).
+  const retentionDays = await getSplitRetentionDays(projectId);
+
   logger.info(
-    `[table-split] provisioning tables for ${projectId} (retentionDays=${control.retentionDays ?? "none"})`,
+    `[table-split] provisioning tables for ${projectId} (retentionDays=${retentionDays ?? "none"})`,
   );
   await provisionSplitTablesForProject({
     projectId,
-    retentionDays: control.retentionDays,
+    retentionDays,
   });
 
   const readiness = await getSplitTablesReadiness(projectId);

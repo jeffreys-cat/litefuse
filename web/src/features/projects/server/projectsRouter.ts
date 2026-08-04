@@ -16,6 +16,7 @@ import {
   ProjectDeleteQueue,
   getEnvironmentsForProject,
   provisionSplitForNewProjectIfOrgPaid,
+  enqueueDorisSplitTableProvisioning,
   logger,
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
@@ -169,6 +170,17 @@ export const projectsRouter = createTRPCRouter({
         action: "update",
         after: project,
       });
+
+      // Retention is single-sourced on Project.retentionDays. If this project is
+      // split, its dynamic_partition TTL must follow — re-enqueue provisioning,
+      // which idempotently ALTERs the split tables' TTL to the new value (and
+      // no-ops for a non-split project). Best-effort — never fail the setting.
+      await enqueueDorisSplitTableProvisioning(input.projectId).catch((e) =>
+        logger.error(
+          `[table-split] TTL re-provision enqueue for ${input.projectId} failed`,
+          e,
+        ),
+      );
       return true;
     }),
 

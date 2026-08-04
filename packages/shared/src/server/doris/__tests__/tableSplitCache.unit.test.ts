@@ -16,7 +16,6 @@ vi.mock("../../redis/redis", () => ({ createNewRedisInstance: createRedisMock })
 import {
   isSplitCacheReady,
   splitProjectInCache,
-  splitRetentionDays,
   refreshSplitCache,
   startSplitCacheRefresh,
   stopSplitCacheRefresh,
@@ -59,22 +58,16 @@ describe("tableSplitCache", () => {
   it("cold cache: not ready, everything reads not-split", () => {
     expect(isSplitCacheReady()).toBe(false);
     expect(splitProjectInCache(A)).toBe(false);
-    expect(splitRetentionDays(A)).toBeNull();
   });
 
   it("refreshSplitCache loads only split=true rows and marks ready", async () => {
-    findManyMock.mockResolvedValue([
-      { projectId: A, retentionDays: 30 },
-      { projectId: B, retentionDays: null },
-    ]);
+    findManyMock.mockResolvedValue([{ projectId: A }, { projectId: B }]);
     await refreshSplitCache();
 
     expect(isSplitCacheReady()).toBe(true);
     expect(splitProjectInCache(A)).toBe(true);
     expect(splitProjectInCache(B)).toBe(true);
     expect(splitProjectInCache("unknown")).toBe(false);
-    expect(splitRetentionDays(A)).toBe(30);
-    expect(splitRetentionDays(B)).toBeNull();
 
     // Only split=true is queried (the where clause is the cache's contract).
     expect(findManyMock).toHaveBeenCalledWith(
@@ -83,24 +76,21 @@ describe("tableSplitCache", () => {
   });
 
   it("full atomic replace — a project dropped from PG disappears next refresh", async () => {
-    findManyMock.mockResolvedValueOnce([
-      { projectId: A, retentionDays: 7 },
-      { projectId: B, retentionDays: 7 },
-    ]);
+    findManyMock.mockResolvedValueOnce([{ projectId: A }, { projectId: B }]);
     await refreshSplitCache();
     expect(splitProjectInCache(A)).toBe(true);
 
-    findManyMock.mockResolvedValueOnce([{ projectId: B, retentionDays: 7 }]);
+    findManyMock.mockResolvedValueOnce([{ projectId: B }]);
     await refreshSplitCache();
     expect(splitProjectInCache(A)).toBe(false); // no negative-cache residue
     expect(splitProjectInCache(B)).toBe(true);
   });
 
-  it("__setSplitSnapshotForTest installs entries directly", () => {
-    __setSplitSnapshotForTest([[A, { retentionDays: 90 }]]);
+  it("__setSplitSnapshotForTest installs project ids directly", () => {
+    __setSplitSnapshotForTest([A]);
     expect(isSplitCacheReady()).toBe(true);
     expect(splitProjectInCache(A)).toBe(true);
-    expect(splitRetentionDays(A)).toBe(90);
+    expect(splitProjectInCache(B)).toBe(false);
   });
 });
 

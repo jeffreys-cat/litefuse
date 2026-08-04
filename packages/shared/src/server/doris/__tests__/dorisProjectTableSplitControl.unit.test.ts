@@ -28,7 +28,6 @@ import {
   classifyMissingSplitTable,
   handleMissingSplitTable,
   upsertDorisProjectTableSplit,
-  RETENTION_FLOOR_DAYS,
 } from "../dorisProjectTableSplitControl";
 
 const PID = "cmqiwxsca0006pj070fdkn0vd";
@@ -40,28 +39,18 @@ beforeEach(() => {
   publishMock.mockReset();
 });
 
-describe("upsertDorisProjectTableSplit retention floor (Stage 1.8)", () => {
-  it("rejects a finite retention below the floor (data-loss guard)", async () => {
-    await expect(
-      upsertDorisProjectTableSplit({
-        projectId: PID,
-        retentionDays: RETENTION_FLOOR_DAYS - 1,
-      }),
-    ).rejects.toThrow(/below the floor/);
-    expect(upsertMock).not.toHaveBeenCalled();
-    expect(enqueueMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts retention at/above the floor (writes + enqueues + invalidates)", async () => {
-    await upsertDorisProjectTableSplit({ projectId: PID, retentionDays: 30 });
+describe("upsertDorisProjectTableSplit", () => {
+  it("writes the control row, enqueues provisioning, invalidates cache", async () => {
+    await upsertDorisProjectTableSplit({ projectId: PID });
     expect(upsertMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledWith(PID);
     expect(publishMock).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts null retention (no TTL — nothing is dropped)", async () => {
-    await upsertDorisProjectTableSplit({ projectId: PID, retentionDays: null });
-    expect(upsertMock).toHaveBeenCalledTimes(1);
+  it("carries NO retention (single-sourced on Project.retentionDays)", async () => {
+    await upsertDorisProjectTableSplit({ projectId: PID, split: true });
+    const arg = JSON.stringify(upsertMock.mock.calls[0][0]);
+    expect(arg).not.toContain("retention");
   });
 });
 

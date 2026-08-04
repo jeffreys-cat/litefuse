@@ -15,7 +15,7 @@ import {
   isSplitProject,
   isSplitCacheReady,
   tableFor,
-  splitRetentionDays,
+  getSplitRetentionDays,
   handleMissingSplitTable,
   type EventRecordInsertType,
   type OtelGroupIngestionEventType,
@@ -226,7 +226,9 @@ export const processOtelGroupJob = async (
   // filtering here would wrongly kill a shared project's historical replay.
   // The cutoff is anchored to the group's newest registration ts (deterministic
   // across replays — I5), not Date.now().
-  const retentionDays = split ? splitRetentionDays(targetProjectId!) : null;
+  const retentionDays = split
+    ? await getSplitRetentionDays(targetProjectId!)
+    : null;
   const nowRef =
     entries.length > 0 ? Math.max(...entries.map((e) => e.ts)) : Date.now();
   const retentionCutoffMs =

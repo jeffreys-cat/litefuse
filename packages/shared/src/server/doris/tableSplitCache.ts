@@ -45,8 +45,10 @@ import { createNewRedisInstance } from "../redis/redis";
  * guard; until then, designate at project creation, before the first trace.
  */
 
-type SplitEntry = { retentionDays: number | null };
-type SplitSnapshot = ReadonlyMap<string, SplitEntry>;
+// Just the set of provisioned (split=true) project ids. Per-project retention
+// is single-sourced on Project.retentionDays (read at provisioning / ALTER
+// time), so it is deliberately NOT cached here.
+type SplitSnapshot = ReadonlySet<string>;
 
 // Next.js bundles the instrumentation hook (which starts the refresh loop — see
 // web/src/initialize.ts) and the API routes (which READ the cache) as SEPARATE
@@ -72,26 +74,21 @@ export const isSplitCacheReady = (): boolean => getSnapshot() !== null;
 export const splitProjectInCache = (projectId: string): boolean =>
   getSnapshot()?.has(projectId) ?? false;
 
-/** Per-project retention (days) for a split project, or null (global default). */
-export const splitRetentionDays = (projectId: string): number | null =>
-  getSnapshot()?.get(projectId)?.retentionDays ?? null;
-
 /** All currently-split project ids (the grouper's PG-split lane candidates). */
 export const getSplitProjectIds = (): string[] => {
   const s = getSnapshot();
-  return s ? [...s.keys()] : [];
+  return s ? [...s] : [];
 };
 
 /** Load the full split=true set from PG and atomically swap it in. */
 export const refreshSplitCache = async (): Promise<void> => {
   const rows = await prisma.dorisProjectTableSplit.findMany({
     where: { split: true },
-    select: { projectId: true, retentionDays: true },
+    select: { projectId: true },
   });
-  const next = new Map<string, SplitEntry>();
-  for (const r of rows)
-    next.set(r.projectId, { retentionDays: r.retentionDays });
-  splitCacheGlobal.litefuseDorisSplitSnapshot = next;
+  splitCacheGlobal.litefuseDorisSplitSnapshot = new Set(
+    rows.map((r) => r.projectId),
+  );
 };
 
 /**
@@ -218,8 +215,8 @@ export const subscribeSplitCacheInvalidation = (): void => {
 
 /** Test-only: install a snapshot directly (bypasses PG). */
 export const __setSplitSnapshotForTest = (
-  entries: ReadonlyArray<[string, SplitEntry]> | null,
+  projectIds: ReadonlyArray<string> | null,
 ): void => {
   splitCacheGlobal.litefuseDorisSplitSnapshot =
-    entries === null ? null : new Map(entries);
+    projectIds === null ? null : new Set(projectIds);
 };

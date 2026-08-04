@@ -15,6 +15,25 @@ import { publishSplitCacheInvalidation } from "./tableSplitCache";
 export const RETENTION_FLOOR_DAYS = 7;
 
 /**
+ * The effective split-table retention (days) for a project: Project.retentionDays
+ * (the SINGLE retention source), floor-clamped so a partition can't be
+ * TTL-dropped while a job targeting it is still redrivable. null = no TTL.
+ *
+ * Async (PG read) — call only in async contexts (the provisioning job, the group
+ * load path's retention filter), NEVER the synchronous isSplitProject hot path.
+ */
+export const getSplitRetentionDays = async (
+  projectId: string,
+): Promise<number | null> => {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { retentionDays: true },
+  });
+  const raw = project?.retentionDays ?? null;
+  return raw != null && raw < RETENTION_FLOOR_DAYS ? RETENTION_FLOOR_DAYS : raw;
+};
+
+/**
  * Designate a project for table-split (or update its settings) and trigger
  * provisioning (Stage 1.2b hook). Writes the control row and enqueues the
  * idempotent per-project provisioning job.
@@ -32,39 +51,27 @@ export const RETENTION_FLOOR_DAYS = 7;
 export const upsertDorisProjectTableSplit = async (params: {
   projectId: string;
   split?: boolean;
-  retentionDays?: number | null;
   note?: string | null;
 }): Promise<void> => {
-  const { projectId, split, retentionDays, note } = params;
-  // Retention floor (Stage 1.8): a finite retention below the retry horizon
-  // could TTL-drop a partition while its job is still redrivable → data loss.
-  if (
-    retentionDays !== undefined &&
-    retentionDays !== null &&
-    retentionDays < RETENTION_FLOOR_DAYS
-  ) {
-    throw new Error(
-      `doris table-split retentionDays=${retentionDays} for ${projectId} is below the floor of ${RETENTION_FLOOR_DAYS} days (retry horizon) — data could be TTL-dropped before a redrive/reconcile completes`,
-    );
-  }
+  const { projectId, split, note } = params;
+  // Retention (split-table TTL) is NOT stored here — it is single-sourced on
+  // Project.retentionDays and read (+ floor-clamped) at provisioning time.
   await prisma.dorisProjectTableSplit.upsert({
     where: { projectId },
     update: {
       ...(split !== undefined ? { split } : {}),
-      ...(retentionDays !== undefined ? { retentionDays } : {}),
       ...(note !== undefined ? { note } : {}),
     },
     create: {
       projectId,
       split: split ?? false,
-      retentionDays: retentionDays ?? null,
       note: note ?? null,
     },
   });
   logger.info(
-    `[table-split] designated ${projectId} (split=${split ?? false}, retentionDays=${retentionDays ?? "none"}); enqueuing provisioning`,
+    `[table-split] designated ${projectId} (split=${split ?? false}); enqueuing provisioning`,
   );
-  // Eager invalidation so a retention/split change propagates immediately.
+  // Eager invalidation so a split/retention change propagates immediately.
   await publishSplitCacheInvalidation();
   await enqueueDorisSplitTableProvisioning(projectId);
 };
@@ -81,12 +88,27 @@ export const deleteDorisProjectTableSplit = async (
 };
 
 /**
- * Paid-org split retention (days). Table split IS the paid feature — a paid
- * org's telemetry lives in its own long-lived tables; free projects stay on the
- * shared table (which keeps its own, shorter retention). The user's default is
- * 3 years. Comfortably above RETENTION_FLOOR_DAYS.
+ * Paid-org DEFAULT retention (days) — written to Project.retentionDays (the
+ * single retention source) when a paid org's project has none set. Table split
+ * IS the paid feature (own long-lived tables); the user can still override this
+ * default via the retention setting. 3 years, well above RETENTION_FLOOR_DAYS.
  */
 export const PAID_SPLIT_RETENTION_DAYS = 3 * 365;
+
+/** Apply the paid default to Project.retentionDays only when unset (never
+ * clobber a user-chosen value). Retention is single-sourced on Project. */
+const applyPaidRetentionDefault = async (projectId: string): Promise<void> => {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { retentionDays: true },
+  });
+  if (project && project.retentionDays == null) {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { retentionDays: PAID_SPLIT_RETENTION_DAYS },
+    });
+  }
+};
 
 /** Paying customer iff cloudConfig has an active Stripe subscription with a
  * resolved paid plan — the same test getPlan.ts uses (activeSubscriptionId &&
@@ -128,9 +150,9 @@ export const provisionSplitForPaidOrganization = async (
     `[table-split] paid org ${orgId} → provisioning split for ${projects.length} project(s)`,
   );
   for (const { id } of projects) {
+    await applyPaidRetentionDefault(id);
     await upsertDorisProjectTableSplit({
       projectId: id,
-      retentionDays: PAID_SPLIT_RETENTION_DAYS,
       note: `billing: paid org ${orgId}`,
     });
   }
@@ -152,9 +174,9 @@ export const provisionSplitForNewProjectIfOrgPaid = async (params: {
     select: { cloudConfig: true },
   });
   if (!org || !isOrgPaid(org.cloudConfig)) return;
+  await applyPaidRetentionDefault(params.projectId);
   await upsertDorisProjectTableSplit({
     projectId: params.projectId,
-    retentionDays: PAID_SPLIT_RETENTION_DAYS,
     note: `billing: paid org ${params.orgId}`,
   });
 };
