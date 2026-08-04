@@ -5,7 +5,6 @@
 CREATE TABLE "doris_project_table_split" (
     "project_id" TEXT NOT NULL,
     "split" BOOLEAN NOT NULL DEFAULT false,
-    "retention_days" INTEGER,
     "note" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,

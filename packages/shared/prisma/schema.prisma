@@ -1697,8 +1697,9 @@ model OtelFileLedger {
 // LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
 //   - split         : the table-split is LIVE for this project (only flipped
 //                     true once the physical tables + MV are ready — Stage 1.2).
-//   - retentionDays  : per-project TTL (days); null = use the global default.
+//                     split=false = PENDING (designated, provisioning).
 //   - note           : free-text operator note (why split, ticket, etc.).
+// Per-project TTL is single-sourced on Project.retentionDays (not stored here).
 model DorisProjectTableSplit {
   projectId     String   @id @map("project_id")
   split         Boolean  @default(false)
