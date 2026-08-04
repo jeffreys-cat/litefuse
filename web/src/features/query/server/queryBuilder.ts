@@ -26,7 +26,10 @@ import {
   toLogicalTable,
   type Filter,
 } from "@langfuse/shared/src/server";
-import { InvalidRequestError } from "@langfuse/shared";
+import {
+  InvalidRequestError,
+  variantMetadataSubscript,
+} from "@langfuse/shared";
 import { NULL_IF_EMPTY_RE } from "./nullIfEmptyFilter";
 
 type AppliedDimensionType = {
@@ -1474,16 +1477,16 @@ export class QueryBuilder {
   }
 
   /**
-   * Rewrite legacy `metadata['key']` map subscripts (and the equivalent for
-   * experiment_item_metadata / experiment_metadata) to the events_full
-   * parallel-arrays idiom. Bare `metadata` references get prefixed with the
-   * view's base-table alias; explicitly qualified references (e.g. `t.metadata`)
-   * keep their prefix.
+   * Rewrite `metadata['key']` subscripts (and experiment_metadata /
+   * experiment_item_metadata) for the VARIANT metadata columns of events_full
+   * and traces_scalar. A dotted key a.b.c is expanded to the nested Variant
+   * path field['a']['b']['c'] — Doris stores dotted keys as nested paths, so
+   * this preserves the old flattened-key filter semantics. Bare references get
+   * the view's base-table alias; explicitly qualified ones keep their prefix.
    */
-  private rewriteEventsFullMetadataAccess(sql: string, alias: string): string {
-    // Longest-first so "experiment_metadata" and "experiment_item_metadata" are
-    // matched before "metadata" — otherwise the shorter pattern would replace
-    // the "metadata" suffix inside the longer field name.
+  private rewriteMetadataVariantAccess(sql: string, alias: string): string {
+    // Longest-first so "experiment_metadata" / "experiment_item_metadata" match
+    // before the "metadata" substring inside them.
     const fields = [
       "experiment_item_metadata",
       "experiment_metadata",
@@ -1491,31 +1494,19 @@ export class QueryBuilder {
     ];
     let rewritten = sql;
     for (const field of fields) {
-      // \b before the field name prevents matching a longer identifier
-      // that happens to end with the field name (defense-in-depth against
-      // future field additions).
       const pattern = new RegExp(
         String.raw`(\w+\.)?\b` + field + String.raw`\[\s*'((?:[^']|'')*)'\s*\]`,
         "g",
       );
       rewritten = rewritten.replace(pattern, (_, prefix, key) => {
         const p = prefix ?? `${alias}.`;
-        return `element_at(${p}${field}_values, array_position(${p}${field}_names, '${key}'))`;
+        // Un-escape the captured SQL key, then rebuild as a nested subscript
+        // chain (variantMetadataSubscript re-escapes each segment).
+        const rawKey = key.replace(/''/g, "'");
+        return `${p}${field}${variantMetadataSubscript(rawKey)}`;
       });
     }
     return rewritten;
-  }
-
-  /**
-   * Qualify bare `metadata['key']` map subscripts with the view's base-table
-   * alias. Used for base tables that store metadata as a native Map
-   * (traces_scalar) — the subscript syntax is valid Doris there, only the
-   * table alias is missing. Explicitly qualified references keep their prefix.
-   */
-  private qualifyMetadataMapAccess(sql: string, alias: string): string {
-    return sql.replace(/(\w+\.)?\bmetadata\s*\[/g, (match, prefix) =>
-      prefix ? match : `${alias}.metadata[`,
-    );
   }
 
   /**
@@ -2005,10 +1996,9 @@ export class QueryBuilder {
     if (query.rawSqlFilter && query.rawSqlFilter.trim().length > 0) {
       const trimmed = query.rawSqlFilter.trim();
       const alias = this.tableAlias(view);
-      const rewritten =
-        toLogicalTable(this.actualTableName(view)) === "events_full"
-          ? this.rewriteEventsFullMetadataAccess(trimmed, alias)
-          : this.qualifyMetadataMapAccess(trimmed, alias);
+      // events_full and traces_scalar both store metadata as a VARIANT now —
+      // same nested-path rewrite for either base table.
+      const rewritten = this.rewriteMetadataVariantAccess(trimmed, alias);
       fromClause += ` AND (${rewritten})`;
     }
 

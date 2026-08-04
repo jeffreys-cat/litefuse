@@ -42,10 +42,7 @@ import { UiColumnMappings } from "../../tableDefinitions";
 import { eventsTableCols } from "../../eventsTable";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import {
-  convertDateToAnalyticsDateTime,
-  dq,
-} from "./analyticsDateTime";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   dorisSearchCondition,
   DorisSearchContext,
@@ -443,7 +440,6 @@ async function getObservationsFromEventsTableInternal<T>(
         o.version as version,
         o.parent_span_id as parent_observation_id,
         o.created_at as created_at,
-        o.updated_at as updated_at,
         o.provided_model_name as provided_model_name,
         o.total_cost as total_cost,
         o.prompt_id as prompt_id,
@@ -457,7 +453,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const dorisSelectString = selectIOAndMetadata
     ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, to_json(o.metadata) AS metadata` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, json_object_flatten(o.metadata) AS metadata` : ""}
     `
     : dorisSelect;
 
@@ -647,16 +643,14 @@ async function getObservationByIdFromEventsTableInternal({
       prompt_id,
       prompt_name,
       prompt_version,
-      created_at,
-      updated_at,
-      event_ts
+      created_at
     FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND span_id = {id: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
     ${type ? `AND type = {type: String}` : ""}
     ${traceId ? `AND trace_id = {traceId: String}` : ""}
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 
@@ -711,7 +705,7 @@ export const getTraceByIdFromEventsTable = async ({
       id,
       name,
       user_id,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       ${dq("release")},
       version,
       project_id,
@@ -722,8 +716,7 @@ export const getTraceByIdFromEventsTable = async ({
       session_id,
       start_time AS \`timestamp\`,
       created_at,
-      updated_at,
-      0 as is_deleted
+      updated_at
     FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND id = {traceId: String}
@@ -740,7 +733,7 @@ export const getTraceByIdFromEventsTable = async ({
       t.trace_id AS id,
       t.name,
       t.user_id,
-      to_json(t.metadata) AS metadata,
+      json_object_flatten(t.metadata) AS metadata,
       t.${dq("release")},
       t.version,
       t.project_id,
@@ -750,9 +743,7 @@ export const getTraceByIdFromEventsTable = async ({
       t.tags,
       t.session_id,
       t.start_time AS \`timestamp\`,
-      t.created_at,
-      t.updated_at,
-      0 as is_deleted
+      t.created_at
     FROM ${tableFor(projectId, "events_full")} t
     WHERE t.project_id = {projectId: String}
     AND t.trace_id = {traceId: String}
@@ -926,7 +917,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.output,
       o.input_trim,
       o.output_trim,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
@@ -936,9 +927,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.cost_details,
       o.total_cost,
       o.completion_start_time,
-      o.created_at,
-      o.updated_at,
-      o.event_ts
+      o.created_at
     FROM ${tableFor(projectId, "events_full")} o
     ${hasTraceFilter ? `JOIN ${tableFor(projectId, "events_full")} t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
@@ -1215,8 +1204,7 @@ const tracesScalarAsTForPublicApi = (projectId: string) => `(
         COALESCE(${dq("release")}, '') AS ${dq("release")},
         COALESCE(version, '') AS version,
         created_at,
-        updated_at,
-        event_ts
+        updated_at
       FROM ${tableFor(projectId, "traces_scalar")}
     ) t`;
 
@@ -2491,7 +2479,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
-      to_json(e.metadata) AS metadata
+      json_object_flatten(e.metadata) AS metadata
     FROM ${tableFor(opts.projectId, "events_full")} e
     WHERE e.project_id = {projectId: String}
       AND e.span_id IN ({observationIds: Array(String)})
@@ -2533,7 +2521,9 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
         ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
         : null,
     metadata: parseMetadataCHRecordToDomain(
-      typeof r.metadata === "string" ? JSON.parse(r.metadata) : (r.metadata ?? {}),
+      typeof r.metadata === "string"
+        ? JSON.parse(r.metadata)
+        : (r.metadata ?? {}),
     ),
   }));
 };
@@ -2577,9 +2567,7 @@ const tracesScalarAsOForUsers = (projectId: string) => `(
         start_time,
         COALESCE(${dq("release")}, '') AS ${dq("release")},
         COALESCE(version, '') AS version,
-        created_at,
-        updated_at,
-        event_ts
+        created_at
       FROM ${tableFor(projectId, "traces_scalar")}
     ) o`;
 
@@ -2886,7 +2874,7 @@ export const getEventsForBlobStorageExport = function (
       if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.input,
       o.output,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.start_time,
       o.end_time,
       o.provided_model_name as model,
@@ -2950,7 +2938,7 @@ export const getEventsForAnalyticsIntegrations = async function* (
       o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.usage_details,
       o.cost_details,
       o.provided_model_name,

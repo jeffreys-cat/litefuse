@@ -92,7 +92,7 @@ export const generateTracesForPublicApi = async ({
   const dorisOrderBy =
     (orderByToDorisSQL(orderBy || [], orderByColumns) ||
       "ORDER BY t.start_time desc") +
-    (shouldUseSkipIndexes ? ", t.event_ts desc" : "");
+    (shouldUseSkipIndexes ? ", t.created_at desc" : "");
 
   const query = `
       WITH observation_stats AS (
@@ -142,7 +142,6 @@ export const generateTracesForPublicApi = async ({
         t.${dq("public")} as ${dq("public")},
         t.tags as tags,
         t.created_at as created_at,
-        t.updated_at as updated_at,
         s.score_ids as scores,
         o.observation_ids as observations,
         COALESCE(o.latency_milliseconds / 1000, 0) as latency,
@@ -184,13 +183,11 @@ export const generateTracesForPublicApi = async ({
     },
   });
 
-  const result = rawResult.map(
-    ({ metadata, ...trace }) => ({
-      ...trace,
-      metadata:
-        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
-    }),
-  );
+  const result = rawResult.map(({ metadata, ...trace }) => ({
+    ...trace,
+    metadata:
+      typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
+  }));
 
   return convertDorisTracesListToDomain(
     result as Array<

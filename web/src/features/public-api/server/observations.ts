@@ -52,7 +52,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.start_time,
       o.end_time,
       o.name,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.level,
       o.status_message,
       o.version,
@@ -70,9 +70,7 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
-      o.created_at,
-      o.updated_at,
-      o.event_ts
+      o.created_at
     FROM ${tableFor(props.projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
       ${appliedTraceFilter ? `AND EXISTS (SELECT 1 FROM ${tableFor(props.projectId, "events_full")} t WHERE o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1 AND ${appliedTraceFilter.query})` : ""}

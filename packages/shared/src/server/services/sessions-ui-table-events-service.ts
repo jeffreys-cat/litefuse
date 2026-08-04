@@ -227,8 +227,7 @@ const getSessionsTableFromEventsGeneric = async <T>(
         start_time,
         tags,
         environment,
-        bookmarked,
-        event_ts
+        bookmarked
       FROM ${tableFor(projectId, "traces_scalar")}
     ) t
     WHERE t.project_id = {projectId: String}

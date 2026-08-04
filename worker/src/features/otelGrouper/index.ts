@@ -24,7 +24,9 @@ import {
   getSplitProjectIds,
   isSplitProject,
   getShardIndex,
+  enqueueDorisSplitTableProvisioning,
   type OtelGroupCut,
+  type SplitTablesReadiness,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
@@ -35,6 +37,14 @@ import { env as sharedEnv } from "@langfuse/shared/src/env";
  * lease helpers — it is NOT a shard and NOT a lane, just the domain election key.
  */
 const LANE_DOMAIN_LEASE = "otel-lane-domain";
+
+/**
+ * Backoff for RE-checking a not-yet-ready lane. Readiness is a transient gate
+ * whose positive result is cached forever (readyLanes, monotonic); a still-
+ * provisioning / MV-building lane must not be SHOW-TABLES-probed every 200ms
+ * tick. Re-check at most this often — worst added go-live latency is one interval.
+ */
+const LANE_READINESS_BACKOFF_MS = 10_000;
 
 /** `lane-<pid>` → `<pid>`. */
 const laneToProjectId = (lane: string): string =>
@@ -58,10 +68,12 @@ type Deps = {
   /** Test seam — replaces the BullMQ publish. The first arg is the groupingKey
    * (shard or lane) for logging only; the queue is chosen from the groupId. */
   addGroupJob?: (groupingKey: string, cut: OtelGroupCut) => Promise<void>;
-  /** Test seam — lane readiness (MV FINISHED). Default lazily calls
-   * getSplitTablesReadiness (kept out of the static import graph to avoid the
-   * repositories/doris require cycle under dd-trace). */
-  isLaneReady?: (projectId: string) => Promise<boolean>;
+  /** Test seam — full lane readiness (base tables + MV status). Default lazily
+   * calls getSplitTablesReadiness (kept out of the static import graph to avoid
+   * the repositories/doris require cycle under dd-trace). The detail lets the
+   * grouper tell "MV still building" (wait) from "base tables missing"
+   * (inconsistent split=true — self-heal by re-enqueuing provisioning). */
+  getLaneReadiness?: (projectId: string) => Promise<SplitTablesReadiness>;
   config?: Partial<OtelGrouperConfig>;
   shardNames?: string[];
 };
@@ -108,6 +120,9 @@ export class OtelGrouper {
   /** Lanes whose MV build has FINISHED (monotonic — checked once, then cached).
    * The grouper must not cut a lane until its rollup is live (Stage 1.2c gate). */
   private readyLanes = new Set<string>();
+  /** lane → earliest ms to re-probe readiness. Backs off a not-yet-ready lane
+   * so provisioning/MV-build windows don't trigger a per-tick SHOW TABLES storm. */
+  private laneReadinessNextCheck = new Map<string, number>();
 
   constructor(private readonly deps: Deps = {}) {
     this.cfg = {
@@ -122,20 +137,31 @@ export class OtelGrouper {
     };
     this.shardNames = deps.shardNames ?? OtelIngestionQueue.getShardNames();
     this.addGroupJob = deps.addGroupJob ?? this.publishToQueue.bind(this);
-    this.isLaneReady = deps.isLaneReady ?? this.defaultIsLaneReady.bind(this);
+    this.getLaneReadiness =
+      deps.getLaneReadiness ?? this.defaultLaneReadiness.bind(this);
   }
 
-  private readonly isLaneReady: (projectId: string) => Promise<boolean>;
+  private readonly getLaneReadiness: (
+    projectId: string,
+  ) => Promise<SplitTablesReadiness>;
 
   /** Default readiness: lazy-import getSplitTablesReadiness (its doris-query
    * chain must stay out of the grouper's static graph — dd-trace require-cycle
-   * TDZ); the barrel is already cached at runtime so this is a no-cost lookup. */
-  private async defaultIsLaneReady(projectId: string): Promise<boolean> {
+   * TDZ); the barrel is already cached at runtime so this is a no-cost lookup.
+   * A probe error falls back to "absent" (not ready, tables missing) — the
+   * caller backs off and re-enqueues provisioning, which is safe/idempotent. */
+  private async defaultLaneReadiness(
+    projectId: string,
+  ): Promise<SplitTablesReadiness> {
     const { getSplitTablesReadiness } = await import(
       "@langfuse/shared/src/server"
     );
-    const r = await getSplitTablesReadiness(projectId).catch(() => null);
-    return r?.ready ?? false;
+    return getSplitTablesReadiness(projectId).catch(() => ({
+      ready: false,
+      eventsFullExists: false,
+      tracesScalarExists: false,
+      mvStatus: "absent" as const,
+    }));
   }
 
   public async start(): Promise<void> {
@@ -356,15 +382,41 @@ export class OtelGrouper {
         ready.push(lane);
         continue;
       }
+      // Not-ready backoff: skip re-probing until the interval elapses, so a
+      // provisioning / MV-build window (or a stuck lane) can't SHOW-TABLES-storm
+      // Doris every 200ms tick.
+      const now = Date.now();
+      if (now < (this.laneReadinessNextCheck.get(lane) ?? 0)) continue;
       try {
-        if (await this.isLaneReady(laneToProjectId(lane))) {
+        const readiness = await this.getLaneReadiness(laneToProjectId(lane));
+        if (readiness.ready) {
           this.readyLanes.add(lane);
+          this.laneReadinessNextCheck.delete(lane);
           ready.push(lane);
+          continue;
         }
-        // not ready (MV still building / tables absent) → skip this tick
+        this.laneReadinessNextCheck.set(lane, now + LANE_READINESS_BACKOFF_MS);
+        if (!readiness.eventsFullExists || !readiness.tracesScalarExists) {
+          // INCONSISTENT: a candidate lane is split=true, so the flip-gate
+          // invariant (split=true ⇒ base tables exist) says its tables should be
+          // present — but they are not (dropped, or a control row flipped
+          // without provisioning). Don't silently poll a table that will never
+          // appear on its own: re-enqueue provisioning (jobId=projectId de-dups,
+          // idempotent) to self-heal, and surface it.
+          recordIncrement("langfuse.otel_grouper.lane_tables_missing", 1, {
+            shard: lane,
+          });
+          logger.warn(
+            `[OtelGrouper] lane ${lane} is split but base tables are missing (events=${readiness.eventsFullExists} scalar=${readiness.tracesScalarExists}) — re-enqueuing provisioning`,
+          );
+          await enqueueDorisSplitTableProvisioning(laneToProjectId(lane));
+        }
+        // else: tables exist, MV still building — a legitimate transient; the
+        // backoff just waits, readiness flips true within a few checks.
       } catch (e) {
-        // #9: a readiness-probe error (Doris blip) skips only THIS lane, not
-        // the whole domain tick.
+        // #9: a readiness-probe error (Doris blip) skips only THIS lane; back
+        // off too so a persistent error doesn't tight-loop.
+        this.laneReadinessNextCheck.set(lane, now + LANE_READINESS_BACKOFF_MS);
         logger.error(
           `[OtelGrouper] lane ${lane} readiness check failed: ${e instanceof Error ? e.message : String(e)}`,
         );

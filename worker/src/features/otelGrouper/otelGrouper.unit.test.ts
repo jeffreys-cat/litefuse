@@ -380,7 +380,13 @@ describe("OtelGrouper lane domain (real Redis, Stage 1.4)", () => {
     const grouper = new OtelGrouper({
       redis,
       shardNames: [], // lanes only
-      isLaneReady: async () => true, // MV readiness stubbed (no Doris)
+      // MV readiness stubbed (no Doris) — fully ready.
+      getLaneReadiness: async () => ({
+        ready: true,
+        eventsFullExists: true,
+        tracesScalarExists: true,
+        mvStatus: "finished" as const,
+      }),
       addGroupJob: async (groupingKey, cut) => {
         published.push({ groupingKey, cut });
       },

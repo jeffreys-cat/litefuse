@@ -108,6 +108,15 @@ export async function partialUpdateDoris(opts: {
     }
   }
 
+  // traces_scalar (UNIQUE+MoW) is the authoritative store for the mutable flags
+  // (bookmark/public/tags) and keeps a real "last modified": every partial
+  // UPDATE bumps updated_at to now. events_full is append-only DUPLICATE (no
+  // updated_at column, UPDATE unsupported) and the legacy tables are dead-write,
+  // so this only applies to traces_scalar.
+  if (opts.table === "traces_scalar" && !("updated_at" in opts.set)) {
+    setClauses.push("`updated_at` = now(3)");
+  }
+
   const whereClauses: string[] = [];
   for (const [key, value] of Object.entries(opts.where)) {
     const paramName = `where_${key}`;

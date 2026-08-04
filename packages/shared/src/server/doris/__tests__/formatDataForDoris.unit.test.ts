@@ -205,7 +205,7 @@ describe("formatDataForDoris", () => {
       expect((result[0] as any).start_time_date).toBeUndefined();
     });
 
-    it("traces_scalar_<pid> derives start_time_date only (no stray timestamp_date)", () => {
+    it("traces_scalar_<pid> derives NO date column (partitions on start_time, migration 0039)", () => {
       const result = formatDataForDoris(
         [
           {
@@ -215,7 +215,8 @@ describe("formatDataForDoris", () => {
         ],
         `traces_scalar_${PID}`,
       );
-      expect((result[0] as any).start_time_date).toBeDefined();
+      // Neither derived date column may appear (mirrors events_full).
+      expect((result[0] as any).start_time_date).toBeUndefined();
       expect((result[0] as any).timestamp_date).toBeUndefined();
     });
 

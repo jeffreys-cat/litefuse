@@ -1,7 +1,4 @@
-import {
-  convertDateToAnalyticsDateTime,
-  dq,
-} from "./analyticsDateTime";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -58,16 +55,15 @@ const TRACES_SCALAR_SELECT = `
       bookmarked,
       ${dq("public")},
       tags,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       input_trim,
       output_trim,
       created_at,
-      updated_at,
-      event_ts`;
+      updated_at`;
 
 /**
  * Full input/output for ONE trace: point read of the root span row.
- * ORDER BY event_ts DESC — events_full is DUPLICATE-model, a re-delivered
+ * ORDER BY created_at DESC — events_full is DUPLICATE-model, a re-delivered
  * root span lands as a second row; pick the newest copy deterministically.
  */
 const traceRootIoQuery = (projectId: string) => `
@@ -79,7 +75,7 @@ const traceRootIoQuery = (projectId: string) => `
     AND trace_id = {traceId: String}
     AND is_root = 1
     AND DATE(start_time) = DATE({rootDay: DateTime})
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 
@@ -87,7 +83,7 @@ const traceRootIoQuery = (projectId: string) => `
  * Batch variant: full input/output for a SET of scalar rows, merged in TS.
  * The root span's start_time is byte-identical to the scalar row's (both
  * dual-written from the same root record), so the scalar rows' own timestamps
- * bound the partition range exactly. DUPLICATE model: ORDER BY event_ts DESC
+ * bound the partition range exactly. DUPLICATE model: ORDER BY created_at DESC
  * + first-wins keeps the newest copy of a re-delivered root.
  */
 const attachRootIO = async (params: {
@@ -114,7 +110,7 @@ const attachRootIO = async (params: {
       AND is_root = 1
       AND DATE(start_time) >= DATE({ioMinTs: DateTime})
       AND DATE(start_time) <= DATE({ioMaxTs: DateTime})
-      ORDER BY event_ts DESC
+      ORDER BY created_at DESC
     `,
     params: {
       projectId,
@@ -171,9 +167,6 @@ const buildRootSpanTraceQuery = (params: {
       bookmarked,
       ${dq("public")},
       created_at,
-      updated_at,
-      event_ts,
-      is_deleted,
       tags,
       input_trim,
       output_trim,${fullIO}
@@ -181,7 +174,7 @@ const buildRootSpanTraceQuery = (params: {
     FROM ${tableFor(projectId, "events_full")}
     WHERE ${whereSql}
     AND is_root = 1
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 };
@@ -466,7 +459,7 @@ export const getTracesBySessionId = async (
       WHERE project_id = {projectId: String}
         AND session_id IN ({sessionIds: Array(String)})
         ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-      ORDER BY event_ts DESC
+      ORDER BY created_at DESC
     `,
     params: {
       sessionIds,
@@ -528,8 +521,7 @@ const tracesScalarAsT = (projectId: string) => `(
         COALESCE(\`release\`, '') AS \`release\`,
         COALESCE(version, '') AS version,
         start_time,
-        created_at,
-        event_ts
+        created_at
       FROM ${tableFor(projectId, "traces_scalar")}
     ) t`;
 
@@ -1467,7 +1459,7 @@ export const getTracesForBlobStorageExport = function (
       name,
       environment,
       project_id,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       user_id,
       session_id,
       ${dq("release")},
@@ -1604,7 +1596,7 @@ export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
       SELECT id, project_id
       FROM ${sharedTableFor("traces_scalar")}
       WHERE id IN ({traceIds: Array(String)})
-      ORDER BY event_ts DESC;`;
+      ORDER BY created_at DESC;`;
   const records = await queryDoris<{
     id: string;
     project_id: string;
@@ -1692,4 +1684,3 @@ export async function getAgentGraphData(params: {
     },
   });
 }
-

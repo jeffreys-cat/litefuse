@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { ZodError } from "zod/v4";
 
 import {
@@ -128,6 +128,12 @@ const makeDeps = (
 };
 
 describe("processOtelGroupJob (core EO semantics)", () => {
+  // Prime a ready, empty (no-splits) snapshot so the cache-readiness gate passes
+  // in project_id_with_rule runs; isSplitProject stays false → shared-table
+  // routing, exactly what these core cases assert.
+  beforeEach(() => __setSplitSnapshotForTest([]));
+  afterEach(() => __setSplitSnapshotForTest(null));
+
   it("happy path: label derivation, ndjson framing, no filter ratio, ledger LAST", async () => {
     const payload = payloadFor(["f1.json", "f2.json"]);
     const { deps, loads } = makeDeps();

@@ -1,4 +1,5 @@
 import { OrderByState } from "../../interfaces/orderBy";
+import { variantMetadataSubscript } from "../utils/metadata_conversion";
 import { tracesTableUiColumnDefinitionsForDoris } from "../tableMappings";
 import { UiColumnMappings } from "../../tableDefinitions";
 import { FilterState } from "../../types";
@@ -192,15 +193,6 @@ export type FetchTracesTableProps = {
   tags?: Record<string, string>;
 };
 
-// --- MV fast path for the default rows view -------------------------------
-// The common trace-list view (no column filters, no search, timestamp ordering)
-// is served as a pure single-table aggregate over events_full that Doris
-// TRANSPARENTLY REWRITES onto traces_mv (rolled up across start_time_date so a
-// trace is one row even if it spans midnight; stale partitions auto-read base).
-// Anything needing WHERE/HAVING routing we haven't migrated yet (column / tag /
-// metadata / score / metric filters, non-timestamp ordering, search) falls
-// through to the base builder — same results, just not MV-accelerated.
-
 const isTimestampFilterColumn = (column: string): boolean =>
   column === "timestamp" || column === "Timestamp";
 
@@ -230,81 +222,21 @@ const isTagsFilterColumn = (column: string): boolean =>
 const isMetadataFilterColumn = (column: string): boolean =>
   column === "metadata" || column === "Metadata";
 
-// Per-key metadata lookup over the OUTER rollup of the inner CTE's native map
-// (trace_by_day.metadata). The inner CTE picks the root span's metadata map per
-// (trace, day) via any_value(IF(root, metadata, NULL)); any_value(metadata) in the
-// outer rolls it up to one per trace (any_value returns a non-null if one exists,
-// so root-less day partitions' NULLs are skipped). element_at(map, key) reads the
-// per-key value (NULL when the key is absent), matching base map['key'].
-const mvMetadataLookup = (key: string): string => {
-  const escapedKey = key.replace(/'/g, "''");
-  return `element_at(any_value(metadata), '${escapedKey}')`;
-};
-
-// Inner per-(trace, day) aggregate, written to match the traces_mv column
-// definitions so Doris transparently rewrites it onto traces_mv. The list fast
-// paths nest this as a CTE and roll it up to one row per trace in an OUTER GROUP
-// BY. Critically, the inner KEEPS start_time_date in its GROUP BY (= the MV
-// partition column): when recent partitions are stale, Doris can union-compensate
-// (fresh partitions from the MV + the stale partition read from base). A
-// single-layer GROUP BY that drops start_time_date cannot be union-compensated
-// (the rollup loses the partition column) and falls fully back to base on any
-// live ingestion. See docs/trace-list-materialized-view.md.
-const MV_INNER_AGG_SELECT = `
-      trace_id AS id,
-      project_id,
-      MIN(start_time) AS ts,
-      any_value(IF(is_root = 1, tags, NULL)) AS tags,
-      any_value(IF(is_root = 1, bookmarked, NULL)) AS bookmarked,
-      any_value(IF(is_root = 1, IF(trace_name <> '', trace_name, name), NULL)) AS name,
-      any_value(IF(is_root = 1, NULLIF(\`release\`, ''), NULL)) AS \`release\`,
-      any_value(IF(is_root = 1, NULLIF(version, ''), NULL)) AS version,
-      any_value(IF(is_root = 1, NULLIF(user_id, ''), NULL)) AS user_id,
-      any_value(IF(is_root = 1, NULLIF(environment, ''), NULL)) AS environment,
-      any_value(IF(is_root = 1, NULLIF(session_id, ''), NULL)) AS session_id,
-      MAX(\`public\`) AS \`public\`,
-      any_value(IF(is_root = 1, metadata, NULL)) AS metadata,
-      SUM(IF(is_root = 0, 1, 0)) AS observation_count,
-      SUM(total_cost) AS total_cost,
-      SUM(input_tokens_calculated) AS input_tokens,
-      SUM(output_tokens_calculated) AS output_tokens,
-      SUM(total_tokens_calculated) AS total_tokens,
-      SUM(input_cost_calculated) AS input_cost,
-      SUM(output_cost_calculated) AS output_cost,
-      MAX(start_time) AS start_time_max,
-      MIN(end_time) AS end_time_min,
-      MAX(end_time) AS end_time_max,
-      SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
-      SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
-      SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS default_count,
-      SUM(CASE WHEN level = 'DEBUG' THEN 1 ELSE 0 END) AS debug_count,
-      MAX(event_ts) AS event_ts`;
-
-const buildMvInnerCte = (projectId: string, whereParts: string[]): string => `
-    trace_by_day AS (
-      SELECT ${MV_INNER_AGG_SELECT}
-      FROM ${tableFor(projectId, "events_full")}
-      WHERE ${whereParts.join(" AND ")}
-      GROUP BY project_id, trace_id, start_time_date
-    )`;
-
-// OUTER rollup of the inner CTE to one row per trace. Components combine as
-// MIN(MIN)=MIN, MAX(MAX)=MAX, SUM(SUM)=SUM, so latency / level recompute
-// correctly from the per-day pre-aggregates.
+// Default `select` for the latency/level having-columns below. The live
+// agg⋈scalar path overrides the metric selects with the single-level sync-MV
+// expressions (AGG_ROLLUP_*), so these placeholder rollup forms are not executed
+// as-is; they are kept because AGG_ROLLUP_* is defined later in the file and
+// cannot be forward-referenced here.
 const OUTER_LATENCY =
   "milliseconds_diff(CASE WHEN MAX(start_time_max) > MAX(end_time_max) THEN MAX(start_time_max) ELSE MAX(end_time_max) END, CASE WHEN MIN(ts) < MIN(end_time_min) THEN MIN(ts) ELSE MIN(end_time_min) END) / 1000";
 const OUTER_LEVEL =
   "CASE WHEN SUM(error_count) > 0 THEN 'ERROR' WHEN SUM(warning_count) > 0 THEN 'WARNING' WHEN SUM(default_count) > 0 THEN 'DEFAULT' ELSE 'DEBUG' END";
 
-// UI column → per-trace aggregate expression, used to route scalar / metric
-// filters into the fast path's HAVING (a post-aggregation filter on the trace
-// row). Expressions match the fast-path SELECTs and the MV column definitions,
-// so adding them keeps the transparent rewrite firing.
-// OUTER-query rollup expressions over the inner CTE (trace_by_day) aliases — the
-// list fast paths apply scalar/metric filters in the OUTER GROUP BY, so these
-// reference the inner pre-aggregates and roll them up (any_value(any_value()) for
-// root-pick scalars, SUM(SUM)=SUM for metrics), NOT the base events_full columns.
-// Keep in sync with MV_INNER_AGG_SELECT / OUTER_* above.
+// UI column → aggregate-expression template for the metric / observation
+// columns. The agg⋈scalar path derives tracesMetricAggHavingColumns from this
+// (swapping in AGG_ROLLUP_* for the metric selects, targeting base events_full
+// columns in the sync-MV shape); mvHavingColumnTokens derives the routable
+// column-token set from the identities here.
 const tracesTableMvHavingColumns: UiColumnMappings = [
   // root-level scalars
   {
@@ -457,6 +389,9 @@ const tracesTableMvHavingColumns: UiColumnMappings = [
   },
 ];
 
+// Column tokens whose filters route through the agg⋈scalar / agg-metrics paths
+// (the metric/observation aggregate columns above). canUseAggMetricsFastPath
+// uses this to accept metric-column filters on the pre-filtered id-list path.
 const mvHavingColumnTokens = new Set(
   tracesTableMvHavingColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
 );
@@ -465,11 +400,11 @@ const mvHavingColumnTokens = new Set(
 // traces_scalar (migration 0039) holds ONE row per trace — the root span's
 // scalar fields, dual-written at ingestion. Every column the list returns is in
 // it, so when all filters are scalar-routable the rows/count queries run as a
-// FLAT single-table scan: no GROUP BY, no traces_mv rewrite, no MV-staleness
-// compensation, and inverted indexes on user_id/session_id/name/tags/environment
-// serve the filters directly. Metric filters (cost/tokens/latency/level) are
-// all-span aggregates the scalar table cannot answer — those lists fall through
-// to the MV fast path below; metrics queries always stay on the MV path.
+// FLAT single-table scan: no GROUP BY, no aggregate rollup, and inverted indexes
+// on user_id/session_id/name/tags/environment serve the filters directly. Metric
+// filters (cost/tokens/latency/level) are all-span aggregates the scalar table
+// cannot answer — those lists fall through to the agg⋈scalar path (or the base
+// builder); metrics queries use the agg-metrics path.
 
 // UI column → direct traces_scalar column, for routing scalar filters into the
 // flat WHERE. name serves both Name and Trace Name (the table stores the
@@ -539,10 +474,10 @@ const scalarFilterColumnTokens = new Set(
   tracesScalarFilterColumns.flatMap((c) => [c.uiTableName, c.uiTableId]),
 );
 
-// Eligibility mirrors canUseMvListFastPath but restricted to what the scalar
-// table can answer: timestamp range, trace-id list, tags, per-key metadata,
-// scalar column filters, ID search, timestamp ordering. Metric column filters
-// (mvHavingColumnTokens minus these) disqualify — the MV fast path handles them.
+// Eligibility restricted to what the scalar table can answer: timestamp range,
+// trace-id list, tags, per-key metadata, scalar column filters, ID search,
+// timestamp ordering. Metric column filters (mvHavingColumnTokens minus these)
+// disqualify — the agg⋈scalar path handles them.
 const canUseScalarListFastPath = (params: {
   filter: FilterState;
   orderBy?: OrderByState;
@@ -563,8 +498,8 @@ const canUseScalarListFastPath = (params: {
   );
 };
 
-// Flat WHERE over traces_scalar — one row per trace means every filter that was
-// HAVING on the MV rollup becomes a plain WHERE on a column here.
+// Flat WHERE over traces_scalar — one row per trace means every filter that is
+// a HAVING on the aggregate rollup becomes a plain WHERE on a column here.
 const buildScalarListWhere = (
   filter: FilterState,
   searchQuery?: string,
@@ -581,13 +516,14 @@ const buildScalarListWhere = (
   );
   if (fromFilter) {
     params.fromTs = convertDateToAnalyticsDateTime(fromFilter.value as Date);
-    // Date column first for partition prune, then the precise bound.
-    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
+    // Day-truncated bound first (prunes partitions natively — AUTO PARTITION on
+    // start_time), then the precise bound.
+    whereParts.push("DATE(start_time) >= DATE({fromTs: DateTime})");
     whereParts.push(`start_time ${fromFilter.operator} {fromTs: DateTime}`);
   }
   if (toFilter) {
     params.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
-    whereParts.push("start_time_date <= DATE({toTs: DateTime})");
+    whereParts.push("DATE(start_time) <= DATE({toTs: DateTime})");
     whereParts.push(`start_time ${toFilter.operator} {toTs: DateTime}`);
   }
 
@@ -602,7 +538,7 @@ const buildScalarListWhere = (
   }
 
   // tags: native ARRAY column; exact membership via array_contains (same
-  // operator handling as the MV fast path, minus the rollup).
+  // operator handling as the aggregate paths, minus the rollup).
   for (const f of filter) {
     if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
     const contains = (f.value as string[]).map((v) => {
@@ -621,8 +557,8 @@ const buildScalarListWhere = (
   for (const f of filter) {
     if (f.type !== "stringObject" || !isMetadataFilterColumn(f.column))
       continue;
-    const escapedKey = f.key.replace(/'/g, "''");
-    const lookup = `element_at(metadata, '${escapedKey}')`;
+    // VARIANT nested subscript (dotted key → nested path), CAST to STRING.
+    const lookup = `CAST(metadata${variantMetadataSubscript(f.key)} AS STRING)`;
     const escapedValue = f.value.replace(/'/g, "''");
     switch (f.operator) {
       case "=":
@@ -699,9 +635,9 @@ const runScalarRowsFastPath = async (params: {
     queryParams.offset = (limit ?? 0) * (page ?? 0);
   }
 
-  // Flat scan: one row per trace already, so the sort leads with the
-  // materialized date column (partition-ordered) then the precise timestamp —
-  // the same ordering shape as the MV path's DATE(MIN(ts)), MIN(ts).
+  // Flat scan: one row per trace already, so the sort leads with the day-
+  // truncated timestamp (partition-ordered) then the precise timestamp — the
+  // same ordering shape as the agg paths' DATE(MIN(start_time)), MIN(start_time).
   const query = `
     SELECT
       id,
@@ -718,7 +654,7 @@ const runScalarRowsFastPath = async (params: {
       ${dq("public")}
     FROM ${tableFor(projectId, "traces_scalar")}
     WHERE ${whereParts.join(" AND ")}
-    ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
+    ORDER BY DATE(start_time) ${order}, start_time ${order}, created_at DESC
     ${pagination}
   `;
 
@@ -773,7 +709,7 @@ const runScalarIdentifiersFastPath = async (params: {
       start_time AS ${dq("timestamp")}
     FROM ${tableFor(projectId, "traces_scalar")}
     WHERE ${whereParts.join(" AND ")}
-    ORDER BY start_time_date ${order}, start_time ${order}, event_ts DESC
+    ORDER BY DATE(start_time) ${order}, start_time ${order}, created_at DESC
     ${pagination}
   `;
 
@@ -826,11 +762,9 @@ const runScalarCountFastPath = async (params: {
 
 // --- metric-filtered / metric-sorted list fast path (agg ⋈ scalar) ---------
 // Lists that filter or sort by observation-level metrics (latency, cost,
-// tokens, level counts) used to fall to the MV path — whose live-partition
-// union-compensation re-aggregates the whole day's spans — or, for metric
-// ORDER BY, all the way to the base builder (events_full self-aggregate +
-// JOINs). Both are exactly the billions-of-spans scans this table set exists
-// to avoid. This path answers them from the rollup only:
+// tokens, level counts) would otherwise fall to the base builder (events_full
+// self-aggregate + JOINs) — exactly the billions-of-spans scans this table set
+// exists to avoid. This path answers them from the rollup only:
 //   inner  m: events_full GROUP BY trace_id with aggregate expressions that
 //             structurally match the trace_metrics_agg SYNC MV (migration
 //             0040) — Doris transparently rewrites the scan onto the rollup
@@ -839,7 +773,7 @@ const runScalarCountFastPath = async (params: {
 //   outer  s: JOIN ${tableFor(projectId, "traces_scalar")} for display columns + scalar filters,
 //             ORDER BY metric alias or timestamp, LIMIT/OFFSET.
 // A trace missing from either side drops out via the inner join — the same
-// outcome the MV path's metric HAVING produces (no metrics → filtered out).
+// outcome a metric HAVING produces (no metrics → filtered out).
 //
 // IMPORTANT: every aggregate below must stay expression-identical to the sync
 // MV definition in migration 0040 (SUM/MIN/MAX over the same base columns,
@@ -1039,7 +973,7 @@ const buildMetricListQuery = (params: {
   const dir = orderBy?.order === "ASC" ? "ASC" : "DESC";
   const orderSql = metricOrder
     ? `ORDER BY ${metricOrder} ${dir}, s.start_time DESC`
-    : `ORDER BY s.start_time_date ${dir}, s.start_time ${dir}, s.event_ts DESC`;
+    : `ORDER BY DATE(s.start_time) ${dir}, s.start_time ${dir}, s.created_at DESC`;
 
   return {
     query: `
@@ -1138,275 +1072,12 @@ const runMetricListCountFastPath = async (params: {
   });
 };
 
-// A filter is MV-fast-path-routable when it maps to the aggregate: the timestamp
+// A filter is agg-routable when it maps to the aggregate: the timestamp
 // range (partition prune + MIN(start_time)), a trace_id list, tags (array_contains
 // on the rolled-up native array), per-key metadata (element_at over the rolled-up
 // parallel arrays), or any scalar/metric column with an aggregate expression
 // (HAVING). NOT routable: scores (separate table) or content search — those fall
 // back to the base builder.
-// HARD GATE — the MV-shaped fast paths must never run. traces_mv is retired
-// (migration 0038 is a no-op) and events_full no longer has the
-// start_time_date column these queries GROUP BY / filter on (it partitions
-// directly on start_time, migration 0037) — invoking them would be a runtime
-// SQL error, not just a slow path. Routing is scalar / agg⋈scalar / base. The
-// code below the gate is kept intact for reference per review decision
-// ("代码先留着,没人调用就行"). Type annotation (not literal) prevents TS
-// narrowing so the retained body stays type-checked, not unreachable-flagged.
-const MV_PATHS_DISABLED: boolean = true;
-
-const canUseMvListFastPath = (params: {
-  filter: FilterState;
-  orderBy?: OrderByState;
-  searchQuery?: string;
-  searchType?: TracingSearchType[];
-}): boolean => {
-  if (MV_PATHS_DISABLED) return false;
-  const { filter, orderBy, searchQuery, searchType } = params;
-  // ID search (trace_id / user_id / name) maps to the aggregate, so it can run
-  // on the fast path. CONTENT search needs the full input/output (FTS index),
-  // which the MV doesn't carry (only the 200-char trim) — fall back to base.
-  if (searchQuery && (!searchType || searchType.some((t) => t !== "id")))
-    return false;
-  // The fast paths order by the trace timestamp; non-timestamp ordering falls
-  // back to the base builder (which maps order columns to the JOIN aliases).
-  if (orderBy && orderBy.column !== "timestamp") return false;
-  return filter.every(
-    (f) =>
-      (f.type === "datetime" && isTimestampFilterColumn(f.column)) ||
-      isInShapedIdFilter(f) ||
-      (f.type === "arrayOptions" && isTagsFilterColumn(f.column)) ||
-      (f.type === "stringObject" && isMetadataFilterColumn(f.column)) ||
-      mvHavingColumnTokens.has(f.column),
-  );
-};
-
-// Shared WHERE/HAVING fragments for the MV list fast paths. WHERE applies to the
-// inner CTE (project_id, partition prune on start_time_date, optional trace_id
-// list); HAVING applies to the OUTER rollup over trace_by_day (precise MIN(ts)
-// bounds, tags array_contains, per-key metadata, and scalar/metric column filters
-// via the OUTER aggregate expressions in tracesTableMvHavingColumns).
-const buildMvListWhereHaving = (
-  filter: FilterState,
-  searchQuery?: string,
-): {
-  whereParts: string[];
-  havingParts: string[];
-  params: Record<string, unknown>;
-} => {
-  const whereParts: string[] = ["project_id = {projectId: String}"];
-  const havingParts: string[] = [];
-  const params: Record<string, unknown> = {};
-
-  const tsFilters = filter.filter((f) => f.type === "datetime");
-  const fromFilter = tsFilters.find(
-    (f) => f.operator === ">=" || f.operator === ">",
-  );
-  const toFilter = tsFilters.find(
-    (f) => f.operator === "<=" || f.operator === "<",
-  );
-  if (fromFilter) {
-    params.fromTs = convertDateToAnalyticsDateTime(fromFilter.value as Date);
-    whereParts.push("start_time_date >= DATE({fromTs: DateTime})");
-    havingParts.push(`MIN(ts) ${fromFilter.operator} {fromTs: DateTime}`);
-  }
-  if (toFilter) {
-    params.toTs = convertDateToAnalyticsDateTime(toFilter.value as Date);
-    havingParts.push(`MIN(ts) ${toFilter.operator} {toTs: DateTime}`);
-  }
-
-  const idFilter = filter.find(isInShapedIdFilter);
-  if (idFilter) {
-    const ids =
-      idFilter.type === "stringOptions"
-        ? (idFilter.value as string[])
-        : [idFilter.value as string];
-    params.traceIds = ids;
-    whereParts.push("trace_id IN ({traceIds: Array(String)})");
-  }
-
-  // tags: the inner CTE carries the root span's native ARRAY per (trace, day);
-  // any_value() rolls it up to one per trace in the outer. Match membership with
-  // array_contains — exact element matching (no false substring hits).
-  const tagsExpr = "any_value(tags)";
-  for (const f of filter) {
-    if (f.type !== "arrayOptions" || !isTagsFilterColumn(f.column)) continue;
-    const contains = (f.value as string[]).map((v) => {
-      const escaped = v.replace(/'/g, "''");
-      return `array_contains(${tagsExpr}, '${escaped}')`;
-    });
-    if (contains.length === 0) continue;
-    if (f.operator === "all of")
-      havingParts.push(`(${contains.join(" AND ")})`);
-    else if (f.operator === "none of")
-      havingParts.push(`NOT (${contains.join(" OR ")})`);
-    else havingParts.push(`(${contains.join(" OR ")})`); // "any of"
-  }
-
-  // metadata: per-key filter over the rolled-up parallel arrays (mvMetadataLookup),
-  // mirroring the base StringObjectFilter operators on map['key']. Transparently
-  // rewrites onto traces_mv (metadata_names/metadata_values columns).
-  for (const f of filter) {
-    if (f.type !== "stringObject" || !isMetadataFilterColumn(f.column))
-      continue;
-    const lookup = mvMetadataLookup(f.key);
-    const escapedValue = f.value.replace(/'/g, "''");
-    switch (f.operator) {
-      case "=":
-        havingParts.push(`${lookup} = '${escapedValue}'`);
-        break;
-      case "contains":
-        havingParts.push(`INSTR(${lookup}, '${escapedValue}') > 0`);
-        break;
-      case "does not contain":
-        havingParts.push(`INSTR(${lookup}, '${escapedValue}') = 0`);
-        break;
-      case "starts with":
-        havingParts.push(`STARTS_WITH(${lookup}, '${escapedValue}')`);
-        break;
-      case "ends with":
-        havingParts.push(`ENDS_WITH(${lookup}, '${escapedValue}')`);
-        break;
-    }
-  }
-
-  // scalar / metric column filters → HAVING via the aggregate expressions. The
-  // Doris filter classes emit inline-escaped values (no bind params), so the
-  // produced SQL is self-contained.
-  const havingColumnFilters = filter.filter((f) =>
-    mvHavingColumnTokens.has(f.column),
-  );
-  if (havingColumnFilters.length > 0) {
-    const res = new FilterList(
-      createDorisFilterFromFilterState(
-        havingColumnFilters,
-        tracesTableMvHavingColumns,
-      ),
-    ).apply();
-    if (res.query) havingParts.push(res.query);
-  }
-
-  // ID search (searchType ["id"]): trace_id (grouping key, exposed as id) + root
-  // user_id / name via the outer rollup, OR-ed, in HAVING. Content search is gated
-  // out upstream (needs full I/O). searchQuery is interpolated as a parameter.
-  if (searchQuery) {
-    params.searchLike = `%${searchQuery}%`;
-    havingParts.push(
-      `(id LIKE {searchLike: String}` +
-        ` OR any_value(user_id) LIKE {searchLike: String}` +
-        ` OR any_value(name) LIKE {searchLike: String})`,
-    );
-  }
-
-  return { whereParts, havingParts, params };
-};
-
-const runMvRowsFastPath = async (params: {
-  projectId: string;
-  filter: FilterState;
-  orderByDesc: boolean;
-  searchQuery?: string;
-  limit?: number;
-  page?: number;
-  tags?: Record<string, string>;
-}): Promise<TracesTableReturnType[]> => {
-  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
-    params;
-
-  const {
-    whereParts,
-    havingParts,
-    params: filterParams,
-  } = buildMvListWhereHaving(filter, searchQuery);
-  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
-
-  const order = orderByDesc ? "DESC" : "ASC";
-  const pagination =
-    limit !== undefined && page !== undefined
-      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
-      : "";
-  if (pagination) {
-    queryParams.limit = limit;
-    queryParams.offset = (limit ?? 0) * (page ?? 0);
-  }
-
-  // Nested two-level aggregate: inner = per (trace, day) at MV granularity (so it
-  // transparently rewrites onto traces_mv + union-compensates stale partitions);
-  // outer rolls up to one row per trace. See buildMvInnerCte.
-  const query = `
-    WITH ${buildMvInnerCte(projectId, whereParts)}
-    SELECT
-      id,
-      project_id,
-      MIN(ts) AS ${dq("timestamp")},
-      any_value(tags) AS tags,
-      any_value(bookmarked) AS bookmarked,
-      any_value(name) AS name,
-      any_value(${dq("release")}) AS ${dq("release")},
-      any_value(version) AS version,
-      any_value(user_id) AS user_id,
-      any_value(environment) AS environment,
-      any_value(session_id) AS session_id,
-      MAX(${dq("public")}) AS ${dq("public")}
-    FROM trace_by_day
-    GROUP BY project_id, id
-    ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(ts)) ${order}, MIN(ts) ${order}, MAX(event_ts) DESC
-    ${pagination}
-  `;
-
-  return await queryDoris<TracesTableReturnType>({
-    query,
-    params: queryParams,
-    tags: {
-      ...(tags ?? {}),
-      feature: "tracing",
-      type: "traces-table",
-      projectId,
-    },
-  });
-};
-
-// Count of traces = count of (project_id, trace_id) groups. Nested two-level
-// aggregate (inner per (trace, day) rewrites onto traces_mv + union-compensates
-// stale partitions; outer rolls up to one row per trace), wrapped in count(*).
-// Same eligibility as the rows fast path (canUseMvListFastPath).
-const runMvCountFastPath = async (params: {
-  projectId: string;
-  filter: FilterState;
-  searchQuery?: string;
-  tags?: Record<string, string>;
-}): Promise<Array<{ count: string }>> => {
-  const { projectId, filter, tags, searchQuery } = params;
-
-  const {
-    whereParts,
-    havingParts,
-    params: filterParams,
-  } = buildMvListWhereHaving(filter, searchQuery);
-  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
-
-  const query = `
-    WITH ${buildMvInnerCte(projectId, whereParts)}
-    SELECT count(*) AS count FROM (
-      SELECT id
-      FROM trace_by_day
-      GROUP BY project_id, id
-      ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ) t
-  `;
-
-  return await queryDoris<{ count: string }>({
-    query,
-    params: queryParams,
-    tags: {
-      ...(tags ?? {}),
-      feature: "tracing",
-      type: "traces-table-count",
-      projectId,
-    },
-  });
-};
-
 // --- trace_metrics_agg metrics fast path -----------------------------------
 // trace_metrics_agg (migration 0040) is a SYNCHRONOUS materialized view on
 // events_full: one rollup row per (project, trace, day), maintained
@@ -1421,7 +1092,7 @@ const runMvCountFastPath = async (params: {
 // under the full filter set — so every non-time filter is redundant here and
 // deliberately NOT re-applied (the router already prunes score filters on the
 // same reasoning). Unknown filter columns still disqualify, so a future
-// caller without pre-filtered ids falls back to the MV path instead of
+// caller without pre-filtered ids falls back to the base builder instead of
 // silently losing its filters.
 const canUseAggMetricsFastPath = (params: {
   filter: FilterState;
@@ -1531,7 +1202,7 @@ const runAggMetricsFastPath = async (params: {
     WHERE ${whereParts.join(" AND ")}
     GROUP BY project_id, trace_id
     ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(event_ts) DESC
+    ORDER BY DATE(MIN(start_time)) ${order}, MIN(start_time) ${order}, MAX(created_at) DESC
     ${pagination}
   `;
 
@@ -1542,85 +1213,6 @@ const runAggMetricsFastPath = async (params: {
       ...(tags ?? {}),
       feature: "tracing",
       type: "traces-table-metrics-agg",
-      projectId,
-    },
-  });
-};
-
-// Metrics fast path: a single-table aggregate over events_full (no t self-JOIN,
-// no observations_stats CTE, no scores JOIN) that transparently rewrites onto
-// traces_mv. scores are NOT part of this query — the tRPC layer fetches them
-// separately (getScoresForTraces) and merges by trace_id, and the metrics SELECT
-// of scores_avg was already discarded by convertToUITableMetrics. Only eligible
-// when not ordering/filtering by scores or observation columns (canUseMvListFastPath).
-const runMvMetricsFastPath = async (params: {
-  projectId: string;
-  filter: FilterState;
-  orderByDesc: boolean;
-  searchQuery?: string;
-  limit?: number;
-  page?: number;
-  tags?: Record<string, string>;
-}): Promise<TracesTableMetricsDorisReturnType[]> => {
-  const { projectId, filter, orderByDesc, limit, page, tags, searchQuery } =
-    params;
-
-  const {
-    whereParts,
-    havingParts,
-    params: filterParams,
-  } = buildMvListWhereHaving(filter, searchQuery);
-  const queryParams: Record<string, unknown> = { projectId, ...filterParams };
-
-  const order = orderByDesc ? "DESC" : "ASC";
-  const pagination =
-    limit !== undefined && page !== undefined
-      ? "LIMIT {limit: Int32} OFFSET {offset: Int32}"
-      : "";
-  if (pagination) {
-    queryParams.limit = limit;
-    queryParams.offset = (limit ?? 0) * (page ?? 0);
-  }
-
-  // Nested two-level aggregate (see buildMvInnerCte): inner per (trace, day) at MV
-  // granularity → rewrites onto traces_mv + union-compensates stale partitions;
-  // outer rolls up to one row per trace. latency from the rolled min/max
-  // components; level + counts from SUM of the per-day counts. scores are NOT
-  // here — the tRPC layer fetches them separately (getScoresForTraces).
-  const query = `
-    WITH ${buildMvInnerCte(projectId, whereParts)}
-    SELECT
-      id,
-      project_id,
-      MIN(ts) AS ${dq("timestamp")},
-      ${OUTER_LATENCY} AS latency,
-      SUM(total_cost) AS total_cost,
-      SUM(input_tokens) AS input_tokens,
-      SUM(output_tokens) AS output_tokens,
-      SUM(total_tokens) AS total_tokens,
-      SUM(input_cost) AS input_cost,
-      SUM(output_cost) AS output_cost,
-      ${OUTER_LEVEL} AS level,
-      SUM(error_count) AS error_count,
-      SUM(warning_count) AS warning_count,
-      SUM(default_count) AS default_count,
-      SUM(debug_count) AS debug_count,
-      SUM(observation_count) AS observation_count,
-      MAX(${dq("public")}) AS ${dq("public")}
-    FROM trace_by_day
-    GROUP BY project_id, id
-    ${havingParts.length > 0 ? `HAVING ${havingParts.join(" AND ")}` : ""}
-    ORDER BY DATE(MIN(ts)) ${order}, MIN(ts) ${order}, MAX(event_ts) DESC
-    ${pagination}
-  `;
-
-  return await queryDoris<TracesTableMetricsDorisReturnType>({
-    query,
-    params: queryParams,
-    tags: {
-      ...(tags ?? {}),
-      feature: "tracing",
-      type: "traces-table",
       projectId,
     },
   });
@@ -1677,24 +1269,13 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     searchType,
   } = props;
 
-  // MV fast paths (see helpers above): rows / metrics / count are served as a
-  // single-table aggregate over events_full that transparently rewrites onto
-  // traces_mv. Eligible only when filters / search / ordering are MV-routable
-  // (timestamp range + trace_id list); otherwise fall through to the base builder
-  // below — same results, just not MV-accelerated.
-  const mvEligible = canUseMvListFastPath({
-    filter,
-    orderBy,
-    searchQuery,
-    searchType,
-  });
   const orderByDesc =
     orderBy?.column === "timestamp" ? orderBy.order !== "ASC" : true;
 
   // Metric-filtered / metric-sorted lists (rows/count): agg ⋈ scalar join —
   // the realtime rollup answers the metric side, traces_scalar the display
-  // side. Without this these queries hit the MV path (live-partition span
-  // re-aggregation) or, for metric ORDER BY, the base builder.
+  // side. Without this these queries fall to the base builder (events_full
+  // self-aggregate + JOINs).
   const metricListEligible =
     (select === "rows" || select === "count") &&
     canUseMetricListFastPath({ filter, orderBy, searchQuery, searchType });
@@ -1723,7 +1304,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   // Flat traces_scalar path first (rows/count/identifiers): the list's columns
   // are all root-pick scalars dual-written one-row-per-trace, so scalar-routable
   // filters skip aggregation entirely. Metric-filtered lists take the agg⋈scalar
-  // path above; metrics queries use the agg/MV paths (all-span aggregates).
+  // path above; metrics queries use the agg-metrics path (all-span aggregates).
   const scalarEligible =
     (select === "rows" || select === "count" || select === "identifiers") &&
     canUseScalarListFastPath({ filter, orderBy, searchQuery, searchType });
@@ -1761,21 +1342,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
   }
 
-  if (select === "rows" && mvEligible) {
-    return (await runMvRowsFastPath({
-      projectId,
-      filter,
-      orderByDesc,
-      limit,
-      page,
-      tags: props.tags,
-      searchQuery,
-    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
-  }
-
   // Realtime agg rollup first (id-scoped metrics — the traces.metrics page
-  // call): current on the live partition, no MV rewrite/staleness. Falls to
-  // the MV path when no id list is present or a filter isn't id-list-derived.
+  // call): current on the live partition, no async-MV staleness. Falls to the
+  // base builder when no id list is present or a filter isn't id-list-derived.
   if (
     select === "metrics" &&
     canUseAggMetricsFastPath({ filter, orderBy, searchQuery })
@@ -1787,27 +1356,6 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       limit,
       page,
       tags: props.tags,
-    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
-  }
-
-  if (select === "metrics" && mvEligible) {
-    return (await runMvMetricsFastPath({
-      projectId,
-      filter,
-      orderByDesc,
-      limit,
-      page,
-      tags: props.tags,
-      searchQuery,
-    })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
-  }
-
-  if (select === "count" && mvEligible) {
-    return (await runMvCountFastPath({
-      projectId,
-      filter,
-      tags: props.tags,
-      searchQuery,
     })) as Array<SelectReturnTypeMap[keyof SelectReturnTypeMap]>;
   }
 
@@ -1966,9 +1514,9 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
       tableName: "traces",
     },
     {
-      select: "t.event_ts",
-      uiTableName: "event_ts",
-      uiTableId: "event_ts",
+      select: "t.created_at",
+      uiTableName: "created_at",
+      uiTableId: "created_at",
       tableName: "traces",
     },
   ];
@@ -1981,7 +1529,7 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
               order: orderBy.order,
             },
             { column: "timestamp", order: orderBy.order },
-            { column: "event_ts", order: "DESC" as "DESC" },
+            { column: "created_at", order: "DESC" as "DESC" },
           ]
         : null,
       orderBy ?? null,
@@ -1994,19 +1542,16 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
     select === "metrics" || requiresObservationsJoin
       ? `
       observations_stats AS (
-        -- Trace-level rollup of its observations. Written in the MV-aligned
-        -- aggregate shape (single-table, no parent_span_id predicate, level via
-        -- SUM(CASE) counts, latency from raw min/max components, partition prune
-        -- on start_time_date) so Doris TRANSPARENTLY REWRITES this CTE onto
-        -- traces_mv (rolled up across start_time_date) — see migration 0038 and
-        -- docs/trace-list-materialized-view.md. Stale/unrefreshed partitions
-        -- auto-read base, so results stay correct. Aggregates are all-spans:
+        -- Trace-level rollup of its observations: a single-table aggregate over
+        -- events_full (no parent_span_id predicate, level via SUM(CASE) counts,
+        -- latency from raw min/max components, partition prune on start_time).
+        -- Aggregates are all-spans:
         -- the synthetic root span carries no cost/tokens, so those totals are
         -- unchanged; latency becomes the full-trace span and level counts include
         -- the root span. observation_count stays children-only via SUM(IF(...)).
         -- An observation-level filter (rare) adds a non-grouping predicate that
         -- the rewrite can't compensate, so such queries fall back to base — still
-        -- correct, just not MV-accelerated.
+        -- correct, just not rollup-accelerated.
         SELECT
           trace_id,
           project_id,

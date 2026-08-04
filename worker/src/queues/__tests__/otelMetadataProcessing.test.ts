@@ -120,19 +120,11 @@ async function processAndCreateEvent(
     "test/otel/test.json",
   );
 
-  console.log("metadata_names:", JSON.stringify(eventRecord.metadata_names));
-  console.log(
-    "metadata_raw_values:",
-    JSON.stringify(eventRecord.metadata_raw_values),
-  );
   console.log("metadata:", JSON.stringify(eventRecord.metadata));
 
-  const nameToValue = Object.fromEntries(
-    eventRecord.metadata_names.map((name, i) => [
-      name,
-      eventRecord.metadata_raw_values[i],
-    ]),
-  );
+  // metadata is now a raw VARIANT object (OTel attribute keys are already the
+  // dot-notation keys these tests assert on; Doris flattens any nesting at read).
+  const nameToValue = (eventRecord.metadata ?? {}) as Record<string, unknown>;
 
   return { eventRecord, nameToValue };
 }

@@ -28,13 +28,10 @@ import { LangfuseOtelSpanAttributes } from "./attributes";
 import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
 import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
-import {
-  registerOtelFile,
-  addLaneToIndex,
-} from "../redis/otelPendingGroups";
+import { registerOtelFile, addLaneToIndex } from "../redis/otelPendingGroups";
 import { laneFor } from "../doris/tableRouting";
 import { isSplitCacheReady } from "../doris/tableSplitCache";
-import { isValidDateString, flattenJsonToPathArrays } from "./utils";
+import { isValidDateString } from "./utils";
 
 // Type definitions for internal processor state
 interface TraceState {
@@ -2492,10 +2489,8 @@ export class OtelIngestionProcessor {
     experimentItemVersion?: string;
     experimentItemRootSpanId?: string;
     experimentItemExpectedOutput?: string;
-    experimentMetadataNames?: string[];
-    experimentMetadataValues?: Array<string | null | undefined>;
-    experimentItemMetadataNames?: string[];
-    experimentItemMetadataValues?: Array<string | null | undefined>;
+    experimentMetadata?: Record<string, unknown>;
+    experimentItemMetadata?: Record<string, unknown>;
   } {
     const experimentId = attributes[LangfuseOtelSpanAttributes.EXPERIMENT_ID];
     const experimentName =
@@ -2526,9 +2521,6 @@ export class OtelIngestionProcessor {
         // If parsing fails, treat as empty
       }
     }
-    const experimentMetadataFlattened =
-      flattenJsonToPathArrays(experimentMetadata);
-
     // Extract experiment item metadata
     const experimentItemMetadataStr =
       attributes[LangfuseOtelSpanAttributes.EXPERIMENT_ITEM_METADATA];
@@ -2543,10 +2535,6 @@ export class OtelIngestionProcessor {
         // If parsing fails, treat as empty
       }
     }
-    const experimentItemMetadataFlattened = flattenJsonToPathArrays(
-      experimentItemMetadata,
-    );
-
     return {
       experimentId: experimentId ? String(experimentId) : undefined,
       experimentName: experimentName ? String(experimentName) : undefined,
@@ -2566,21 +2554,13 @@ export class OtelIngestionProcessor {
       experimentItemExpectedOutput: experimentItemExpectedOutput
         ? String(experimentItemExpectedOutput)
         : undefined,
-      experimentMetadataNames:
-        experimentMetadataFlattened.names.length > 0
-          ? experimentMetadataFlattened.names
+      experimentMetadata:
+        Object.keys(experimentMetadata).length > 0
+          ? experimentMetadata
           : undefined,
-      experimentMetadataValues:
-        experimentMetadataFlattened.values.length > 0
-          ? experimentMetadataFlattened.values
-          : undefined,
-      experimentItemMetadataNames:
-        experimentItemMetadataFlattened.names.length > 0
-          ? experimentItemMetadataFlattened.names
-          : undefined,
-      experimentItemMetadataValues:
-        experimentItemMetadataFlattened.values.length > 0
-          ? experimentItemMetadataFlattened.values
+      experimentItemMetadata:
+        Object.keys(experimentItemMetadata).length > 0
+          ? experimentItemMetadata
           : undefined,
     };
   }

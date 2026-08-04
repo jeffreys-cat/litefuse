@@ -3,33 +3,16 @@ import { readdirSync, readFileSync } from "fs";
 import {
   buildDynamicPartitionTail,
   buildAlterTtlStatement,
-  spliceSplitTableDDL,
+  buildSplitTableFromTemplate,
   buildTraceMetricsAggMV,
   SPLIT_BASE_TABLE_SHAPES,
   readSharedCreateStatement,
+  readSplitTemplate,
   buildSplitTableStatements,
   resolveMigrationsDir,
   NO_TTL_START_DAYS,
   LATE_DATA_HISTORY_DAYS,
 } from "../splitTableTemplates";
-
-// A trimmed but structurally faithful `SHOW CREATE TABLE events_full` — column
-// body + KEY, then the AUTO PARTITION / DISTRIBUTED / PROPERTIES tail we replace.
-const SHOW_CREATE_EVENTS_FULL = `CREATE TABLE \`events_full\` (
-  \`project_id\` varchar(64) NOT NULL,
-  \`trace_id\` varchar(64) NULL,
-  \`start_time\` datetime(3) NOT NULL,
-  \`span_id\` varchar(64) NOT NULL,
-  INDEX idx_trace_id (\`trace_id\`) USING INVERTED
-) ENGINE=OLAP
-DUPLICATE KEY(\`project_id\`, \`trace_id\`, \`start_time\`, \`span_id\`)
-AUTO PARTITION BY RANGE (date_trunc(\`start_time\`, 'day')) (
-PARTITION p20260715000000 VALUES [('2026-07-15 00:00:00'), ('2026-07-16 00:00:00')))
-DISTRIBUTED BY HASH(\`trace_id\`) BUCKETS AUTO
-PROPERTIES (
-"replication_allocation" = "tag.location.default: 1",
-"is_being_synced" = "false"
-);`;
 
 describe("buildDynamicPartitionTail", () => {
   it("emits dynamic_partition with start = -retentionDays and UTC days", () => {
@@ -40,7 +23,9 @@ describe("buildDynamicPartitionTail", () => {
       replication: 3,
     });
     expect(tail).toContain("PARTITION BY RANGE(`start_time`) ()");
-    expect(tail).toContain("DISTRIBUTED BY HASH(`trace_id`) BUCKETS 10");
+    // Bucketing delegated to Doris: BUCKETS AUTO + no dynamic_partition.buckets.
+    expect(tail).toContain("DISTRIBUTED BY HASH(`trace_id`) BUCKETS AUTO");
+    expect(tail).not.toContain("dynamic_partition.buckets");
     expect(tail).toContain('"dynamic_partition.enable" = "true"');
     expect(tail).toContain('"dynamic_partition.start" = "-30"');
     expect(tail).toContain('"dynamic_partition.time_zone" = "Etc/UTC"');
@@ -57,7 +42,7 @@ describe("buildDynamicPartitionTail", () => {
       retentionDays: 7,
       replication: 1,
     });
-    expect(tail).toContain("DISTRIBUTED BY HASH(`id`) BUCKETS 10");
+    expect(tail).toContain("DISTRIBUTED BY HASH(`id`) BUCKETS AUTO");
     expect(tail).toContain('"enable_unique_key_merge_on_write" = "true"');
     expect(tail).toContain('"dynamic_partition.start" = "-7"');
     // history capped at min(7, retention) — here retention 7 → 7
@@ -110,65 +95,40 @@ describe("buildAlterTtlStatement (set/change TTL later)", () => {
   });
 });
 
-describe("spliceSplitTableDDL", () => {
-  it("keeps the column/KEY head, renames with IF NOT EXISTS, swaps the tail", () => {
-    const ddl = spliceSplitTableDDL({
-      createSql: SHOW_CREATE_EVENTS_FULL,
+describe("buildSplitTableFromTemplate", () => {
+  it("substitutes __TABLE__ with the physical name and appends the tail", () => {
+    const ddl = buildSplitTableFromTemplate({
+      templateSql: readSplitTemplate("events_full"),
       sharedTable: "events_full",
       physicalTable: "events_full_cmqpid",
       tail: { ...SPLIT_BASE_TABLE_SHAPES.events_full, retentionDays: 14, replication: 1 },
     });
-    // renamed with IF NOT EXISTS
+    // placeholder replaced everywhere; renamed with IF NOT EXISTS
     expect(ddl).toMatch(/^CREATE TABLE IF NOT EXISTS `events_full_cmqpid`/);
-    // column body + KEY preserved verbatim
-    expect(ddl).toContain("`span_id` varchar(64) NOT NULL");
-    expect(ddl).toContain(
-      "DUPLICATE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)",
-    );
-    // original AUTO PARTITION + concrete partitions + auto props are GONE
-    expect(ddl).not.toContain("AUTO PARTITION");
-    expect(ddl).not.toContain("p20260715000000");
-    expect(ddl).not.toContain("is_being_synced");
-    expect(ddl).not.toContain("BUCKETS AUTO");
-    // new dynamic_partition tail present
+    expect(ddl).not.toContain("__TABLE__");
+    // split KEY drops project_id (constant within a split table)
+    expect(ddl).toContain("DUPLICATE KEY(`trace_id`, `span_id`)");
+    // dynamic_partition tail appended (bucketing delegated: BUCKETS AUTO)
     expect(ddl).toContain("PARTITION BY RANGE(`start_time`) ()");
+    expect(ddl).toContain("DISTRIBUTED BY HASH(`trace_id`) BUCKETS AUTO");
+    expect(ddl).not.toContain("dynamic_partition.buckets");
     expect(ddl).toContain('"dynamic_partition.start" = "-14"');
   });
 
-  it("throws if the SHOW CREATE has no PARTITION BY clause", () => {
+  it("throws if the template has no __TABLE__ placeholder", () => {
     expect(() =>
-      spliceSplitTableDDL({
-        createSql: "CREATE TABLE `events_full` (`x` int) ENGINE=OLAP",
+      buildSplitTableFromTemplate({
+        templateSql: "CREATE TABLE `events_full` (`x` int) ENGINE=OLAP",
         sharedTable: "events_full",
         physicalTable: "events_full_x",
         tail: { ...SPLIT_BASE_TABLE_SHAPES.events_full, retentionDays: 1, replication: 1 },
       }),
-    ).toThrow(/no PARTITION BY clause/);
-  });
-
-  it("throws if the CREATE TABLE header names a different table", () => {
-    expect(() =>
-      spliceSplitTableDDL({
-        createSql: SHOW_CREATE_EVENTS_FULL,
-        sharedTable: "traces_scalar",
-        physicalTable: "traces_scalar_x",
-        tail: { ...SPLIT_BASE_TABLE_SHAPES.traces_scalar, retentionDays: 1, replication: 1 },
-      }),
-    ).toThrow(/unexpected CREATE TABLE header/);
+    ).toThrow(/no __TABLE__ placeholder/);
   });
 });
 
-describe("buildSplitTableStatements (reads OUR canonical .up.sql)", () => {
+describe("buildSplitTableStatements (reads OUR split templates)", () => {
   const PID = "cmqiwxsca0006pj070fdkn0vd";
-
-  it("reads events_full/traces_scalar CREATE from the migration files", () => {
-    const ef = readSharedCreateStatement("events_full");
-    expect(ef).toMatch(/^CREATE TABLE\s+if not exists\s+events_full/i);
-    // a column that only exists in OUR schema (proves it's our DDL, not a stub)
-    expect(ef).toContain("`input_tokens_calculated`");
-    const ts = readSharedCreateStatement("traces_scalar");
-    expect(ts).toContain("`start_time_date`");
-  });
 
   it("produces the 3 per-project statements with dynamic_partition + MV", () => {
     const { eventsFull, tracesScalar, mv } = buildSplitTableStatements({
@@ -181,20 +141,67 @@ describe("buildSplitTableStatements (reads OUR canonical .up.sql)", () => {
     );
     expect(eventsFull).toContain('"dynamic_partition.start" = "-30"');
     expect(eventsFull).not.toContain("AUTO PARTITION");
-    // the full column schema flowed through (not a truncated stub)
+    // split key shape + full column schema flowed through (not a truncated stub)
+    expect(eventsFull).toContain("DUPLICATE KEY(`trace_id`, `span_id`)");
     expect(eventsFull).toContain("`experiment_id`");
+    // removed columns must NOT be present
+    expect(eventsFull).not.toContain("`is_deleted`");
+    expect(eventsFull).not.toContain("`event_ts`");
+    expect(eventsFull).not.toContain("`updated_at`");
+
     expect(tracesScalar).toMatch(
       new RegExp("^CREATE TABLE IF NOT EXISTS `traces_scalar_" + PID + "`"),
     );
+    expect(tracesScalar).toContain("UNIQUE KEY(`id`, `start_time`)");
     expect(tracesScalar).toContain('"enable_unique_key_merge_on_write" = "true"');
+    expect(tracesScalar).not.toContain("`start_time_date`");
+    expect(tracesScalar).not.toContain("`event_ts`");
+    // traces_scalar is MoW-mutated (bookmark/public/tags) → keeps real updated_at
+    expect(tracesScalar).toContain("`updated_at`");
+
     expect(mv).toContain(`FROM events_full_${PID}`);
+    expect(mv).toContain("MAX(created_at) AS tm_max_created_at");
+    expect(mv).not.toContain("event_ts");
   });
 });
 
-// Drift guard: buildSplitTableStatements reads ONLY the CREATE migration. If a
-// later migration ALTERs these tables, the single CREATE file would no longer be
-// the whole schema and the split tables would silently miss columns. Fail here
-// so schema changes are made in a way the split path sees.
+// Column-parity drift guard: the split template and the canonical shared
+// migration must declare the SAME columns + types (they intentionally differ
+// only in column ORDER, the KEY, and the partition/dist tail). If someone adds a
+// column to one file but not the other, split tables would silently miss it.
+describe("split-table column-parity drift guard", () => {
+  // Extract a name -> normalized-type map from a CREATE body. Column lines start
+  // with a backtick-quoted name; INDEX / KEY / ENGINE / comment lines do not.
+  const extractColumns = (createSql: string): Map<string, string> => {
+    const cols = new Map<string, string>();
+    for (const raw of createSql.split("\n")) {
+      const line = raw.replace(/--.*$/, "").trim();
+      if (!line.startsWith("`")) continue;
+      const m = line.match(/^`([^`]+)`\s+(.+?),?\s*$/);
+      if (!m) continue;
+      cols.set(m[1], m[2].replace(/\s+/g, " ").trim().toLowerCase());
+    }
+    return cols;
+  };
+
+  it.each(["events_full", "traces_scalar"])(
+    "%s split template columns match the shared migration",
+    (table) => {
+      const shared = extractColumns(readSharedCreateStatement(table));
+      const split = extractColumns(readSplitTemplate(table));
+      // same set of column names
+      expect([...split.keys()].sort()).toEqual([...shared.keys()].sort());
+      // same type for every column
+      for (const [name, type] of shared) {
+        expect(split.get(name)).toBe(type);
+      }
+    },
+  );
+});
+
+// Drift guard: the split path reads ONLY the CREATE migration / split template.
+// If a later migration ALTERs these tables, the single CREATE file would no
+// longer be the whole schema and the split tables would silently miss columns.
 describe("split-table schema drift guard", () => {
   it("no migration ALTERs events_full/traces_scalar after CREATE", () => {
     const dir = resolveMigrationsDir();
@@ -229,6 +236,7 @@ describe("buildTraceMetricsAggMV", () => {
     expect(mv).toContain(
       "SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS tm_observation_count",
     );
+    expect(mv).toContain("MAX(created_at) AS tm_max_created_at");
     expect(mv).toContain("GROUP BY project_id, trace_id, date_trunc(start_time, 'day')");
   });
 });

@@ -28,38 +28,59 @@ import { createNewRedisInstance } from "../redis/redis";
  * (trace_metrics_agg_<pid>) is provisioned async and gated separately — it only
  * affects the rollup rewrite, not correctness (base queries have a fallback).
  *
- * Staleness window (IMPORTANT — closed in 1.3, not yet here): with periodic
- * refresh alone, a just-flipped split project keeps reading not-split in OTHER
- * processes for up to the refresh interval. If the worker grouper cuts a group
- * during that lag it would route to the SHARED table → stranded rows. The fix
- * is an eager Redis-pub/sub invalidation broadcast (control-table change →
- * every process refreshes immediately) PLUS the write-path fail-and-retry gate
- * on isSplitCacheReady(). Until both land, only flip split=true for a project
- * that is not yet ingesting (new project, provisioned before its first trace).
+ * Staleness window (CLOSED): with periodic refresh alone, a just-flipped split
+ * project would keep reading not-split in OTHER processes for up to the refresh
+ * interval, and a grouper cut during that lag would route to the SHARED table
+ * → stranded rows. Both halves of the fix have landed: the eager Redis-pub/sub
+ * invalidation broadcast below (control-table change → every process refreshes
+ * immediately) and the write-path fail-and-retry gate on isSplitCacheReady()
+ * (OtelIngestionProcessor). So the cross-process staleness window is no longer
+ * the constraint.
+ *
+ * REMAINING operational caveat (until Stage 2): still only flip split=true for a
+ * project that is not yet ingesting — NOT because of staleness, but because
+ * splitting an ALREADY-ingesting project can poison an in-flight shared-shard
+ * group (Stage 1 review #3: a mixed group whose entries[0] just became split
+ * routes the whole group to events_full_<pid>). Stage 2 adds the active-project
+ * guard; until then, designate at project creation, before the first trace.
  */
 
 type SplitEntry = { retentionDays: number | null };
 type SplitSnapshot = ReadonlyMap<string, SplitEntry>;
 
-let snapshot: SplitSnapshot | null = null;
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+// Next.js bundles the instrumentation hook (which starts the refresh loop — see
+// web/src/initialize.ts) and the API routes (which READ the cache) as SEPARATE
+// module instances. A plain module-level `let snapshot` would be populated in
+// the instrumentation instance but stay null in the API-route instance, so
+// isSplitCacheReady() would defer EVERY ingestion ("split-cache not ready").
+// Back the state with globalThis — one snapshot per PROCESS, shared across
+// instances — the same singleton pattern the prisma client uses (../../db).
+const splitCacheGlobal = globalThis as unknown as {
+  litefuseDorisSplitSnapshot?: SplitSnapshot | null;
+  litefuseDorisSplitRefreshTimer?: ReturnType<typeof setInterval> | null;
+};
+
+const getSnapshot = (): SplitSnapshot | null =>
+  splitCacheGlobal.litefuseDorisSplitSnapshot ?? null;
 
 export const DEFAULT_SPLIT_CACHE_REFRESH_MS = 15_000;
 
 /** Whether the cache has ever successfully loaded (write-path gate). */
-export const isSplitCacheReady = (): boolean => snapshot !== null;
+export const isSplitCacheReady = (): boolean => getSnapshot() !== null;
 
 /** Sync membership test — the hot path behind isSplitProject. */
 export const splitProjectInCache = (projectId: string): boolean =>
-  snapshot?.has(projectId) ?? false;
+  getSnapshot()?.has(projectId) ?? false;
 
 /** Per-project retention (days) for a split project, or null (global default). */
 export const splitRetentionDays = (projectId: string): number | null =>
-  snapshot?.get(projectId)?.retentionDays ?? null;
+  getSnapshot()?.get(projectId)?.retentionDays ?? null;
 
 /** All currently-split project ids (the grouper's PG-split lane candidates). */
-export const getSplitProjectIds = (): string[] =>
-  snapshot ? [...snapshot.keys()] : [];
+export const getSplitProjectIds = (): string[] => {
+  const s = getSnapshot();
+  return s ? [...s.keys()] : [];
+};
 
 /** Load the full split=true set from PG and atomically swap it in. */
 export const refreshSplitCache = async (): Promise<void> => {
@@ -70,7 +91,7 @@ export const refreshSplitCache = async (): Promise<void> => {
   const next = new Map<string, SplitEntry>();
   for (const r of rows)
     next.set(r.projectId, { retentionDays: r.retentionDays });
-  snapshot = next;
+  splitCacheGlobal.litefuseDorisSplitSnapshot = next;
 };
 
 /**
@@ -82,7 +103,7 @@ export const refreshSplitCache = async (): Promise<void> => {
 export const startSplitCacheRefresh = (
   intervalMs: number = DEFAULT_SPLIT_CACHE_REFRESH_MS,
 ): void => {
-  if (refreshTimer) return;
+  if (splitCacheGlobal.litefuseDorisSplitRefreshTimer) return;
   const tick = async () => {
     try {
       await refreshSplitCache();
@@ -94,17 +115,18 @@ export const startSplitCacheRefresh = (
     }
   };
   void tick();
-  refreshTimer = setInterval(() => void tick(), intervalMs);
+  const timer = setInterval(() => void tick(), intervalMs);
   // Never keep the event loop alive just for the refresh timer.
-  refreshTimer.unref?.();
+  timer.unref?.();
+  splitCacheGlobal.litefuseDorisSplitRefreshTimer = timer;
   // Eager cross-process invalidation on top of the periodic floor.
   subscribeSplitCacheInvalidation();
 };
 
 export const stopSplitCacheRefresh = (): void => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+  if (splitCacheGlobal.litefuseDorisSplitRefreshTimer) {
+    clearInterval(splitCacheGlobal.litefuseDorisSplitRefreshTimer);
+    splitCacheGlobal.litefuseDorisSplitRefreshTimer = null;
   }
   // Close the dedicated pub/sub connections (#8). stop() is the shutdown hook,
   // and nothing else disconnects these — the worker shutdown closes only the
@@ -198,5 +220,6 @@ export const subscribeSplitCacheInvalidation = (): void => {
 export const __setSplitSnapshotForTest = (
   entries: ReadonlyArray<[string, SplitEntry]> | null,
 ): void => {
-  snapshot = entries === null ? null : new Map(entries);
+  splitCacheGlobal.litefuseDorisSplitSnapshot =
+    entries === null ? null : new Map(entries);
 };

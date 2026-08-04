@@ -4,10 +4,7 @@ import {
   queryDorisStream,
   parseDorisUTCDateTimeFormat,
 } from "./doris";
-import {
-  convertDateToAnalyticsDateTime,
-  dq,
-} from "./analyticsDateTime";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -162,7 +159,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
       level,
       status_message,
       version,
-      ${includeIO === true ? "input, output, to_json(metadata) AS metadata," : ""}
+      ${includeIO === true ? "input, output, json_object_flatten(metadata) AS metadata," : ""}
       provided_model_name,
       model_id AS internal_model_id,
       model_parameters,
@@ -180,9 +177,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
       tool_definitions,
       tool_calls,
       tool_call_names,
-      created_at,
-      updated_at,
-      event_ts
+      created_at
     FROM ${tableFor(projectId, "events_full")}
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
@@ -288,7 +283,7 @@ export const getObservationForTraceIdByName = async ({
       start_time,
       end_time,
       name,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -310,15 +305,13 @@ export const getObservationForTraceIdByName = async ({
       tool_definitions,
       tool_calls,
       tool_call_names,
-      created_at,
-      updated_at,
-      event_ts
+      created_at
     FROM ${tableFor(projectId, "events_full")}
     WHERE trace_id = {traceId: String}
     AND project_id = {projectId: String}
     AND name = {name: String}
     ${timestamp ? `AND start_time >= DATE_SUB({traceTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})` : ""}
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
   `;
   const rawRecords = await queryDoris<any>({
     query,
@@ -426,7 +419,7 @@ export const getObservationsById = async (
       start_time,
       end_time,
       name,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -443,13 +436,11 @@ export const getObservationsById = async (
       prompt_id,
       prompt_name,
       prompt_version,
-      created_at,
-      updated_at,
-      event_ts
+      created_at
     FROM ${tableFor(projectId, "events_full")}
     WHERE span_id IN ({ids: Array(String)})
     AND project_id = {projectId: String}
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
   `;
   const rawRecords = await queryDoris<any>({
     query,
@@ -496,7 +487,7 @@ const getObservationByIdInternal = async ({
       start_time,
       end_time,
       name,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       level,
       status_message,
       version,
@@ -519,8 +510,6 @@ const getObservationByIdInternal = async ({
       tool_calls,
       tool_call_names,
       created_at,
-      updated_at,
-      event_ts,
       input_trim,
       output_trim
     FROM ${tableFor(projectId, "events_full")}
@@ -777,7 +766,6 @@ const getObservationsTableInternal = async <T>(
         o.version as version,
         o.parent_span_id as parent_observation_id,
         o.created_at as created_at,
-        o.updated_at as updated_at,
         o.provided_model_name as provided_model_name,
         o.total_cost as total_cost,
         o.prompt_id as prompt_id,
@@ -797,7 +785,7 @@ const getObservationsTableInternal = async <T>(
       ${dorisSelect},
       o.input,
       o.output,
-      to_json(o.metadata) AS metadata
+      json_object_flatten(o.metadata) AS metadata
     `
     : dorisSelect;
 
@@ -1710,7 +1698,7 @@ export const getObservationsForBlobStorageExport = function (
         start_time,
         end_time,
         name,
-        to_json(metadata) AS metadata,
+        json_object_flatten(metadata) AS metadata,
         level,
         status_message,
         version,

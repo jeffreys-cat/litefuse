@@ -13,6 +13,7 @@ import {
   traceException,
   OtelIngestionProcessor,
   isSplitProject,
+  isSplitCacheReady,
   tableFor,
   splitRetentionDays,
   handleMissingSplitTable,
@@ -184,6 +185,23 @@ export const processOtelGroupJob = async (
     seen.add(e.fileKey);
     return true;
   });
+
+  // Cache-readiness gate — SYMMETRIC to the web registration gate
+  // (OtelIngestionProcessor). The routing below reads isSplitProject from the
+  // in-memory snapshot; a COLD/failed cache answers "not split" and would
+  // silently load a split project's rows into the SHARED table. Unlike a missing
+  // table (which retries via handleMissingSplitTable), the shared table EXISTS —
+  // the load succeeds, the label + ledger commit, and a replay dedups → the
+  // misroute is permanent (rows invisible to the project's own-table reads).
+  // Defer (BullMQ retry) until the snapshot is loaded rather than route blind.
+  if (
+    sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule" &&
+    !isSplitCacheReady()
+  ) {
+    throw new Error(
+      "otel group job deferred: split-cache not ready (retry to avoid misrouting a split project to the shared table)",
+    );
+  }
 
   // Target tables (Stage 1.6). A group is homogeneous: a project lane holds one
   // split project (→ events_full_<pid>); a shared shard holds only non-split

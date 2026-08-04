@@ -405,7 +405,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
           -- usage with "Unknown column 'start_time'".
           SELECT id, session_id, project_id,
                  bookmarked, start_time,
-                 COALESCE(user_id, '') AS user_id, tags, environment, event_ts
+                 COALESCE(user_id, '') AS user_id, tags, environment
           FROM ${tableFor(projectId, "traces_scalar")} t
           WHERE t.project_id = {projectId: String}
             AND t.session_id IS NOT NULL AND t.session_id != ''

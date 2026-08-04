@@ -18,24 +18,28 @@
 
 CREATE TABLE if not exists events_full (
     -- Sort-key identifiers (must be the leading columns, in DUPLICATE KEY
-    -- order: project_id, trace_id, start_time, span_id).
-    -- start_time itself is the partition source — no derived date column. AUTO
-    -- PARTITION BY date_trunc(start_time,'day') lets the optimizer prune
-    -- partitions natively from ANY start_time predicate (plain ranges and even
-    -- DATE(start_time) = x forms — verified on 4.0.6), which eliminates the
-    -- whole class of "forgot the start_time_date mirror predicate →
-    -- full-partition scan" bugs. NOT NULL because auto partition rejects NULL
-    -- partition values (ingestion always supplies it). Values are UTC
-    -- wall-clock, so partitions are UTC days. Duplicate model: replays are NOT
-    -- folded — a re-exported span appends an identical row (see storage-model
-    -- note above).
-    `project_id` varchar(64) NOT NULL,
+    -- order: trace_id, project_id, span_id). trace_id leads so a trace's spans
+    -- co-locate for prefix seek on the trace-detail read; project_id follows for
+    -- tenant locality; span_id disambiguates the row. start_time is NOT part of
+    -- the key (DUPLICATE model allows a non-key partition column — verified on
+    -- 4.0.6) but is the partition source below.
     -- nullable to match the ingestion schema (trace_id is nullish); a key +
     -- distribution column may be NULL in Doris. In practice OTel spans always
     -- carry a trace_id, so co-location holds; rare NULLs share one bucket.
     `trace_id` varchar(64),
-    `start_time` DateTime(3) NOT NULL,
+    `project_id` varchar(64) NOT NULL,
     `span_id` varchar(64) NOT NULL,
+
+    -- start_time is the partition source. AUTO PARTITION BY date_trunc(start_time,
+    -- 'day') lets the optimizer prune partitions natively from ANY start_time
+    -- predicate (plain ranges and even DATE(start_time) = x forms — verified on
+    -- 4.0.6), which eliminates the whole class of "forgot the start_time_date
+    -- mirror predicate → full-partition scan" bugs. NOT NULL because auto
+    -- partition rejects NULL partition values (ingestion always supplies it).
+    -- Values are UTC wall-clock, so partitions are UTC days. Duplicate model:
+    -- replays are NOT folded — a re-exported span appends an identical row (see
+    -- storage-model note above).
+    `start_time` DateTime(3) NOT NULL,
 
     -- Span relationships
     `parent_span_id` String,
@@ -111,31 +115,24 @@ CREATE TABLE if not exists events_full (
     `input_trim` String,
     `output_trim` String,
 
-    -- Flattened metadata (parallel arrays, matches main V4 events_full).
-    -- Cross-batch deep-merge happens in IngestionService.mergeFlatMetadata
-    -- on top of the full-row pre-read (set-union by key, new wins on conflict).
-    `metadata_names` ARRAY<String>,
-    `metadata_values` ARRAY<String>,
-    -- Map mirror of the parallel arrays, built at ingestion. Used for (a) trace
-    -- list metadata filtering via native map access `metadata['key'] <op> value`
-    -- (the per-key value operators =, contains, starts/ends with only work on a
-    -- map, not on the flat arrays), and (b) the trace-list MV's single
-    -- rewrite-friendly metadata column MAX(IF(parent_span_id='', CAST(metadata AS
-    -- STRING), NULL)). Arrays above stay for byId detail / existing readers.
-    `metadata` Map<String, String>,
+    -- Metadata as a single VARIANT holding the raw (possibly nested) object.
+    -- Doris Variant normalizes dotted keys into nested paths on ingest (a literal
+    -- key "a.b.c" is stored as {a:{b:{c}}}), so read the whole map via
+    -- json_object_flatten(metadata) (yields dot-path keys) and filter per key via
+    -- the nested path metadata['a']['b']['c'] (the query builder splits a dotted
+    -- key on '.'). Replaces the old metadata_names/metadata_values arrays + Map.
+    `metadata` Variant,
 
     -- Experiment fields (populated by an async backfill job from dataset_run_items_rmt)
     `experiment_id` String,
     `experiment_name` String,
-    `experiment_metadata_names` ARRAY<String>,
-    `experiment_metadata_values` ARRAY<String>,
+    `experiment_metadata` Variant,
     `experiment_description` String,
     `experiment_dataset_id` String,
     `experiment_item_id` String,
     `experiment_item_version` DateTime(3),
     `experiment_item_expected_output` String,
-    `experiment_item_metadata_names` ARRAY<String>,
-    `experiment_item_metadata_values` ARRAY<String>,
+    `experiment_item_metadata` Variant,
     `experiment_item_root_span_id` String,
 
     -- Source / instrumentation (OTel-derived)
@@ -152,14 +149,14 @@ CREATE TABLE if not exists events_full (
     `blob_storage_file_path` String,
     `event_bytes` BIGINT,
 
+    -- Single audit timestamp. Ingestion writes created_at == updated_at ==
+    -- event_ts (all the same load-time `now`), so one column serves every
+    -- audit/ordering need: the trace_metrics_agg MV keys freshness off
+    -- MAX(created_at), and convertDorisToDomain maps both createdAt and updatedAt
+    -- from it.
     `created_at` DateTime(3) DEFAULT CURRENT_TIMESTAMP(3),
-    `updated_at` DateTime(3) DEFAULT CURRENT_TIMESTAMP(3),
-    `event_ts` DateTime(3) NOT NULL,
-    `is_deleted` int DEFAULT '0',
 
     INDEX idx_span_id (`span_id`) USING INVERTED COMMENT 'inverted index for span_id',
-    INDEX idx_trace_id (`trace_id`) USING INVERTED COMMENT 'inverted index for trace_id',
-    INDEX idx_parent_span_id (`parent_span_id`) USING INVERTED COMMENT 'inverted index for parent_span_id',
     INDEX idx_is_root (`is_root`) USING INVERTED COMMENT 'inverted index for is_root (root-span flag, WHERE is_root=1)',
     INDEX idx_project_id (`project_id`) USING INVERTED COMMENT 'inverted index for project_id',
     INDEX idx_user_id (`user_id`) USING INVERTED COMMENT 'inverted index for user_id',
@@ -186,11 +183,13 @@ CREATE TABLE if not exists events_full (
     INDEX idx_input (`input`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for input content search',
     INDEX idx_output (`output`) USING INVERTED PROPERTIES("parser" = "unicode", "support_phrase" = "true") COMMENT 'full-text index for output content search'
 ) ENGINE=OLAP
--- Key leads with project_id (every query filters it → tenant locality / prefix seek).
--- trace_id is keyed + hashed so a trace's spans co-locate in one bucket (fast trace
--- detail) and a project's data spreads across buckets (scan parallelism), unlike the
--- old HASH(project_id) which put a whole project in one bucket.
-DUPLICATE KEY(`project_id`, `trace_id`, `start_time`, `span_id`)
+-- Key leads with trace_id (a trace's spans co-locate → fast trace detail),
+-- project_id second (tenant prefix locality — every query filters project_id),
+-- span_id last to disambiguate the row. trace_id is also the distribution hash
+-- so a trace lands in one bucket while a project spreads across buckets for scan
+-- parallelism, unlike the old HASH(project_id) which put a whole project in one
+-- bucket.
+DUPLICATE KEY(`trace_id`, `project_id`, `span_id`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
 -- BUCKETS AUTO: per-deployment data volume is unknown up front, so each new
 -- day-partition gets its bucket count sized from the previous partitions'

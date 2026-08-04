@@ -5,19 +5,24 @@ import { join } from "path";
  * Per-project Doris table DDL generation (docs/project-per-table-*.md, Stage 1.2).
  *
  * A split project gets its own `events_full_<pid>` / `traces_scalar_<pid>` base
- * tables + a `trace_metrics_agg_<pid>` sync MV. These mirror the shared tables
- * EXACTLY except:
- *   - the table name is projectId-suffixed;
- *   - AUTO PARTITION is replaced by dynamic_partition so old day-partitions are
- *     auto-dropped at the project's retention (the whole point of the split).
+ * tables + a `trace_metrics_agg_<pid>` sync MV. These mirror the shared tables'
+ * COLUMNS exactly, but differ deliberately in the sort key: a split table holds
+ * ONE project, so project_id is constant and dropped from the KEY (events_full
+ * KEY = (trace_id, span_id); traces_scalar KEY = (id, start_time)). They also
+ * use dynamic_partition instead of AUTO PARTITION so old day-partitions are
+ * auto-dropped at the project's retention (the whole point of the split).
  *
- * SOURCE OF TRUTH = OUR version-controlled DDL: the column/index/KEY body is
- * read from the canonical `doris/migrations/*_create_*.up.sql` (the same files
- * that create the shared tables) — NOT from `SHOW CREATE TABLE` of a live table
- * (which could be drifted, manually altered, an old version, or absent). Only
- * the partition/dist/PROPERTIES tail, which we own, is swapped. A test asserts
- * no post-CREATE ALTER migration exists for these tables, so the single CREATE
- * file stays the whole schema (splitTableTemplates.migrations.unit.test).
+ * SOURCE OF TRUTH = OUR version-controlled DDL. Because the split key/column
+ * order diverges from the shared table, the split column+index+KEY body is a
+ * dedicated template file (`doris/split-templates/<table>.sql`) with a __TABLE__
+ * placeholder, NOT spliced out of the shared .up.sql. A drift unit test
+ * (splitTableTemplates.drift) asserts the split template and the shared
+ * `doris/migrations/*_create_*.up.sql` declare the SAME columns + indexes (only
+ * order/KEY/tail differ), so the two files can never silently diverge. Only the
+ * partition/dist/PROPERTIES tail, which we own, is appended at build time. A
+ * separate test asserts no post-CREATE ALTER migration exists for these tables,
+ * so the single CREATE file stays the whole schema
+ * (splitTableTemplates.migrations.unit.test).
  *
  * The MV shape is embedded here because it is inherently coupled to the
  * read-side rewrite (dataModelDoris.traceMetricsAggRelationSql) and migration
@@ -25,11 +30,7 @@ import { join } from "path";
  */
 
 /** Bump when the generated tail/MV shape changes; recorded in the schema-version gate. */
-export const SPLIT_SCHEMA_VERSION = 1;
-
-/** Default day-buckets for a split table's partitions (BUCKETS AUTO can't be used
- * with dynamic_partition; 10 matches the shared table's default estimate). */
-export const SPLIT_TABLE_BUCKETS = 10;
+export const SPLIT_SCHEMA_VERSION = 2;
 
 /** Future day-partitions dynamic_partition pre-creates (clock-skew buffer). */
 const DYNAMIC_PARTITION_END = 3;
@@ -53,11 +54,22 @@ export const NO_TTL_START_DAYS = 3650;
  */
 export const LATE_DATA_HISTORY_DAYS = 7;
 
-/** Canonical CREATE migration per shared logical table (single source of truth). */
+/** Canonical CREATE migration per shared logical table (drift-guard source). */
 const SHARED_TABLE_MIGRATION: Record<string, string> = {
   events_full: "0037_create_events_full.up.sql",
   traces_scalar: "0039_create_traces_scalar.up.sql",
 };
+
+/** Split-table DDL template (column+index+KEY body with a __TABLE__ placeholder,
+ * split key/order) per shared logical table. This is the source the per-project
+ * CREATE is built from; SHARED_TABLE_MIGRATION only feeds the drift guard. */
+const SPLIT_TEMPLATE_FILE: Record<string, string> = {
+  events_full: "events_full.sql",
+  traces_scalar: "traces_scalar.sql",
+};
+
+/** Placeholder in the split templates, replaced with the per-project table name. */
+const SPLIT_TABLE_PLACEHOLDER = "__TABLE__";
 
 /** Distribution column + storage model per shared logical table (stable). */
 export const SPLIT_BASE_TABLE_SHAPES = {
@@ -76,7 +88,6 @@ export type SplitTailOpts = {
   retentionDays?: number | null;
   /** Replication factor (tag.location.default). */
   replication: number;
-  buckets?: number;
 };
 
 /** dynamic_partition.start (days) + history count for a given retention. */
@@ -96,9 +107,15 @@ const partitionWindow = (
  * AUTO) so TTL can be applied/changed later by altering dynamic_partition.start;
  * an AUTO table cannot have TTL retro-fitted (its pre-existing partitions are
  * not managed by a later-added dynamic_partition).
+ *
+ * Bucketing is DELEGATED to Doris: emit `DISTRIBUTED BY HASH(col) BUCKETS AUTO`
+ * and set NO dynamic_partition.buckets — no magic number in our DDL. Doris Auto
+ * Bucket derives the bucket count from estimate_partition_size (default 10GB)
+ * and the cluster; a freshly-created (empty) table's partitions land at the
+ * 10-bucket default (observed on 4.0.6 via SHOW PARTITIONS — the test partitions
+ * held no data). We let Doris own the sizing rather than pin a number.
  */
 export const buildDynamicPartitionTail = (opts: SplitTailOpts): string => {
-  const buckets = opts.buckets ?? SPLIT_TABLE_BUCKETS;
   const { startDays, historyNum } = partitionWindow(opts.retentionDays);
   const props: Array<[string, string]> = [
     ["replication_allocation", `tag.location.default: ${opts.replication}`],
@@ -111,14 +128,13 @@ export const buildDynamicPartitionTail = (opts: SplitTailOpts): string => {
     ["dynamic_partition.start", `-${startDays}`],
     ["dynamic_partition.end", String(DYNAMIC_PARTITION_END)],
     ["dynamic_partition.prefix", "p"],
-    ["dynamic_partition.buckets", String(buckets)],
     ["dynamic_partition.create_history_partition", "true"],
     ["dynamic_partition.history_partition_num", String(historyNum)],
   ];
   const propsSql = props.map(([k, v]) => `    "${k}" = "${v}"`).join(",\n");
   return [
     `PARTITION BY RANGE(\`start_time\`) ()`,
-    `DISTRIBUTED BY HASH(\`${opts.distributionColumn}\`) BUCKETS ${buckets}`,
+    `DISTRIBUTED BY HASH(\`${opts.distributionColumn}\`) BUCKETS AUTO`,
     `PROPERTIES (`,
     propsSql,
     `)`,
@@ -143,47 +159,41 @@ export const buildAlterTtlStatement = (params: {
   );
 };
 
-const PARTITION_CLAUSE_RE = /\n(?:AUTO\s+)?PARTITION\s+BY\b/i;
-
 /**
- * Splice a canonical CREATE statement into a per-project CREATE: keep the
- * column + index + KEY head verbatim, rename the table (adding IF NOT EXISTS for
- * idempotent provisioning), and replace the partition/dist/props tail with
- * buildDynamicPartitionTail(opts).
+ * Build a per-project CREATE from the split template: take the split column +
+ * index + KEY body (already in split key/order, __TABLE__ placeholder), swap in
+ * the physical table name, and append buildDynamicPartitionTail(opts).
  *
- * @param createSql     the canonical `CREATE TABLE <shared> (...) ... PROPERTIES(...)`
+ * @param templateSql   the split template `CREATE TABLE IF NOT EXISTS __TABLE__ (...) ... KEY(...)`
  * @param sharedTable   the shared logical table name it describes (e.g. events_full)
  * @param physicalTable the target per-project name (e.g. events_full_<pid>)
  */
-export const spliceSplitTableDDL = (params: {
-  createSql: string;
+export const buildSplitTableFromTemplate = (params: {
+  templateSql: string;
   sharedTable: string;
   physicalTable: string;
   tail: SplitTailOpts;
 }): string => {
-  const { createSql, sharedTable, physicalTable, tail } = params;
-  const match = PARTITION_CLAUSE_RE.exec(createSql);
-  if (!match) {
+  const { templateSql, sharedTable, physicalTable, tail } = params;
+  if (!templateSql.includes(SPLIT_TABLE_PLACEHOLDER)) {
     throw new Error(
-      `spliceSplitTableDDL: no PARTITION BY clause found in CREATE for ${sharedTable}`,
+      `buildSplitTableFromTemplate: split template for ${sharedTable} has no ${SPLIT_TABLE_PLACEHOLDER} placeholder`,
     );
   }
-  const head = createSql.slice(0, match.index);
-  // Rename `CREATE TABLE [IF NOT EXISTS] `<shared>`` → `... IF NOT EXISTS `<physical>``
-  // (case-insensitive — our .up.sql uses lower-case `if not exists`).
-  const renameRe = new RegExp(
-    "^CREATE TABLE\\s+(?:IF NOT EXISTS\\s+)?`?" + sharedTable + "`?",
-    "i",
-  );
-  if (!renameRe.test(head.trimStart())) {
+  // Drop the leading comment banner — start the statement at CREATE TABLE. The
+  // template ends at the KEY line (no partition tail, no trailing ';'), so the
+  // rest of the file is the CREATE head verbatim.
+  const createStart = templateSql.search(/CREATE TABLE/i);
+  if (createStart < 0) {
     throw new Error(
-      `spliceSplitTableDDL: unexpected CREATE TABLE header for ${sharedTable}`,
+      `buildSplitTableFromTemplate: no CREATE TABLE found in split template for ${sharedTable}`,
     );
   }
-  const renamedHead = head
-    .trimStart()
-    .replace(renameRe, "CREATE TABLE IF NOT EXISTS `" + physicalTable + "`");
-  return `${renamedHead.trimEnd()}\n${buildDynamicPartitionTail(tail)}`;
+  const head = templateSql
+    .slice(createStart)
+    .split(SPLIT_TABLE_PLACEHOLDER)
+    .join(`\`${physicalTable}\``);
+  return `${head.trim()}\n${buildDynamicPartitionTail(tail)}`;
 };
 
 /**
@@ -216,7 +226,7 @@ SELECT
     MAX(start_time) AS tm_max_start_time,
     MIN(end_time) AS tm_min_end_time,
     MAX(end_time) AS tm_max_end_time,
-    MAX(event_ts) AS tm_max_event_ts
+    MAX(created_at) AS tm_max_created_at
 FROM ${params.baseTable}
 GROUP BY project_id, trace_id, date_trunc(start_time, 'day')`;
 
@@ -245,7 +255,8 @@ export const resolveMigrationsDir = (): string => {
  * comments contain prose semicolons (e.g. "trace_id is nullish); a key …"). */
 export const extractCreateStatement = (migrationSql: string): string => {
   const start = migrationSql.search(/CREATE TABLE/i);
-  if (start < 0) throw new Error("extractCreateStatement: no CREATE TABLE found");
+  if (start < 0)
+    throw new Error("extractCreateStatement: no CREATE TABLE found");
   const lines = migrationSql.slice(start).split("\n");
   const out: string[] = [];
   for (const line of lines) {
@@ -262,38 +273,69 @@ export const extractCreateStatement = (migrationSql: string): string => {
   return out.join("\n").trimEnd();
 };
 
-/** Read the canonical CREATE statement for a shared table from its migration. */
+/** Read the canonical CREATE statement for a shared table from its migration.
+ * Used by the drift guard (compares columns against the split template). */
 export const readSharedCreateStatement = (sharedTable: string): string => {
   const file = SHARED_TABLE_MIGRATION[sharedTable];
   if (!file) {
-    throw new Error(`readSharedCreateStatement: unknown shared table ${sharedTable}`);
+    throw new Error(
+      `readSharedCreateStatement: unknown shared table ${sharedTable}`,
+    );
   }
   const sql = readFileSync(join(resolveMigrationsDir(), file), "utf8");
   return extractCreateStatement(sql);
 };
 
 /**
+ * Locate the shared package's doris/split-templates dir. Resolved relative to
+ * this module (src via vitest, dist at runtime), same probe strategy as
+ * resolveMigrationsDir. The dir ships in the web/worker images alongside
+ * doris/migrations (packages/shared/doris).
+ */
+export const resolveSplitTemplatesDir = (): string => {
+  const candidates = [
+    join(__dirname, "../../../../doris/split-templates"), // dist/src/server/doris → shared/doris
+    join(__dirname, "../../../doris/split-templates"), // src/server/doris → shared/doris
+  ];
+  for (const dir of candidates) {
+    if (existsSync(join(dir, "events_full.sql"))) return dir;
+  }
+  throw new Error(
+    `resolveSplitTemplatesDir: doris/split-templates not found near ${__dirname} (candidates: ${candidates.join(", ")})`,
+  );
+};
+
+/** Read the split-table DDL template (with __TABLE__ placeholder) for a table. */
+export const readSplitTemplate = (sharedTable: string): string => {
+  const file = SPLIT_TEMPLATE_FILE[sharedTable];
+  if (!file) {
+    throw new Error(`readSplitTemplate: unknown shared table ${sharedTable}`);
+  }
+  return readFileSync(join(resolveSplitTemplatesDir(), file), "utf8");
+};
+
+/**
  * All DDL statements to provision a split project, in apply order:
  * events_full_<pid>, traces_scalar_<pid>, then the MV on events_full_<pid>.
- * Base-table DDL is our canonical migration DDL with a dynamic_partition tail.
+ * Base-table DDL is our split template (split key/order) with a
+ * dynamic_partition tail.
  */
 export const buildSplitTableStatements = (params: {
   projectId: string;
   /** null/undefined = provision with no TTL; set later via buildAlterTtlStatement. */
   retentionDays?: number | null;
   replication: number;
-  buckets?: number;
 }): { eventsFull: string; tracesScalar: string; mv: string } => {
-  const { projectId, retentionDays, replication, buckets } = params;
-  const tailBase = { retentionDays, replication, buckets };
-  const eventsFull = spliceSplitTableDDL({
-    createSql: readSharedCreateStatement("events_full"),
+  const { projectId, retentionDays, replication } = params;
+  const tailBase = { retentionDays, replication };
+  const eventsFull = buildSplitTableFromTemplate({
+    templateSql: readSplitTemplate("events_full"),
     sharedTable: "events_full",
     physicalTable: `events_full_${projectId}`,
     tail: { ...SPLIT_BASE_TABLE_SHAPES.events_full, ...tailBase },
   });
-  const tracesScalar = spliceSplitTableDDL({
-    createSql: readSharedCreateStatement("traces_scalar"),
+  const tracesScalar = buildSplitTableFromTemplate({
+    templateSql: readSplitTemplate("traces_scalar"),
     sharedTable: "traces_scalar",
     physicalTable: `traces_scalar_${projectId}`,
     tail: { ...SPLIT_BASE_TABLE_SHAPES.traces_scalar, ...tailBase },

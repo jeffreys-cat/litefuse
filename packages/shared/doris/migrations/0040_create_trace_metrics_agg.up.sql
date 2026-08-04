@@ -59,6 +59,6 @@ SELECT
     MAX(start_time) AS tm_max_start_time,
     MIN(end_time) AS tm_min_end_time,
     MAX(end_time) AS tm_max_end_time,
-    MAX(event_ts) AS tm_max_event_ts
+    MAX(created_at) AS tm_max_created_at
 FROM events_full
 GROUP BY project_id, trace_id, date_trunc(start_time, 'day');
