@@ -68,18 +68,16 @@ export const projectsRouter = createTRPCRouter({
       });
 
       // Billing-driven Doris table split: a new project under an already-paid
-      // org is split too. Best-effort — never fail project creation on a Doris
-      // hiccup (provisioning is idempotent + backstopped by the grouper
-      // self-heal). No-op unless mode = project_id_with_rule and the org is paid.
+      // org is split too. RELIABLE designation (no .catch): the client gets the
+      // project id only after this returns, so designating it before then
+      // guarantees its first rows can never leak to the shared table (the write
+      // path resolves the designation with a PG fallback). The control-row write
+      // is PG-reliable; the provisioning enqueue/propagation inside are
+      // best-effort. No-op unless mode = project_id_with_rule and the org is paid.
       await provisionSplitForNewProjectIfOrgPaid({
         projectId: project.id,
         orgId: input.orgId,
-      }).catch((e) =>
-        logger.error(
-          `[billing] table-split provisioning for new project ${project.id} failed`,
-          e,
-        ),
-      );
+      });
 
       return {
         id: project.id,

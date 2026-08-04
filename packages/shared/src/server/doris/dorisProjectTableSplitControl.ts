@@ -71,9 +71,27 @@ export const upsertDorisProjectTableSplit = async (params: {
   logger.info(
     `[table-split] designated ${projectId} (split=${split ?? false}); enqueuing provisioning`,
   );
-  // Eager invalidation so a split/retention change propagates immediately.
-  await publishSplitCacheInvalidation();
-  await enqueueDorisSplitTableProvisioning(projectId);
+  // The control row above IS the designation guarantee (write path resolves it,
+  // with a PG fallback, so a designated project never leaks to the shared
+  // table). Propagation + the provisioning kick are RECOVERABLE (periodic
+  // refresh + grouper self-heal / reconcile re-drive them), so a Redis hiccup
+  // here must NOT fail the caller (e.g. project creation).
+  try {
+    await publishSplitCacheInvalidation();
+  } catch (e) {
+    logger.error(
+      `[table-split] cache invalidation for ${projectId} failed`,
+      e,
+    );
+  }
+  try {
+    await enqueueDorisSplitTableProvisioning(projectId);
+  } catch (e) {
+    logger.error(
+      `[table-split] provisioning enqueue for ${projectId} failed`,
+      e,
+    );
+  }
 };
 
 /** Remove a project's split designation (control row). Does NOT drop the Doris

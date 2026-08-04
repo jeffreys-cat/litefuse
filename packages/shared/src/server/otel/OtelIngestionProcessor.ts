@@ -29,7 +29,7 @@ import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
 import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
 import { registerOtelFile, addLaneToIndex } from "../redis/otelPendingGroups";
-import { laneFor } from "../doris/tableRouting";
+import { laneForIngestion } from "../doris/tableRouting";
 import { isSplitCacheReady } from "../doris/tableSplitCache";
 import { isValidDateString } from "./utils";
 
@@ -232,11 +232,15 @@ export class OtelIngestionProcessor {
         );
       }
 
-      // Split project → its dedicated lane (a group cut from it is naturally
-      // single-project); otherwise a random shard from the shared pool. Random
-      // shard spread is deliberately independent of REDIS_CLUSTER_ENABLED (the
-      // pending lists must spread wherever more than one shard is configured).
-      const lane = laneFor(this.projectId);
+      // Split project (LIVE or PENDING) → its dedicated lane (a group cut from
+      // it is naturally single-project); otherwise a random shard from the
+      // shared pool. laneForIngestion resolves PENDING (designated but not yet
+      // provisioned) to the lane too — with a PG fallback on a cache miss — so a
+      // just-designated project's first rows are held on its lane, never leaked
+      // to the shared pool. Random shard spread is deliberately independent of
+      // REDIS_CLUSTER_ENABLED (the pending lists must spread wherever more than
+      // one shard is configured).
+      const lane = await laneForIngestion(this.projectId);
       const shardNames = OtelIngestionQueue.getShardNames();
       const groupingKey =
         lane ??

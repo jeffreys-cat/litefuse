@@ -1,12 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// Drive prisma.dorisProjectTableSplit.findMany from the test.
-const { findManyMock, createRedisMock } = vi.hoisted(() => ({
+// Drive prisma.dorisProjectTableSplit.{findMany,findUnique} from the test.
+const { findManyMock, findUniqueMock, createRedisMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
+  findUniqueMock: vi.fn(),
   createRedisMock: vi.fn(),
 }));
 vi.mock("../../../db", () => ({
-  prisma: { dorisProjectTableSplit: { findMany: findManyMock } },
+  prisma: {
+    dorisProjectTableSplit: {
+      findMany: findManyMock,
+      findUnique: findUniqueMock,
+    },
+  },
 }));
 vi.mock("../../logger", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -16,6 +22,7 @@ vi.mock("../../redis/redis", () => ({ createNewRedisInstance: createRedisMock })
 import {
   isSplitCacheReady,
   splitProjectInCache,
+  resolveIngestionSplitState,
   refreshSplitCache,
   startSplitCacheRefresh,
   stopSplitCacheRefresh,
@@ -47,6 +54,7 @@ const makeFakeRedis = (publishImpl?: () => Promise<unknown>): FakeRedis => {
 
 beforeEach(() => {
   findManyMock.mockReset();
+  findUniqueMock.mockReset();
   stopSplitCacheRefresh(); // reset module singletons (timer + pub/sub conns)
   createRedisMock.mockReset();
   createRedisMock.mockImplementation(() => makeFakeRedis());
@@ -55,42 +63,71 @@ beforeEach(() => {
 });
 
 describe("tableSplitCache", () => {
-  it("cold cache: not ready, everything reads not-split", () => {
+  it("cold cache: not ready, splitProjectInCache reads not-split", () => {
     expect(isSplitCacheReady()).toBe(false);
     expect(splitProjectInCache(A)).toBe(false);
   });
 
-  it("refreshSplitCache loads only split=true rows and marks ready", async () => {
-    findManyMock.mockResolvedValue([{ projectId: A }, { projectId: B }]);
+  it("refreshSplitCache loads ALL rows (live + pending) and marks ready", async () => {
+    findManyMock.mockResolvedValue([
+      { projectId: A, split: true },
+      { projectId: B, split: false }, // pending
+    ]);
     await refreshSplitCache();
 
     expect(isSplitCacheReady()).toBe(true);
-    expect(splitProjectInCache(A)).toBe(true);
-    expect(splitProjectInCache(B)).toBe(true);
-    expect(splitProjectInCache("unknown")).toBe(false);
+    expect(splitProjectInCache(A)).toBe(true); // live
+    expect(splitProjectInCache(B)).toBe(false); // pending is NOT "live"
+    // No where clause — the cache needs pending (split=false) rows too.
+    const call = findManyMock.mock.calls[0][0];
+    expect(call.where).toBeUndefined();
+  });
 
-    // Only split=true is queried (the where clause is the cache's contract).
-    expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { split: true } }),
-    );
+  it("resolveIngestionSplitState: live/pending/not_split from cache", async () => {
+    __setSplitSnapshotForTest([
+      [A, true],
+      [B, false],
+    ]);
+    expect(await resolveIngestionSplitState(A)).toBe("live");
+    expect(await resolveIngestionSplitState(B)).toBe("pending");
+    // Not in cache → PG fallback: no row → not_split.
+    findUniqueMock.mockResolvedValue(null);
+    expect(await resolveIngestionSplitState("unknown")).toBe("not_split");
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    // Negative-cached now → no second PG hit.
+    expect(await resolveIngestionSplitState("unknown")).toBe("not_split");
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolveIngestionSplitState: PG fallback catches a just-designated pending project", async () => {
+    // Warm cache WITHOUT the new project (pub/sub not propagated yet).
+    __setSplitSnapshotForTest([[A, true]]);
+    findUniqueMock.mockResolvedValue({ split: false }); // pending row exists in PG
+    expect(await resolveIngestionSplitState(B)).toBe("pending"); // held, not shared
   });
 
   it("full atomic replace — a project dropped from PG disappears next refresh", async () => {
-    findManyMock.mockResolvedValueOnce([{ projectId: A }, { projectId: B }]);
+    findManyMock.mockResolvedValueOnce([
+      { projectId: A, split: true },
+      { projectId: B, split: true },
+    ]);
     await refreshSplitCache();
     expect(splitProjectInCache(A)).toBe(true);
 
-    findManyMock.mockResolvedValueOnce([{ projectId: B }]);
+    findManyMock.mockResolvedValueOnce([{ projectId: B, split: true }]);
     await refreshSplitCache();
-    expect(splitProjectInCache(A)).toBe(false); // no negative-cache residue
+    expect(splitProjectInCache(A)).toBe(false); // no residue
     expect(splitProjectInCache(B)).toBe(true);
   });
 
-  it("__setSplitSnapshotForTest installs project ids directly", () => {
-    __setSplitSnapshotForTest([A]);
+  it("__setSplitSnapshotForTest installs [pid, split] entries directly", () => {
+    __setSplitSnapshotForTest([
+      [A, true],
+      [B, false],
+    ]);
     expect(isSplitCacheReady()).toBe(true);
     expect(splitProjectInCache(A)).toBe(true);
-    expect(splitProjectInCache(B)).toBe(false);
+    expect(splitProjectInCache(B)).toBe(false); // pending
   });
 });
 

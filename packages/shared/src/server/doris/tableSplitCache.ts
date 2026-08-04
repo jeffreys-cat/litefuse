@@ -45,10 +45,16 @@ import { createNewRedisInstance } from "../redis/redis";
  * guard; until then, designate at project creation, before the first trace.
  */
 
-// Just the set of provisioned (split=true) project ids. Per-project retention
-// is single-sourced on Project.retentionDays (read at provisioning / ALTER
-// time), so it is deliberately NOT cached here.
-type SplitSnapshot = ReadonlySet<string>;
+// Snapshot of EVERY control row: projectId → split flag.
+//   true  = LIVE    (tables provisioned; route reads/writes to events_full_<pid>)
+//   false = PENDING (designated, tables being provisioned; writes must be held on
+//                    the project's lane, NOT routed to the shared table)
+// A missing key = not designated (route to the shared table). Per-project
+// retention is single-sourced on Project.retentionDays, deliberately NOT cached.
+type SplitSnapshot = ReadonlyMap<string, boolean>;
+
+/** Ingestion routing state for a project (write path). */
+export type SplitState = "live" | "pending" | "not_split";
 
 // Next.js bundles the instrumentation hook (which starts the refresh loop — see
 // web/src/initialize.ts) and the API routes (which READ the cache) as SEPARATE
@@ -59,36 +65,82 @@ type SplitSnapshot = ReadonlySet<string>;
 // instances — the same singleton pattern the prisma client uses (../../db).
 const splitCacheGlobal = globalThis as unknown as {
   litefuseDorisSplitSnapshot?: SplitSnapshot | null;
+  // Negative cache: projects confirmed (via a PG fallback) to have NO control
+  // row. Bounds the PG fallback to ONE lookup per newly-seen project. Cleared on
+  // every refresh, so a project designated later is re-evaluated within a cycle.
+  litefuseDorisSplitNegative?: Set<string>;
   litefuseDorisSplitRefreshTimer?: ReturnType<typeof setInterval> | null;
 };
 
 const getSnapshot = (): SplitSnapshot | null =>
   splitCacheGlobal.litefuseDorisSplitSnapshot ?? null;
 
+const getNegativeCache = (): Set<string> => {
+  if (!splitCacheGlobal.litefuseDorisSplitNegative)
+    splitCacheGlobal.litefuseDorisSplitNegative = new Set();
+  return splitCacheGlobal.litefuseDorisSplitNegative;
+};
+
 export const DEFAULT_SPLIT_CACHE_REFRESH_MS = 15_000;
 
 /** Whether the cache has ever successfully loaded (write-path gate). */
 export const isSplitCacheReady = (): boolean => getSnapshot() !== null;
 
-/** Sync membership test — the hot path behind isSplitProject. */
+/** Sync LIVE test — the hot path behind isSplitProject (reads / group load). */
 export const splitProjectInCache = (projectId: string): boolean =>
-  getSnapshot()?.has(projectId) ?? false;
+  getSnapshot()?.get(projectId) === true;
 
-/** All currently-split project ids (the grouper's PG-split lane candidates). */
+/** All LIVE project ids (the grouper's PG-split lane candidates). Pending lanes
+ * accumulate files but are NOT cut until they go live. */
 export const getSplitProjectIds = (): string[] => {
   const s = getSnapshot();
-  return s ? [...s] : [];
+  if (!s) return [];
+  const out: string[] = [];
+  for (const [pid, split] of s) if (split) out.push(pid);
+  return out;
 };
 
-/** Load the full split=true set from PG and atomically swap it in. */
+/**
+ * Resolve a project's INGESTION routing state (write path only). Cache-first;
+ * on a cache MISS (a just-designated project whose pub/sub invalidation has not
+ * propagated to this process yet) it falls back to a single PG lookup and caches
+ * the result — closing the cross-process cache-propagation window so a paid
+ * org's brand-new project can never leak its first rows to the shared table.
+ * Async: call only in the (already-async) registration path, never the
+ * synchronous isSplitProject/tableFor read sites.
+ */
+export const resolveIngestionSplitState = async (
+  projectId: string,
+): Promise<SplitState> => {
+  const snap = getSnapshot();
+  if (snap) {
+    const v = snap.get(projectId);
+    if (v === true) return "live";
+    if (v === false) return "pending";
+    if (getNegativeCache().has(projectId)) return "not_split";
+  }
+  // Cache miss → authoritative PG check.
+  const row = await prisma.dorisProjectTableSplit.findUnique({
+    where: { projectId },
+    select: { split: true },
+  });
+  if (!row) {
+    getNegativeCache().add(projectId);
+    return "not_split";
+  }
+  return row.split ? "live" : "pending";
+};
+
+/** Load EVERY control row from PG and atomically swap it in; clear the negative
+ * cache so newly-designated projects are re-evaluated. */
 export const refreshSplitCache = async (): Promise<void> => {
   const rows = await prisma.dorisProjectTableSplit.findMany({
-    where: { split: true },
-    select: { projectId: true },
+    select: { projectId: true, split: true },
   });
-  splitCacheGlobal.litefuseDorisSplitSnapshot = new Set(
-    rows.map((r) => r.projectId),
-  );
+  const next = new Map<string, boolean>();
+  for (const r of rows) next.set(r.projectId, r.split);
+  splitCacheGlobal.litefuseDorisSplitSnapshot = next;
+  splitCacheGlobal.litefuseDorisSplitNegative = new Set();
 };
 
 /**
@@ -213,10 +265,13 @@ export const subscribeSplitCacheInvalidation = (): void => {
   });
 };
 
-/** Test-only: install a snapshot directly (bypasses PG). */
+/** Test-only: install a snapshot directly (bypasses PG). Entries are
+ * [projectId, split] (split=true live, false pending). Also resets the negative
+ * cache. */
 export const __setSplitSnapshotForTest = (
-  projectIds: ReadonlyArray<string> | null,
+  entries: ReadonlyArray<[string, boolean]> | null,
 ): void => {
   splitCacheGlobal.litefuseDorisSplitSnapshot =
-    projectIds === null ? null : new Set(projectIds);
+    entries === null ? null : new Map(entries);
+  splitCacheGlobal.litefuseDorisSplitNegative = new Set();
 };

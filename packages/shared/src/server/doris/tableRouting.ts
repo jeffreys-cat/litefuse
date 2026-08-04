@@ -1,6 +1,9 @@
 import { env } from "../../env";
 import { DorisTableName } from "./schema";
-import { splitProjectInCache } from "./tableSplitCache";
+import {
+  splitProjectInCache,
+  resolveIngestionSplitState,
+} from "./tableSplitCache";
 
 /**
  * Per-project table split routing (design docs/project-per-table-*.md).
@@ -124,3 +127,22 @@ export const toLogicalTable = (physical: string): string => {
  */
 export const laneFor = (projectId: string): string | null =>
   isSplitProject(projectId) ? `lane-${projectId}` : null;
+
+/**
+ * ASYNC lane decision for the WRITE registration path (the only correct one for
+ * ingestion). A project that is designated for split — whether LIVE (tables
+ * ready) or PENDING (tables still provisioning) — registers into its dedicated
+ * `lane-<projectId>`, so its files are captured there and held by the grouper
+ * (which cuts a lane only once it is live) instead of leaking to the shared
+ * pool. Uses resolveIngestionSplitState, which falls back to a single PG lookup
+ * on a cache miss, closing the pub/sub propagation window: a paid org's
+ * brand-new project can never route its first rows to the shared table.
+ *
+ * Only the offline reconcile uses the synchronous laneFor (live-only) above.
+ */
+export const laneForIngestion = async (
+  projectId: string,
+): Promise<string | null> => {
+  const state = await resolveIngestionSplitState(projectId);
+  return state === "live" || state === "pending" ? `lane-${projectId}` : null;
+};
