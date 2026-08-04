@@ -15,6 +15,8 @@ import {
   redis,
   ProjectDeleteQueue,
   getEnvironmentsForProject,
+  provisionSplitForNewProjectIfOrgPaid,
+  logger,
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
 import { StringNoHTMLNonEmpty } from "@langfuse/shared";
@@ -63,6 +65,20 @@ export const projectsRouter = createTRPCRouter({
         action: "create",
         after: project,
       });
+
+      // Billing-driven Doris table split: a new project under an already-paid
+      // org is split too. Best-effort — never fail project creation on a Doris
+      // hiccup (provisioning is idempotent + backstopped by the grouper
+      // self-heal). No-op unless mode = project_id_with_rule and the org is paid.
+      await provisionSplitForNewProjectIfOrgPaid({
+        projectId: project.id,
+        orgId: input.orgId,
+      }).catch((e) =>
+        logger.error(
+          `[billing] table-split provisioning for new project ${project.id} failed`,
+          e,
+        ),
+      );
 
       return {
         id: project.id,

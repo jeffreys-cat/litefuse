@@ -1,4 +1,5 @@
 import { prisma } from "../../db";
+import { env } from "../../env";
 import { logger } from "../logger";
 import { enqueueDorisSplitTableProvisioning } from "../redis/dorisSplitTableProvisioningQueue";
 import { publishSplitCacheInvalidation } from "./tableSplitCache";
@@ -77,6 +78,85 @@ export const deleteDorisProjectTableSplit = async (
     .delete({ where: { projectId } })
     .catch(() => undefined); // idempotent — already gone is fine
   await publishSplitCacheInvalidation();
+};
+
+/**
+ * Paid-org split retention (days). Table split IS the paid feature — a paid
+ * org's telemetry lives in its own long-lived tables; free projects stay on the
+ * shared table (which keeps its own, shorter retention). The user's default is
+ * 3 years. Comfortably above RETENTION_FLOOR_DAYS.
+ */
+export const PAID_SPLIT_RETENTION_DAYS = 3 * 365;
+
+/** Paying customer iff cloudConfig has an active Stripe subscription with a
+ * resolved paid plan — the same test getPlan.ts uses (activeSubscriptionId &&
+ * resolvedPlan). */
+const isOrgPaid = (cloudConfig: unknown): boolean => {
+  const stripe = (
+    cloudConfig as {
+      stripe?: {
+        activeSubscriptionId?: string | null;
+        resolvedPlan?: string | null;
+      };
+    } | null
+  )?.stripe;
+  return Boolean(stripe?.activeSubscriptionId && stripe?.resolvedPlan);
+};
+
+/**
+ * Billing-driven split provisioning: designate EVERY project of an organization
+ * for table-split and kick provisioning. Called when an org transitions to a
+ * paid plan (Stripe webhook). Idempotent — the upsert omits the `split` flag so
+ * it PRESERVES an already-live split, and CREATE IF NOT EXISTS / the per-project
+ * queue (jobId = projectId) de-dup re-runs.
+ *
+ * Once designated, a project stays split for good: a later cancellation does
+ * NOT un-split it (that would strand its data in events_full_<pid> with no read
+ * path — the accepted trade-off). Paid enforcement on cancel is handled
+ * separately by the billing ingestion-suspension path. No-op unless
+ * mode = project_id_with_rule.
+ */
+export const provisionSplitForPaidOrganization = async (
+  orgId: string,
+): Promise<void> => {
+  if (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE !== "project_id_with_rule") return;
+  const projects = await prisma.project.findMany({
+    where: { orgId, deletedAt: null },
+    select: { id: true },
+  });
+  logger.info(
+    `[table-split] paid org ${orgId} → provisioning split for ${projects.length} project(s)`,
+  );
+  for (const { id } of projects) {
+    await upsertDorisProjectTableSplit({
+      projectId: id,
+      retentionDays: PAID_SPLIT_RETENTION_DAYS,
+      note: `billing: paid org ${orgId}`,
+    });
+  }
+};
+
+/**
+ * Billing-driven split provisioning for a SINGLE newly-created project: if its
+ * org is already a paying customer, designate it for split (a paid org's new
+ * projects are split too). Called from the project-create flow. No-op unless
+ * mode = project_id_with_rule and the org is paid.
+ */
+export const provisionSplitForNewProjectIfOrgPaid = async (params: {
+  projectId: string;
+  orgId: string;
+}): Promise<void> => {
+  if (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE !== "project_id_with_rule") return;
+  const org = await prisma.organization.findUnique({
+    where: { id: params.orgId },
+    select: { cloudConfig: true },
+  });
+  if (!org || !isOrgPaid(org.cloudConfig)) return;
+  await upsertDorisProjectTableSplit({
+    projectId: params.projectId,
+    retentionDays: PAID_SPLIT_RETENTION_DAYS,
+    note: `billing: paid org ${params.orgId}`,
+  });
 };
 
 /**
