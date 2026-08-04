@@ -1650,11 +1650,12 @@ export const getObservationCountsByProjectInCreationInterval = async ({
 };
 
 // Billing free-tier usage (billingUsageService): total observation units a set
-// of projects produced since a cutoff. Excludes the synthetic root span
-// (parent_span_id = '') so an observation is a real child span — disjoint from
-// the trace count, so traces + observations never double-count the root.
-// CROSS-PROJECT (project_id IN over many projects) — shared table, NOT tableFor;
-// under table split this must fan out over events_full_<pid> (design §五).
+// of projects produced since a cutoff. Counts every span, INCLUDING the
+// synthetic root — a billing unit per the billing branch's model (aligns with
+// getObservationCountsByProjectInCreationInterval and billing.ts, which also
+// COUNT(*)). CROSS-PROJECT (project_id IN over many projects) — shared table,
+// NOT tableFor; under table split this must fan out over events_full_<pid>
+// (design §五).
 export const getObservationCountOfProjectsSinceCreationDate = async ({
   projectIds,
   start,
@@ -1667,7 +1668,6 @@ export const getObservationCountOfProjectsSinceCreationDate = async ({
       FROM ${sharedTableFor("events_full")}
       WHERE project_id IN ({projectIds: Array(String)})
       AND created_at >= {start: DateTime}
-      AND parent_span_id != ''
     `;
 
   const rows = await queryDoris<{ count: string }>({

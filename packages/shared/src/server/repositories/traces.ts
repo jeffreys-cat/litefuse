@@ -594,9 +594,9 @@ export const getTraceCountsByProjectInCreationInterval = async ({
 };
 
 // Billing free-tier usage (billingUsageService): total trace units a set of
-// projects produced since a cutoff. traces_scalar is one row per trace, so this
-// is a plain row count — disjoint from the observation count (child spans), so
-// traces + observations never double-count the synthetic root span.
+// projects produced since a cutoff. traces_scalar is one row per trace (MoW,
+// deduped), so this is a plain row count. Observations COUNT(*) events_full
+// separately (billing model counts the synthetic root as an observation too).
 // CROSS-PROJECT (project_id IN over many projects) — shared table, NOT tableFor;
 // under table split this must fan out over traces_scalar_<pid> (design §五).
 export const getTraceCountOfProjectsSinceCreationDate = async ({
