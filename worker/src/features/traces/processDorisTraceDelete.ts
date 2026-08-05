@@ -1,6 +1,5 @@
 import {
   deleteEventsByTraceIds,
-  deleteObservationsByTraceIds,
   deleteScoresByTraceIds,
   deleteTraces,
   getS3MediaStorageClient,
@@ -137,8 +136,9 @@ export const processDorisTraceDelete = async (
             traceIds,
           })
         : Promise.resolve(),
+      // Traces and observations share events_full; deleting by trace_id removes
+      // both kinds of spans, so no separate observations-table delete is needed.
       deleteTraces(projectId, traceIds),
-      deleteObservationsByTraceIds(projectId, traceIds),
       deleteScoresByTraceIds(projectId, traceIds),
       env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
         ? deleteEventsByTraceIds(projectId, traceIds)
