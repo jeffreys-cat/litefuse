@@ -1,5 +1,4 @@
 import { prisma } from "../../db";
-import { env } from "../../env";
 import { logger } from "../logger";
 import { enqueueDorisSplitTableProvisioning } from "../redis/dorisSplitTableProvisioningQueue";
 import { publishSplitCacheInvalidation } from "./tableSplitCache";
@@ -142,12 +141,11 @@ const isOrgPaid = (cloudConfig: unknown): boolean => {
  * traces_scalar_<pid> tables, independent of billing (retention TTL stays
  * paid-differentiated, derived at provisioning by getSplitRetentionDays).
  * Idempotent (upsert omits `split`, CREATE IF NOT EXISTS, per-project queue
- * de-dups). No-op unless mode = project_id_with_rule.
+ * de-dups).
  */
 export const provisionSplitForNewProject = async (
   projectId: string,
 ): Promise<void> => {
-  if (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE !== "project_id_with_rule") return;
   await upsertDorisProjectTableSplit({ projectId });
 };
 

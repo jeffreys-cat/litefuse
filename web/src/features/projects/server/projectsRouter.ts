@@ -69,8 +69,7 @@ export const projectsRouter = createTRPCRouter({
       // (a rare PG blip on the control-row write), delete the just-created
       // project so the mutation fails cleanly instead of leaving an undesignated
       // project that could ingest to the shared table. The provisioning
-      // enqueue/propagation inside upsert are best-effort. No-op unless
-      // mode = project_id_with_rule.
+      // enqueue/propagation inside upsert are best-effort.
       try {
         await provisionSplitForNewProject(project.id);
       } catch (e) {

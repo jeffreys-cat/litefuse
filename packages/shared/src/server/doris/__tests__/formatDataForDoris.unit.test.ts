@@ -182,7 +182,7 @@ describe("formatDataForDoris", () => {
     });
   });
 
-  // Under LITEFUSE_DORIS_TABLE_SPLIT_MODE the writer targets physical names
+  // Under table split the writer targets physical names
   // (events_full_<pid>). DATE_FIELD_MAPPINGS is keyed on logical names, so the
   // physical name must be reversed with toLogicalTable BEFORE the lookup — else
   // events_full_<pid> falls to the dual-column fallback and injects stray

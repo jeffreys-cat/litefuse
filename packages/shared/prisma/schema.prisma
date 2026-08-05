@@ -1693,8 +1693,9 @@ model OtelFileLedger {
 
 // Per-project Doris table-split control table (docs/project-per-table-*.md).
 // One row per project that gets its own events_full_<pid> / traces_scalar_<pid>
-// / trace_metrics_agg_<pid> tables. Consulted (cached) by isSplitProject when
-// LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
+// / trace_metrics_agg_<pid> tables. Table split is universal (every project is
+// designated at creation); consulted (cached) by isSplitProject, which routes a
+// project to its own tables only once they are provisioned (split=true / LIVE).
 //   - split         : the table-split is LIVE for this project (only flipped
 //                     true once the physical tables + MV are ready — Stage 1.2).
 //                     split=false = PENDING (designated, provisioning).

@@ -194,10 +194,7 @@ export const processOtelGroupJob = async (
   // the load succeeds, the label + ledger commit, and a replay dedups → the
   // misroute is permanent (rows invisible to the project's own-table reads).
   // Defer (BullMQ retry) until the snapshot is loaded rather than route blind.
-  if (
-    sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule" &&
-    !isSplitCacheReady()
-  ) {
+  if (!isSplitCacheReady()) {
     throw new Error(
       "otel group job deferred: split-cache not ready (retry to avoid misrouting a split project to the shared table)",
     );
