@@ -15,7 +15,7 @@ import {
   redis,
   ProjectDeleteQueue,
   getEnvironmentsForProject,
-  provisionSplitForNewProjectIfOrgPaid,
+  provisionSplitForNewProject,
   enqueueDorisSplitTableProvisioning,
   logger,
 } from "@langfuse/shared/src/server";
@@ -60,21 +60,19 @@ export const projectsRouter = createTRPCRouter({
         },
       });
 
-      // Billing-driven Doris table split: a new project under an already-paid
-      // org is split too. The client gets the project id only after this
+      // Universal Doris table split: EVERY new project gets its own tables
+      // (billing-independent; retention TTL stays paid-differentiated, derived
+      // at provisioning). The client gets the project id only after this
       // returns, so designating it BEFORE then guarantees its first rows can
       // never leak to the shared table (the write path resolves the designation
       // with a PG fallback). RELIABLE + compensating: if designation fails
       // (a rare PG blip on the control-row write), delete the just-created
-      // project so the mutation fails cleanly instead of leaving an
-      // undesignated paid project that could ingest to the shared table. The
-      // provisioning enqueue/propagation inside upsert are best-effort. No-op
-      // unless mode = project_id_with_rule and the org is paid.
+      // project so the mutation fails cleanly instead of leaving an undesignated
+      // project that could ingest to the shared table. The provisioning
+      // enqueue/propagation inside upsert are best-effort. No-op unless
+      // mode = project_id_with_rule.
       try {
-        await provisionSplitForNewProjectIfOrgPaid({
-          projectId: project.id,
-          orgId: input.orgId,
-        });
+        await provisionSplitForNewProject(project.id);
       } catch (e) {
         await ctx.prisma.project
           .delete({ where: { id: project.id } })
