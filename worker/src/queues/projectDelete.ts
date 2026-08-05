@@ -6,11 +6,14 @@ import {
   deleteScoresByProjectId,
   deleteTracesByProjectId,
   deleteDatasetRunItemsByProjectId,
+  deleteDorisProjectTableSplit,
+  dropSplitTablesForProject,
   findAllMediaByProjectId,
   getCurrentSpan,
   getS3MediaStorageClient,
   logger,
   QueueName,
+  refreshSplitCache,
   removeIngestionEventsFromS3AndDeleteDorisRefsForProject,
   TQueueJobTypes,
 } from "@langfuse/shared/src/server";
@@ -54,6 +57,24 @@ export const projectDeleteProcessor: Processor = async (
   logger.info(
     `Deleting ClickHouse and S3 data for ${projectId} in org ${orgId}`,
   );
+
+  // Doris per-project split teardown, FIRST. Every project is designated for its
+  // own events_full_<pid> / traces_scalar_<pid> (+ trace_metrics_agg_<pid> MV)
+  // tables, so a delete DROPs them wholesale — far cheaper than DELETE-by-project
+  // over a whole table, and the sync MV drops with its base. Order matters:
+  //   1. delete the control row + refresh THIS worker's snapshot, so the project
+  //      is no longer "split" — the by-project deletes below then route to the
+  //      SHARED tables, and a retry never routes one at an already-dropped table;
+  //   2. DROP the per-project tables (IF EXISTS → idempotent / no-op if never
+  //      provisioned).
+  // The by-project deletes still run, but now only sweep SHARED-table residue —
+  // an existing project not yet migrated off the shared tables (backfill still
+  // pending), or rows written to shared during a brief pre-go-live window. For a
+  // fully-split project they find nothing and short-circuit. scores/media/S3/
+  // dataset-run-items are non-split resources and are cleaned as before.
+  await deleteDorisProjectTableSplit(projectId);
+  await refreshSplitCache();
+  await dropSplitTablesForProject(projectId);
 
   // Delete project data from ClickHouse first
   await Promise.all([

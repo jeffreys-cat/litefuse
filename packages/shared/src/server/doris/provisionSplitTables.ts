@@ -24,6 +24,26 @@ const physical = (projectId: string) => ({
   mv: `trace_metrics_agg_${projectId}`,
 });
 
+/**
+ * Teardown counterpart of provisionSplitTablesForProject — DROPs a project's
+ * split base tables at project-deletion time. The trace_metrics_agg_<pid> sync
+ * MV is attached to events_full_<pid> and is removed with it, so dropping the
+ * two base tables is sufficient. IF EXISTS makes this idempotent: a no-op for a
+ * project that was never provisioned, and safe for a delete job that retries
+ * after a partial run.
+ */
+export const dropSplitTablesForProject = async (
+  projectId: string,
+): Promise<void> => {
+  const names = physical(projectId);
+  for (const table of [names.eventsFull, names.tracesScalar]) {
+    await commandDoris({
+      query: `DROP TABLE IF EXISTS \`${table}\``,
+      tags: { feature: "table-split", kind: "drop", projectId },
+    });
+  }
+};
+
 /** Whether a physical table exists (SHOW TABLES LIKE is exact-match here). */
 export const dorisTableExists = async (table: string): Promise<boolean> => {
   const rows = await queryDoris<Record<string, unknown>>({
