@@ -5,6 +5,7 @@ import { prisma } from "@langfuse/shared/src/db";
 import {
   commandDoris,
   convertDateToAnalyticsDateTime,
+  isSplitProject,
   logger,
   queryDoris,
   recordGauge,
@@ -249,13 +250,20 @@ export class BatchDataRetentionCleaner extends PeriodicExclusiveRunner {
     const timestampColumn = TIMESTAMP_COLUMN_MAP[this.tableName];
 
     // Step 1: Get all projects with retention from PostgreSQL
-    const projectsWithRetention = await prisma.project.findMany({
-      select: { id: true, retentionDays: true },
-      where: {
-        retentionDays: { gt: 0 },
-        deletedAt: null,
-      },
-    });
+    const projectsWithRetention = (
+      await prisma.project.findMany({
+        select: { id: true, retentionDays: true },
+        where: {
+          retentionDays: { gt: 0 },
+          deletedAt: null,
+        },
+      })
+    )
+      // Split projects retain via their own `<table>_<pid>` dynamic_partition
+      // (design §二 / Stage 1.1) — they have no rows in the shared table this
+      // cleaner deletes from, so exclude them rather than run a no-op DELETE
+      // condition (and never let this row-level path touch their retention).
+      .filter((p) => !isSplitProject(p.id));
 
     if (projectsWithRetention.length === 0) {
       return [];

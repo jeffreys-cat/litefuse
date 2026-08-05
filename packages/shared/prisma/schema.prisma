@@ -1294,10 +1294,26 @@ model BillingMeterBackup {
   // ts
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  submittedAt DateTime? @map("submitted_at")
 
   @@unique([stripeCustomerId, meterId, startTime, endTime])
   @@index([stripeCustomerId, meterId, startTime, endTime])
   @@map("billing_meter_backups")
+}
+
+model StripeWebhookEvent {
+  id            String    @id @default(cuid())
+  stripeEventId String    @unique @map("stripe_event_id")
+  eventType     String    @map("event_type")
+  status        String
+  payload       Json?
+  error         String?
+  processedAt   DateTime? @map("processed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("stripe_webhook_events")
 }
 
 model LlmSchema {
@@ -1654,4 +1670,49 @@ model OtelPoisonJob {
   @@unique([shardName, jobId])
   @@index([createdAt])
   @@map("otel_poison_jobs")
+}
+
+// EO completion ledger (design §3.5 v3.2): one row = "this fileKey completed
+// end-to-end as part of groupId". Moved from Doris blob_storage_file_log —
+// the per-group 2-row stream loads concentrated tablet versions and tripped
+// max_tablet_version_num (E-235, 2026-07-28 incident); PG handles small
+// frequent inserts natively and is already on the group job's critical path
+// (trace_sessions upsert precedes the ledger write).
+model OtelFileLedger {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  fileKey   String   @map("file_key")
+  groupId   String   @map("group_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([fileKey, groupId])
+  @@index([groupId])
+  @@index([createdAt])
+  @@map("otel_file_ledger")
+}
+
+// Per-project Doris table-split control table (docs/project-per-table-*.md).
+// One row per project that gets its own events_full_<pid> / traces_scalar_<pid>
+// / trace_metrics_agg_<pid> tables. Consulted (cached) by isSplitProject when
+// LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
+//   - split         : the table-split is LIVE for this project (only flipped
+//                     true once the physical tables + MV are ready — Stage 1.2).
+//                     split=false = PENDING (designated, provisioning).
+//   - note           : free-text operator note (why split, ticket, etc.).
+// Per-project TTL is single-sourced on Project.retentionDays (not stored here).
+model DorisProjectTableSplit {
+  projectId     String   @id @map("project_id")
+  split         Boolean  @default(false)
+  // Per-project split-table TTL is single-sourced on Project.retentionDays
+  // (read at provisioning / ALTER time) — this table only tracks provisioned
+  // state + schema version, not retention.
+  note          String?
+  // Template/schema version the physical tables were provisioned at (Stage 1.2c
+  // readiness gate). Set when provisioning flips split=true; a later bump of
+  // SPLIT_SCHEMA_VERSION signals those tables need a schema migration.
+  schemaVersion Int?     @map("schema_version")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("doris_project_table_split")
 }

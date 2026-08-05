@@ -31,7 +31,6 @@ import {
   queryDoris,
   redis,
   convertDateToAnalyticsDateTime,
-  flattenJsonToPathArrays,
   dorisClient,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
@@ -109,16 +108,14 @@ export interface SpanRecord {
 export interface EnrichedSpan extends SpanRecord {
   experiment_id: string;
   experiment_name: string;
-  experiment_metadata_names: string[];
-  experiment_metadata_values: Array<string | null | undefined>;
+  experiment_metadata: Record<string, unknown>;
   experiment_description: string;
   experiment_dataset_id: string;
   experiment_item_id: string;
   experiment_item_version: string | null;
   experiment_item_root_span_id: string;
   experiment_item_expected_output: string;
-  experiment_item_metadata_names: string[];
-  experiment_item_metadata_values: Array<string | null | undefined>;
+  experiment_item_metadata: Record<string, unknown>;
 }
 
 export interface TraceProperties {
@@ -147,6 +144,10 @@ export async function getDatasetRunItemsSinceLastRun(
       -- LEFT ANTI JOIN below excludes these so backfill only enriches DRIs
       -- whose target trace is not yet experiment-tagged.
       select distinct project_id, trace_id
+      -- CROSS-PROJECT (no project_id filter — scans all projects for
+      -- experiment-tagged traces) — deliberately NOT routed through tableFor.
+      -- Under table split this must fan out over every split project's
+      -- events_full_<pid> UNION the shared table (design §五). Do not "fix" it.
       from events_full
       where start_time > {lastRun: DateTime64(3)} - interval 1 day
         and experiment_id != ''
@@ -287,8 +288,12 @@ export async function getRelevantObservations(
         coalesce(o.session_id, '') AS session_id,
         ROW_NUMBER() OVER (
           PARTITION BY o.project_id, o.span_id
-          ORDER BY o.event_ts DESC
+          ORDER BY o.created_at DESC
         ) AS rn
+      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
+      -- NOT routed through tableFor; it has no single projectId. Under table
+      -- split this must fan out over each split project's events_full_<pid>
+      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
@@ -336,7 +341,7 @@ export async function getRelevantTraces(
   }
 
   // Trace identity comes from events_full's OTel root span
-  // (is_root = 1). Latest event_ts wins within the project / trace
+  // (is_root = 1). Latest created_at wins within the project / trace
   // pair, mirroring buildTraceAggregationQuery's "trace_root" CTE choice.
   // events_full carries trace-level fields denormalised on the root span,
   // so we don't need a separate CTE for them — read them straight off o.
@@ -383,8 +388,12 @@ export async function getRelevantTraces(
         coalesce(o.session_id, '') AS session_id,
         ROW_NUMBER() OVER (
           PARTITION BY o.project_id, o.trace_id
-          ORDER BY o.event_ts DESC
+          ORDER BY o.created_at DESC
         ) AS rn
+      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
+      -- NOT routed through tableFor; it has no single projectId. Under table
+      -- split this must fan out over each split project's events_full_<pid>
+      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
       FROM events_full o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
@@ -486,16 +495,14 @@ function convertToEnrichedSpanWithoutExperiment(
     public: traceProperties?.public || false,
     experiment_id: "",
     experiment_name: "",
-    experiment_metadata_names: [],
-    experiment_metadata_values: [],
+    experiment_metadata: {},
     experiment_description: "",
     experiment_dataset_id: "",
     experiment_item_id: "",
     experiment_item_version: null,
     experiment_item_root_span_id: "",
     experiment_item_expected_output: "",
-    experiment_item_metadata_names: [],
-    experiment_item_metadata_values: [],
+    experiment_item_metadata: {},
   };
 }
 
@@ -511,12 +518,10 @@ export function enrichSpansWithExperiment(
 ): EnrichedSpan[] {
   const enrichedSpans: EnrichedSpan[] = [];
 
-  const experimentMetadataFlattened = flattenJsonToPathArrays(
-    dri.dataset_run_metadata,
-  );
-  const experimentItemMetadataFlattened = flattenJsonToPathArrays(
-    dri.dataset_item_metadata,
-  );
+  // Raw (possibly nested) objects → experiment_metadata / experiment_item_metadata
+  // VARIANT columns (Doris normalizes to nested paths; read via json_object_flatten).
+  const experimentMetadata = dri.dataset_run_metadata ?? {};
+  const experimentItemMetadata = dri.dataset_item_metadata ?? {};
 
   // Enrich root span
   enrichedSpans.push({
@@ -531,16 +536,14 @@ export function enrichSpansWithExperiment(
     public: traceProperties?.public || false,
     experiment_id: dri.dataset_run_id,
     experiment_name: dri.dataset_run_name,
-    experiment_metadata_names: experimentMetadataFlattened.names,
-    experiment_metadata_values: experimentMetadataFlattened.values,
+    experiment_metadata: experimentMetadata,
     experiment_description: dri.dataset_run_description,
     experiment_dataset_id: dri.dataset_id,
     experiment_item_id: dri.dataset_item_id,
     experiment_item_version: dri.dataset_item_version,
     experiment_item_root_span_id: rootSpan.span_id,
     experiment_item_expected_output: dri.dataset_item_expected_output,
-    experiment_item_metadata_names: experimentItemMetadataFlattened.names,
-    experiment_item_metadata_values: experimentItemMetadataFlattened.values,
+    experiment_item_metadata: experimentItemMetadata,
   });
 
   // Enrich child spans
@@ -556,16 +559,14 @@ export function enrichSpansWithExperiment(
       public: traceProperties?.public || false,
       experiment_id: dri.dataset_run_id,
       experiment_name: dri.dataset_run_name,
-      experiment_metadata_names: experimentMetadataFlattened.names,
-      experiment_metadata_values: experimentMetadataFlattened.values,
+      experiment_metadata: experimentMetadata,
       experiment_description: dri.dataset_run_description,
       experiment_dataset_id: dri.dataset_id,
       experiment_item_id: dri.dataset_item_id,
       experiment_item_version: dri.dataset_item_version,
       experiment_item_root_span_id: rootSpan.span_id,
       experiment_item_expected_output: dri.dataset_item_expected_output,
-      experiment_item_metadata_names: experimentItemMetadataFlattened.names,
-      experiment_item_metadata_values: experimentItemMetadataFlattened.values,
+      experiment_item_metadata: experimentItemMetadata,
     });
   }
 
@@ -660,16 +661,14 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
       // Experiment fields
       experimentId: span.experiment_id,
       experimentName: span.experiment_name,
-      experimentMetadataNames: span.experiment_metadata_names,
-      experimentMetadataValues: span.experiment_metadata_values,
+      experimentMetadata: span.experiment_metadata,
       experimentDescription: span.experiment_description,
       experimentDatasetId: span.experiment_dataset_id,
       experimentItemId: span.experiment_item_id,
       experimentItemVersion: span.experiment_item_version || undefined,
       experimentItemRootSpanId: span.experiment_item_root_span_id,
       experimentItemExpectedOutput: span.experiment_item_expected_output,
-      experimentItemMetadataNames: span.experiment_item_metadata_names,
-      experimentItemMetadataValues: span.experiment_item_metadata_values,
+      experimentItemMetadata: span.experiment_item_metadata,
     };
 
     const eventRecord = await ingestionService.createEventRecord(

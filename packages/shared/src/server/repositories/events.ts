@@ -42,7 +42,7 @@ import { UiColumnMappings } from "../../tableDefinitions";
 import { eventsTableCols } from "../../eventsTable";
 import { tracesTableCols } from "../../tableDefinitions/tracesTable";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
-import { convertDateToAnalyticsDateTime, dq } from "./analytics";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   dorisSearchCondition,
   DorisSearchContext,
@@ -70,6 +70,7 @@ import {
 } from "../queries/public-api-filter-builder";
 import { TracingSearchType } from "../../interfaces/search";
 import { parseDorisStringArray } from "../utils/dorisArrays";
+import { tableFor } from "../doris/tableRouting";
 
 type ObservationsTableQueryResultWitouhtTraceFields = Omit<
   ObservationsTableQueryResult,
@@ -439,7 +440,6 @@ async function getObservationsFromEventsTableInternal<T>(
         o.version as version,
         o.parent_span_id as parent_observation_id,
         o.created_at as created_at,
-        o.updated_at as updated_at,
         o.provided_model_name as provided_model_name,
         o.total_cost as total_cost,
         o.prompt_id as prompt_id,
@@ -453,7 +453,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const dorisSelectString = selectIOAndMetadata
     ? `
       ${dorisSelect},
-      ${selectIOAndMetadata ? `o.input, o.output, to_json(o.metadata) AS metadata` : ""}
+      ${selectIOAndMetadata ? `o.input, o.output, json_object_flatten(o.metadata) AS metadata` : ""}
     `
     : dorisSelect;
 
@@ -504,7 +504,7 @@ async function getObservationsFromEventsTableInternal<T>(
   const query = `
       ${scoresCte}
       SELECT ${dorisSelectString}
-      FROM events_full o
+      FROM ${tableFor(projectId, "events_full")} o
                ${hasScoresFilter ? "LEFT JOIN scores_agg AS s ON s.trace_id = o.trace_id and s.observation_id = o.span_id" : ""}
       WHERE ${appliedFilter.query}
                    ${search.query}
@@ -643,16 +643,14 @@ async function getObservationByIdFromEventsTableInternal({
       prompt_id,
       prompt_name,
       prompt_version,
-      created_at,
-      updated_at,
-      event_ts
-    FROM events_full
+      created_at
+    FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND span_id = {id: String}
     ${startTime ? `AND DATE(start_time) = DATE({startTime: DateTime})` : ""}
     ${type ? `AND type = {type: String}` : ""}
     ${traceId ? `AND trace_id = {traceId: String}` : ""}
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 
@@ -707,7 +705,7 @@ export const getTraceByIdFromEventsTable = async ({
       id,
       name,
       user_id,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       ${dq("release")},
       version,
       project_id,
@@ -718,9 +716,8 @@ export const getTraceByIdFromEventsTable = async ({
       session_id,
       start_time AS \`timestamp\`,
       created_at,
-      updated_at,
-      0 as is_deleted
-    FROM traces_scalar
+      updated_at
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND id = {traceId: String}
     ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
@@ -736,7 +733,7 @@ export const getTraceByIdFromEventsTable = async ({
       t.trace_id AS id,
       t.name,
       t.user_id,
-      to_json(t.metadata) AS metadata,
+      json_object_flatten(t.metadata) AS metadata,
       t.${dq("release")},
       t.version,
       t.project_id,
@@ -746,10 +743,8 @@ export const getTraceByIdFromEventsTable = async ({
       t.tags,
       t.session_id,
       t.start_time AS \`timestamp\`,
-      t.created_at,
-      t.updated_at,
-      0 as is_deleted
-    FROM events_full t
+      t.created_at
+    FROM ${tableFor(projectId, "events_full")} t
     WHERE t.project_id = {projectId: String}
     AND t.trace_id = {traceId: String}
     AND t.is_root = 1
@@ -893,7 +888,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
     eventsTableUiColumnDefinitionsForDoris,
   );
 
-  // userId references t.user_id; JOIN events_full as the root-span table
+  // userId references t.user_id; JOIN ${tableFor(projectId, "events_full")} as the root-span table
   // only when at least one filter targets the traces side.
   const hasTraceFilter = observationsFilter.some((f) => f.table === "traces");
 
@@ -922,7 +917,7 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.output,
       o.input_trim,
       o.output_trim,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.prompt_id,
       o.prompt_name,
       o.prompt_version,
@@ -932,11 +927,9 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
       o.cost_details,
       o.total_cost,
       o.completion_start_time,
-      o.created_at,
-      o.updated_at,
-      o.event_ts
-    FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
+      o.created_at
+    FROM ${tableFor(projectId, "events_full")} o
+    ${hasTraceFilter ? `JOIN ${tableFor(projectId, "events_full")} t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -1076,8 +1069,8 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
 
   const query = `
     SELECT count(*) as count
-    FROM events_full o
-    ${hasTraceFilter ? `JOIN events_full t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
+    FROM ${tableFor(projectId, "events_full")} o
+    ${hasTraceFilter ? `JOIN ${tableFor(projectId, "events_full")} t ON o.trace_id = t.trace_id AND t.project_id = o.project_id AND t.is_root = 1` : ""}
     WHERE o.project_id = {projectId: String}
       ${appliedFilter.query ? `AND ${appliedFilter.query}` : ""}
     ${search.query}
@@ -1194,7 +1187,7 @@ type PublicApiTracesQuery = {
 // are never true). Costs the inverted-index probe on these five columns —
 // correctness over index; see the filter-factory NULL-aware-predicate
 // follow-up.
-const TRACES_SCALAR_AS_T_FOR_PUBLIC_API = `(
+const tracesScalarAsTForPublicApi = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -1211,9 +1204,8 @@ const TRACES_SCALAR_AS_T_FOR_PUBLIC_API = `(
         COALESCE(${dq("release")}, '') AS ${dq("release")},
         COALESCE(version, '') AS version,
         created_at,
-        updated_at,
-        event_ts
-      FROM traces_scalar
+        updated_at
+      FROM ${tableFor(projectId, "traces_scalar")}
     ) t`;
 
 // The traces_scalar-backed query only exposes trace-scalar columns. Advanced
@@ -1273,7 +1265,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
   if (opts.select === "count") {
     const countQuery = `
       SELECT count(*) as count
-      FROM ${TRACES_SCALAR_AS_T_FOR_PUBLIC_API}
+      FROM ${tracesScalarAsTForPublicApi(projectId)}
       ${whereClause}
     `;
 
@@ -1307,7 +1299,7 @@ async function getTracesFromEventsTableForPublicApiInternal<T>(
       t.${dq("public")},
       t.${dq("release")},
       CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath
-    FROM ${TRACES_SCALAR_AS_T_FOR_PUBLIC_API}
+    FROM ${tracesScalarAsTForPublicApi(projectId)}
     ${whereClause}
     ${orderByClause}
     LIMIT {limit: Int32}
@@ -1450,7 +1442,7 @@ export const getEventsGroupedByModel = async (
 
   const query = `
     SELECT o.provided_model_name as name, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.provided_model_name IS NOT NULL
     AND length(o.provided_model_name) > 0
@@ -1498,7 +1490,7 @@ export const getEventsGroupedByModelId = async (
 
   const query = `
     SELECT o.model_id as modelId, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.model_id IS NOT NULL
     AND length(o.model_id) > 0
@@ -1546,7 +1538,7 @@ export const getEventsGroupedByName = async (
 
   const query = `
     SELECT o.name as name, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.name IS NOT NULL
     AND length(o.name) > 0
@@ -1595,7 +1587,7 @@ export const getEventsGroupedByTraceName = async (
 
   const query = `
     SELECT o.trace_name as traceName, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.trace_name IS NOT NULL
     AND length(o.trace_name) > 0
@@ -1646,7 +1638,7 @@ export const getEventsGroupedByTraceTags = async (
   // multiplied the scanned events_full rows by the tag count before DISTINCT.
   const query = `
     SELECT group_array_union(o.tags) AS tags_union
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
   `;
 
@@ -1692,7 +1684,7 @@ export const getEventsGroupedByPromptName = async (
 
   const query = `
     SELECT o.prompt_name as promptName, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.type = 'GENERATION'
     AND o.prompt_name IS NOT NULL
@@ -1742,7 +1734,7 @@ export const getEventsGroupedByType = async (
 
   const query = `
     SELECT o.type as type, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.type IS NOT NULL
     AND length(o.type) > 0
@@ -1791,7 +1783,7 @@ export const getEventsGroupedByUserId = async (
 
   const query = `
     SELECT o.user_id as userId, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.user_id IS NOT NULL
     AND length(o.user_id) > 0
@@ -1839,7 +1831,7 @@ export const getEventsGroupedByVersion = async (
 
   const query = `
     SELECT o.version as version, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.version IS NOT NULL
     AND length(o.version) > 0
@@ -1887,7 +1879,7 @@ export const getEventsGroupedBySessionId = async (
 
   const query = `
     SELECT o.session_id as sessionId, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.session_id IS NOT NULL
     AND length(o.session_id) > 0
@@ -1935,7 +1927,7 @@ export const getEventsGroupedByLevel = async (
 
   const query = `
     SELECT o.level as level, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.level IS NOT NULL
     AND length(o.level) > 0
@@ -1983,7 +1975,7 @@ export const getEventsGroupedByEnvironment = async (
 
   const query = `
     SELECT o.environment as environment, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.environment IS NOT NULL
     AND length(o.environment) > 0
@@ -2034,7 +2026,7 @@ export const getEventsGroupedByExperimentDatasetId = async (
 
   const query = `
     SELECT o.experiment_dataset_id as experimentDatasetId, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.experiment_dataset_id IS NOT NULL
     AND length(o.experiment_dataset_id) > 0
@@ -2085,7 +2077,7 @@ export const getEventsGroupedByExperimentId = async (
 
   const query = `
     SELECT o.experiment_id as experimentId, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.experiment_id IS NOT NULL
     AND length(o.experiment_id) > 0
@@ -2136,7 +2128,7 @@ export const getEventsGroupedByExperimentName = async (
 
   const query = `
     SELECT o.experiment_name as experimentName, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     AND o.experiment_name IS NOT NULL
     AND length(o.experiment_name) > 0
@@ -2187,7 +2179,7 @@ export const getEventsGroupedByHasParentObservation = async (
 
   const query = `
     SELECT (o.is_root = 0) as hasParentObservation, count(*) as count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE ${appliedFilter.query}
     GROUP BY (o.is_root = 0)
     ORDER BY hasParentObservation ASC
@@ -2252,7 +2244,7 @@ export const deleteEventsByTraceIds = async (
         min(start_time) as min_ts,
         max(start_time) as max_ts,
         count(*) as cnt
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String} AND trace_id IN ({traceIds: Array(String)})
     `,
     params: { projectId, traceIds },
@@ -2280,7 +2272,7 @@ export const deleteEventsByTraceIds = async (
 
   await commandDoris({
     query: `
-      DELETE FROM events_full
+      DELETE FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       AND trace_id IN ({traceIds: Array(String)})
     `,
@@ -2297,7 +2289,7 @@ export const deleteEventsByTraceIds = async (
 export const hasAnyEvent = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     LIMIT 1
   `;
@@ -2329,7 +2321,7 @@ export const deleteEventsByProjectId = async (
   }
 
   await commandDoris({
-    query: `DELETE FROM events_full WHERE project_id = {projectId: String}`,
+    query: `DELETE FROM ${tableFor(projectId, "events_full")} WHERE project_id = {projectId: String}`,
     params: { projectId },
     tags: {
       feature: "tracing",
@@ -2361,7 +2353,7 @@ export async function getAgentGraphDataFromEventsTable(params: {
       e.end_time,
       e.metadata['langgraph_node'] AS node,
       e.metadata['langgraph_step'] AS step
-    FROM events_full e
+    FROM ${tableFor(projectId, "events_full")} e
     WHERE
       e.project_id = {projectId: String}
       AND e.trace_id = {traceId: String}
@@ -2387,7 +2379,7 @@ export const hasAnyEventOlderThan = async (
 ) => {
   const query = `
     SELECT 1
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: String}
     LIMIT 1
@@ -2424,7 +2416,7 @@ export const deleteEventsOlderThanDays = async (
   }
 
   const deleteQuery = `
-    DELETE FROM events_full
+    DELETE FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: String}
   `;
@@ -2487,8 +2479,8 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
-      to_json(e.metadata) AS metadata
-    FROM events_full e
+      json_object_flatten(e.metadata) AS metadata
+    FROM ${tableFor(opts.projectId, "events_full")} e
     WHERE e.project_id = {projectId: String}
       AND e.span_id IN ({observationIds: Array(String)})
       AND e.trace_id IN ({traceIds: Array(String)})
@@ -2529,7 +2521,9 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
         ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
         : null,
     metadata: parseMetadataCHRecordToDomain(
-      typeof r.metadata === "string" ? JSON.parse(r.metadata) : (r.metadata ?? {}),
+      typeof r.metadata === "string"
+        ? JSON.parse(r.metadata)
+        : (r.metadata ?? {}),
     ),
   }));
 };
@@ -2559,7 +2553,7 @@ const usersFromEventsTableColumnDefinitionsForDoris: UiColumnMappings = [
 // filter operators keep matching unset rows (raw NULL predicates silently
 // drop them); "has a user" is therefore `user_id != ''`, matching the old
 // events_full guard.
-const TRACES_SCALAR_AS_O_FOR_USERS = `(
+const tracesScalarAsOForUsers = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -2573,10 +2567,8 @@ const TRACES_SCALAR_AS_O_FOR_USERS = `(
         start_time,
         COALESCE(${dq("release")}, '') AS ${dq("release")},
         COALESCE(version, '') AS version,
-        created_at,
-        updated_at,
-        event_ts
-      FROM traces_scalar
+        created_at
+      FROM ${tableFor(projectId, "traces_scalar")}
     ) o`;
 
 /**
@@ -2612,7 +2604,7 @@ export const getUsersFromEventsTable = async (
 
   const query = `
     SELECT o.user_id as user, count(DISTINCT o.trace_id) as count
-    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
+    FROM ${tracesScalarAsOForUsers(projectId)}
     WHERE ${appliedFilter.query}
     AND o.user_id != ''
     ${searchCondition}
@@ -2669,7 +2661,7 @@ export const getUsersCountFromEventsTable = async (
 
   const query = `
     SELECT count(DISTINCT o.user_id) AS totalCount
-    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
+    FROM ${tracesScalarAsOForUsers(projectId)}
     WHERE ${appliedFilter.query}
     AND o.user_id != ''
     ${searchCondition}
@@ -2751,7 +2743,7 @@ export const getUserMetricsFromEventsTable = async (
           SUM(output_tokens_calculated) as output_usage,
           SUM(total_tokens_calculated) as total_usage,
           SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) as observation_count
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       ${timestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({metricsFromTs: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')` : ""}
       GROUP BY project_id, trace_id
@@ -2767,7 +2759,7 @@ export const getUserMetricsFromEventsTable = async (
       COALESCE(SUM(m.sum_total_cost), 0) as sum_total_cost,
       min(o.start_time) as min_timestamp,
       max(o.start_time) as max_timestamp
-    FROM ${TRACES_SCALAR_AS_O_FOR_USERS}
+    FROM ${tracesScalarAsOForUsers(projectId)}
     JOIN per_trace_metrics m
       ON m.project_id = o.project_id
       AND m.trace_id = o.trace_id
@@ -2835,7 +2827,7 @@ export const hasAnyUserFromEventsTable = async (
   // root row stored '') — a flat indexed probe instead of an events_full scan.
   const query = `
     SELECT 1
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND user_id IS NOT NULL
     LIMIT 1
@@ -2882,7 +2874,7 @@ export const getEventsForBlobStorageExport = function (
       if(o.end_time is null, null, milliseconds_diff(o.end_time, o.start_time)) as latency,
       o.input,
       o.output,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.start_time,
       o.end_time,
       o.provided_model_name as model,
@@ -2891,7 +2883,7 @@ export const getEventsForBlobStorageExport = function (
       o.status_message,
       o.parent_span_id AS parent_observation_id,
       o.version as event_version
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
     AND o.start_time >= {minTimestamp: String}
     AND o.start_time <= {maxTimestamp: String}
@@ -2946,12 +2938,12 @@ export const getEventsForAnalyticsIntegrations = async function* (
       o.provided_model_name as model,
       o.prompt_name,
       o.prompt_version,
-      to_json(o.metadata) AS metadata,
+      json_object_flatten(o.metadata) AS metadata,
       o.usage_details,
       o.cost_details,
       o.provided_model_name,
       if(o.completion_start_time is null, null, milliseconds_diff(o.completion_start_time, o.start_time)) as time_to_first_token
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
     AND o.start_time >= {minTimestamp: String}
     AND o.start_time <= {maxTimestamp: String}
@@ -3024,7 +3016,7 @@ export const hasAnySessionFromEventsTable = async (
   // a flat indexed probe instead of an events_full scan.
   const query = `
     SELECT 1
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND session_id IS NOT NULL
     LIMIT 1
@@ -3063,7 +3055,7 @@ export const getTraceMetadataByIdsFromEvents = async (props: {
       COALESCE(t.name, '') AS name,
       COALESCE(t.user_id, '') AS user_id,
       t.tags
-    FROM traces_scalar t
+    FROM ${tableFor(props.projectId, "traces_scalar")} t
     WHERE t.project_id = {projectId: String}
     AND t.id IN ({traceIds: Array(String)})
   `;
@@ -3101,7 +3093,7 @@ export const getAvgCostByEvaluatorIds = async (
       o.metadata['job_configuration_id'] as evaluator_id,
       avg(o.total_cost) as avg_cost,
       count(*) as execution_count
-    FROM events_full o
+    FROM ${tableFor(projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
     AND o.type = 'GENERATION'
     AND o.metadata['job_configuration_id'] IS NOT NULL
@@ -3215,7 +3207,7 @@ export const getSessionMetricsFromEvents = async (props: {
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'input'), o.cost_details['input'], 0)) as session_input_cost,
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'output'), o.cost_details['output'], 0)) as session_output_cost,
       sum(if(MAP_CONTAINS_KEY(o.cost_details,'total'), o.cost_details['total'], 0)) as session_total_cost
-    FROM events_full o
+    FROM ${tableFor(props.projectId, "events_full")} o
     WHERE o.project_id = {projectId: String}
     AND o.session_id IN ({sessionIds: Array(String)})
     AND o.session_id IS NOT NULL

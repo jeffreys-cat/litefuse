@@ -157,4 +157,24 @@ export const redriveOtelFailedJobs = async (): Promise<void> => {
       }
     }
   }
+
+  // Ledger TTL: prune completion-ledger rows past retention. Piggybacks on
+  // this 10-minute cycle — an indexed range delete that is a no-op when
+  // nothing qualifies; running it from several workers concurrently is
+  // harmless (deleteMany is idempotent).
+  try {
+    const cutoff = new Date(
+      Date.now() - env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS * 24 * 3600 * 1000,
+    );
+    const pruned = await prisma.otelFileLedger.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    if (pruned.count > 0) {
+      logger.info(
+        `[OtelDlq] pruned ${pruned.count} otel_file_ledger row(s) past ${env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS}d retention`,
+      );
+    }
+  } catch (error) {
+    logger.error("[OtelDlq] ledger prune failed", error);
+  }
 };

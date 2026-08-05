@@ -17,6 +17,7 @@ import {
   type ScoreDomain,
   type FilterState,
 } from "@langfuse/shared";
+import { tableFor } from "@langfuse/shared/src/server";
 
 /**
  * Converts a ScoreDomain object to API format.
@@ -126,7 +127,7 @@ export const _handleGenerateScoresForPublicApi = async ({
                 tags,
                 environment,
                 start_time
-              FROM traces_scalar
+              FROM ${tableFor(props.projectId, "traces_scalar")}
             ) t ON s.trace_id = t.trace_id AND s.project_id = t.project_id
         WHERE
             s.project_id = {projectId: String}
@@ -217,7 +218,7 @@ export const _handleGetScoresCountForPublicApi = async ({
                 tags,
                 environment,
                 start_time
-              FROM traces_scalar
+              FROM ${tableFor(props.projectId, "traces_scalar")}
             ) t ON s.trace_id = t.trace_id AND s.project_id = t.project_id`
                 : ""
             }

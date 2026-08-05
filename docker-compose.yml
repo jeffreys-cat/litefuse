@@ -47,6 +47,9 @@ services:
       DORIS_PASSWORD: ${DORIS_PASSWORD:-}
       DORIS_MAX_OPEN_CONNECTIONS: ${DORIS_MAX_OPEN_CONNECTIONS:-100}
       DORIS_REQUEST_TIMEOUT_MS: ${DORIS_REQUEST_TIMEOUT_MS:-30000}
+      # Single-BE bundled Doris: tables must be created with 1 replica
+      # (migration runner default is the reliability-safe 3).
+      DORIS_REPLICATION_NUM: ${DORIS_REPLICATION_NUM:-1}
       LITEFUSE_USE_AZURE_BLOB: ${LITEFUSE_USE_AZURE_BLOB:-false}
       LITEFUSE_S3_EVENT_UPLOAD_BUCKET: ${LITEFUSE_S3_EVENT_UPLOAD_BUCKET:-litefuse}
       LITEFUSE_S3_EVENT_UPLOAD_REGION: ${LITEFUSE_S3_EVENT_UPLOAD_REGION:-auto}
@@ -156,6 +159,7 @@ services:
         ipv4_address: 172.29.0.3
     volumes:
       - doris_be_storage:/opt/apache-doris/be/storage
+      - ./doris-config/be_custom.conf:/opt/apache-doris/be/conf/be_custom.conf:ro
     healthcheck:
       test:
         [

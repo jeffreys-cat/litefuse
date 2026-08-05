@@ -59,8 +59,6 @@ const createObservationData = (
       input: data.input !== undefined ? data.input : "Hello World",
       output: data.output !== undefined ? data.output : "Hello John",
       metadata: data.metadata ?? { source: "API", server: "Node" },
-      metadata_names: data.metadata ? Object.keys(data.metadata) : undefined,
-      metadata_values: data.metadata ? Object.values(data.metadata) : undefined,
       provided_model_name: data.provided_model_name,
       provided_usage_details: data.provided_usage_details,
       provided_cost_details: data.provided_cost_details,

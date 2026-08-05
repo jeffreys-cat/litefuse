@@ -9,6 +9,7 @@ import { getCurrentSpan } from "../instrumentation";
 import { propagation, context } from "@opentelemetry/api";
 import { logger } from "../logger";
 import { DorisParameterProcessor } from "./parameterProcessor";
+import { toLogicalTable } from "./tableRouting";
 
 // Doris reports charset 33 (utf8) in MySQL protocol column metadata, but stores
 // utf8mb4. mysql2 maps charset 33 to 'cesu8' (3-byte), so 4-byte chars (emoji)
@@ -1100,9 +1101,9 @@ const DATE_FIELD_MAPPINGS: Record<
   // events_full partitions directly on start_time (date_trunc auto partition,
   // migration 0037) — there is no start_time_date column to derive.
   events_full: null,
-  // traces_scalar mirrors events_full's timestamp shape (root-span dual-write;
-  // start_time_date derived from start_time, no stray timestamp_date).
-  traces_scalar: { sourceField: "start_time", dateField: "start_time_date" },
+  // traces_scalar also partitions directly on start_time (migration 0039) — no
+  // start_time_date mirror column to derive.
+  traces_scalar: null,
   // trace_metrics_agg is a sync MV on events_full (migration 0040) — never
   // stream-loaded directly, so no mapping entry.
 };
@@ -1206,7 +1207,7 @@ const generateDateField = (
  *           → query returns original structure unchanged
  */
 const normalizeMetadataForDoris = (
-  metadata: Record<string, string> | undefined | null,
+  metadata: Record<string, unknown> | undefined | null,
 ): Record<string, unknown> => {
   if (!metadata || typeof metadata !== "object") return {};
 
@@ -1218,9 +1219,16 @@ const normalizeMetadataForDoris = (
       continue;
     }
 
-    // Parse JSON strings (objects and arrays) to native values.
-    // This removes the need for outer JSON.stringify to produce \"
-    // escape sequences — the data becomes genuinely nested JSON.
+    // Non-string values (nested objects/arrays/numbers — the VARIANT/events_full
+    // & traces_scalar case) are already native JSON; pass them through untouched.
+    if (typeof value !== "string") {
+      result[key] = value;
+      continue;
+    }
+
+    // String values (legacy MAP<String,String> tables like scores): parse JSON
+    // strings (objects and arrays) to native values so the outer JSON.stringify
+    // produces genuinely nested JSON, not \"-escaped strings.
     if ((value.startsWith("{") || value.startsWith("[")) && value.length > 0) {
       try {
         result[key] = JSON.parse(value);
@@ -1264,8 +1272,16 @@ export const formatRecordForDoris = <T extends Record<string, any>>(
   // Step 2: Generate date fields based on table type. A listed table with a
   // null mapping (events_full) needs no derived date field; only UNKNOWN
   // tables fall to the dual-column fallback.
-  if (tableName && tableName in DATE_FIELD_MAPPINGS) {
-    const mapping = DATE_FIELD_MAPPINGS[tableName];
+  //
+  // DATE_FIELD_MAPPINGS is keyed on LOGICAL table names. Under table split the
+  // writer targets physical names (events_full_<pid>), which are absent from
+  // the map and would fall to the dual-column fallback — injecting stray
+  // timestamp_date/start_time_date columns that events_full has no slot for
+  // (dirty write). toLogicalTable reverses the projectId suffix first; it is
+  // identity for the shared logical names, so mode=none is unaffected.
+  const logicalTable = tableName ? toLogicalTable(tableName) : undefined;
+  if (logicalTable && logicalTable in DATE_FIELD_MAPPINGS) {
+    const mapping = DATE_FIELD_MAPPINGS[logicalTable];
     if (mapping) {
       generateDateField(formatted, mapping.sourceField, mapping.dateField);
     }

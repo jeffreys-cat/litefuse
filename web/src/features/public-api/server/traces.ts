@@ -19,6 +19,7 @@ import { type TraceFieldGroup } from "@/src/features/public-api/types/traces";
 
 import type { FilterState } from "@langfuse/shared";
 import snakeCase from "lodash/snakeCase";
+import { tableFor } from "@langfuse/shared/src/server";
 
 export type TraceQueryType = {
   page: number;
@@ -91,7 +92,7 @@ export const generateTracesForPublicApi = async ({
   const dorisOrderBy =
     (orderByToDorisSQL(orderBy || [], orderByColumns) ||
       "ORDER BY t.start_time desc") +
-    (shouldUseSkipIndexes ? ", t.event_ts desc" : "");
+    (shouldUseSkipIndexes ? ", t.created_at desc" : "");
 
   const query = `
       WITH observation_stats AS (
@@ -104,7 +105,7 @@ export const generateTracesForPublicApi = async ({
             CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
           ) as latency_milliseconds,
           collect_list(span_id) as observation_ids
-        FROM events_full
+        FROM ${tableFor(props.projectId, "events_full")}
         WHERE project_id = {projectId: String}
         ${timeFilter ? `AND start_time >= DATE_SUB({cteTimeFilter: DateTime}, INTERVAL 2 DAY)` : ""}
         ${environmentFilter.length() > 0 ? `AND ${appliedEnvironmentFilter.query}` : ""}
@@ -141,12 +142,11 @@ export const generateTracesForPublicApi = async ({
         t.${dq("public")} as ${dq("public")},
         t.tags as tags,
         t.created_at as created_at,
-        t.updated_at as updated_at,
         s.score_ids as scores,
         o.observation_ids as observations,
         COALESCE(o.latency_milliseconds / 1000, 0) as latency,
         COALESCE(o.total_cost, 0) as totalCost
-      FROM events_full t
+      FROM ${tableFor(props.projectId, "events_full")} t
       LEFT JOIN observation_stats o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
       LEFT JOIN score_stats s ON t.trace_id = s.trace_id AND t.project_id = s.project_id
       WHERE t.project_id = {projectId: String}
@@ -183,13 +183,11 @@ export const generateTracesForPublicApi = async ({
     },
   });
 
-  const result = rawResult.map(
-    ({ metadata, ...trace }) => ({
-      ...trace,
-      metadata:
-        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
-    }),
-  );
+  const result = rawResult.map(({ metadata, ...trace }) => ({
+    ...trace,
+    metadata:
+      typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
+  }));
 
   return convertDorisTracesListToDomain(
     result as Array<
@@ -229,7 +227,7 @@ export const getTracesCountForPublicApi = async ({
 
   const dorisQuery = `
       SELECT count(*) as count
-      FROM events_full t
+      FROM ${tableFor(props.projectId, "events_full")} t
       WHERE t.project_id = {projectId: String}
       AND t.is_root = 1
       ${dorisFilter.length() > 0 ? `AND ${appliedDorisFilter.query}` : ""}

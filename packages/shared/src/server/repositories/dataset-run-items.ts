@@ -16,6 +16,7 @@ import Decimal from "decimal.js";
 import { convertDateToAnalyticsDateTime } from "./analytics";
 import { ScoreAggregate } from "../../features/scores";
 import { parseDorisStringArray } from "../utils/dorisArrays";
+import { tableFor } from "../doris/tableRouting";
 
 type DatasetItemIdsByTraceIdQuery = {
   projectId: string;
@@ -424,7 +425,7 @@ const getDatasetRunsTableInternal = async <T>(
         o.start_time,
         o.end_time,
         o.total_cost
-      FROM events_full o
+      FROM ${tableFor(projectId, "events_full")} o
       WHERE o.project_id = {projectId: String}
         AND o.start_time >= (
           SELECT min(dri.dataset_run_created_at) - INTERVAL 1 DAY
@@ -470,7 +471,7 @@ const getDatasetRunsTableInternal = async <T>(
         SUM(total_cost) AS total_cost,
         MIN(start_time) AS min_start_time,
         MAX(end_time) AS max_end_time
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       GROUP BY project_id, trace_id
     ),

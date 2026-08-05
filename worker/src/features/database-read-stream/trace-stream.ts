@@ -23,6 +23,7 @@ import {
   prepareScoresForOutput,
 } from "./getDatabaseReadStream";
 import { fetchCommentsForExport } from "./fetchCommentsForExport";
+import { tableFor } from "@langfuse/shared/src/server";
 
 const BATCH_SIZE = 1000; // Fetch comments in batches for efficiency
 
@@ -104,7 +105,7 @@ export const getTraceStream = async (props: {
 
   // Aggregate trace fields from events_full using the two-CTE pattern that
   // mirrors langfuse-main's eventsTracesAggregation:
-  //   * trace_scalars: scalar trace-level fields via MAX_BY(IF(cond, val, NULL), event_ts)
+  //   * trace_scalars: scalar trace-level fields via MAX_BY(IF(cond, val, NULL), created_at)
   //     equivalent to upstream's argMaxIf.
   //   * trace_root: tags / metadata / input / output picked from the latest
   //     is_root = 1 root span via ROW_NUMBER().
@@ -151,15 +152,15 @@ export const getTraceStream = async (props: {
         trace_id,
         project_id,
         MIN(start_time) AS \`timestamp\`,
-        MAX_BY(IF(trace_name <> '', trace_name, NULL), event_ts) AS name,
-        MAX_BY(IF(user_id <> '', user_id, NULL), event_ts) AS user_id,
-        MAX_BY(IF(session_id <> '', session_id, NULL), event_ts) AS session_id,
-        MAX_BY(IF(\`release\` <> '', \`release\`, NULL), event_ts) AS \`release\`,
-        MAX_BY(IF(version <> '', version, NULL), event_ts) AS version,
-        MAX_BY(IF(environment <> '', environment, NULL), event_ts) AS environment,
-        MAX_BY(IF(is_root = 1, bookmarked, NULL), event_ts) AS bookmarked,
+        MAX_BY(IF(trace_name <> '', trace_name, NULL), created_at) AS name,
+        MAX_BY(IF(user_id <> '', user_id, NULL), created_at) AS user_id,
+        MAX_BY(IF(session_id <> '', session_id, NULL), created_at) AS session_id,
+        MAX_BY(IF(\`release\` <> '', \`release\`, NULL), created_at) AS \`release\`,
+        MAX_BY(IF(version <> '', version, NULL), created_at) AS version,
+        MAX_BY(IF(environment <> '', environment, NULL), created_at) AS environment,
+        MAX_BY(IF(is_root = 1, bookmarked, NULL), created_at) AS bookmarked,
         MAX(\`public\`) AS \`public\`
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
         ${appliedTracesFilter.query ? `AND ${appliedTracesFilter.query}` : ""}
         ${search.query}
@@ -183,9 +184,9 @@ export const getTraceStream = async (props: {
           metadata,
           ROW_NUMBER() OVER (
             PARTITION BY trace_id, project_id
-            ORDER BY event_ts DESC
+            ORDER BY created_at DESC
           ) AS rn
-        FROM events_full
+        FROM ${tableFor(projectId, "events_full")}
         WHERE project_id = {projectId: String}
           AND is_root = 1
       ) ranked
@@ -206,7 +207,7 @@ export const getTraceStream = async (props: {
       s.\`public\` AS \`public\`,
       r.input AS input,
       r.output AS output,
-      to_json(r.metadata) AS metadata,
+      json_object_flatten(r.metadata) AS metadata,
       sa.scores_avg AS scores_avg,
       sa.score_categories AS score_categories,
       sa.score_categories_tuples AS score_categories_tuples

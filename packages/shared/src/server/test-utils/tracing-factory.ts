@@ -188,39 +188,23 @@ export const createDatasetRunScore = (
 };
 
 export const createEvent = (
-  event: Partial<EventRecordInsertType> & {
-    metadata_values?: (string | null | undefined)[];
-  },
+  event: Partial<EventRecordInsertType>,
 ): EventRecordInsertType => {
   const spanId = v4();
   const now = Date.now() * 1000; // Convert to micro
 
-  // Extract metadata array overrides before spreading to prevent undefined from clobbering defaults
-  const {
-    metadata_values: metadataValuesAlias,
-    metadata_names: metadataNamesOverride,
-    metadata: metadataOverride,
-    ...eventOverrides
-  } = event as typeof event & {
-    metadata?: Record<string, string>;
-  };
+  // Extract the metadata override before spreading so undefined can't clobber
+  // the default (tests pass a plain object; events_full.metadata is a VARIANT).
+  const { metadata: metadataOverride, ...eventOverrides } = event;
 
-  // Default metadata to populate arrays from
-  const defaultMetadata: Record<string, string> = {
+  const defaultMetadata: Record<string, unknown> = {
     source: "API",
     server: "Node",
   };
-
-  // Merge default metadata with any provided metadata
-  const finalMetadata: Record<string, string> = {
+  const finalMetadata: Record<string, unknown> = {
     ...defaultMetadata,
     ...(metadataOverride ?? {}),
   };
-
-  // Extract metadata keys and values in sorted order for deterministic array population
-  const sortedKeys = Object.keys(finalMetadata).sort();
-  const metadataNames = sortedKeys;
-  const metadataValues = sortedKeys.map((key) => finalMetadata[key]);
 
   return {
     // Identifiers
@@ -273,22 +257,19 @@ export const createEvent = (
     input: "Hello World",
     output: "Hello John",
 
-    // Metadata - parallel arrays (matches events_full V4 layout)
-    metadata_names: metadataNamesOverride ?? metadataNames,
-    metadata_values: metadataValuesAlias ?? metadataValues,
+    // Metadata VARIANT (raw object)
+    metadata: finalMetadata,
 
     // Experiment properties
     experiment_id: null,
     experiment_name: null,
-    experiment_metadata_names: [],
-    experiment_metadata_values: [],
+    experiment_metadata: {},
     experiment_description: null,
     experiment_dataset_id: null,
     experiment_item_id: null,
     experiment_item_version: null,
     experiment_item_expected_output: null,
-    experiment_item_metadata_names: [],
-    experiment_item_metadata_values: [],
+    experiment_item_metadata: {},
     experiment_item_root_span_id: null,
 
     // Source metadata (Instrumentation)
@@ -304,15 +285,12 @@ export const createEvent = (
     // Generic props
     blob_storage_file_path: "",
     event_bytes: 2,
-    is_deleted: 0,
 
-    // Timestamps
+    // Timestamps (single created_at audit column, migration 0037)
     start_time: now,
     end_time: now,
     completion_start_time: null,
     created_at: now,
-    updated_at: now,
-    event_ts: now,
 
     ...eventOverrides,
   };

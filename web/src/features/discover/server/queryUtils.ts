@@ -1,6 +1,56 @@
 import { env } from "@langfuse/shared/src/env";
 
 /**
+ * Per-project split tables are `<logical>_<projectId>` (Stage 1). A user of one
+ * project must never touch another project's split table via Discover — that is
+ * a full cross-project data leak (no project_id filter can be trusted on a
+ * table that IS entirely another tenant's). The security model is a hard
+ * allowlist: a split-suffixed table is accessible ONLY when its suffix is the
+ * caller's own projectId. The three splittable logicals have no shared prefix,
+ * so the `<logical>_<suffix>` match is unambiguous; the SHARED tables
+ * (events_full / traces_scalar / trace_metrics_agg, no suffix) never match and
+ * keep their project_id-filter injection.
+ */
+const SPLIT_TABLE_RE =
+  /\b(?:events_full|traces_scalar|trace_metrics_agg)_([A-Za-z0-9]+)\b/g;
+
+/** True if `tableName` is a split table belonging to a DIFFERENT project. */
+export function isForeignSplitTable(
+  tableName: string,
+  projectId: string,
+): boolean {
+  const m = /^(?:events_full|traces_scalar|trace_metrics_agg)_([A-Za-z0-9]+)$/.exec(
+    tableName,
+  );
+  return m !== null && m[1] !== projectId;
+}
+
+/** Distinct split tables referenced in `sql` that belong to another project. */
+export function findForeignSplitTables(
+  sql: string,
+  projectId: string,
+): string[] {
+  const foreign = new Set<string>();
+  for (const m of sql.matchAll(SPLIT_TABLE_RE)) {
+    if (m[1] !== projectId) foreign.add(m[0]);
+  }
+  return [...foreign];
+}
+
+/** Drop other projects' split tables from a SHOW TABLES result (a SHOW row has
+ * a single `Tables_in_<db>` column whose value is the table name) — prevents
+ * enumerating other tenants' `<logical>_<cuid>` tables. */
+export function filterVisibleTables<T extends Record<string, unknown>>(
+  rows: T[],
+  projectId: string,
+): T[] {
+  return rows.filter((row) => {
+    const name = Object.values(row)[0];
+    return typeof name !== "string" || !isForeignSplitTable(name, projectId);
+  });
+}
+
+/**
  * Returns the Langfuse Doris database name from environment config.
  */
 export function getLangfuseDorisDb(): string {

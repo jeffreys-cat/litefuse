@@ -1,4 +1,5 @@
 import { queryDoris } from "./doris";
+import { tableFor } from "../doris/tableRouting";
 
 export type EnvironmentFilterProps = {
   projectId: string;
@@ -19,7 +20,7 @@ export const getEnvironmentsForProject = async (
   const query = `
       SELECT DISTINCT environment FROM (
         SELECT DISTINCT environment
-        FROM traces_scalar
+        FROM ${tableFor(projectId, "traces_scalar")}
         WHERE project_id = {projectId: String}
         ${fromTimestamp ? "AND start_time >= {fromTimestamp: DateTime}" : ""}
         UNION ALL

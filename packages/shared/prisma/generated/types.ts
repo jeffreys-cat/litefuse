@@ -359,6 +359,7 @@ export type BillingMeterBackup = {
   org_id: string;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
+  submitted_at: Timestamp | null;
 };
 export type BlobStorageIntegration = {
   project_id: string;
@@ -518,6 +519,14 @@ export type DefaultView = {
   user_id: string | null;
   view_name: string;
   view_id: string;
+};
+export type DorisProjectTableSplit = {
+  project_id: string;
+  split: Generated<boolean>;
+  note: string | null;
+  schema_version: number | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Timestamp;
 };
 export type EvalTemplate = {
   id: string;
@@ -767,6 +776,13 @@ export type OrganizationMembership = {
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 };
+export type OtelFileLedger = {
+  id: string;
+  project_id: string;
+  file_key: string;
+  group_id: string;
+  created_at: Generated<Timestamp>;
+};
 export type OtelPoisonJob = {
   id: string;
   shard_name: string;
@@ -904,6 +920,17 @@ export type SsoConfig = {
   auth_provider: string;
   auth_config: unknown | null;
 };
+export type StripeWebhookEvent = {
+  id: string;
+  stripe_event_id: string;
+  event_type: string;
+  status: string;
+  payload: unknown | null;
+  error: string | null;
+  processed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+};
 export type Survey = {
   id: string;
   created_at: Generated<Timestamp>;
@@ -1001,6 +1028,7 @@ export type DB = {
   datasets: Dataset;
   default_llm_models: DefaultLlmModel;
   default_views: DefaultView;
+  doris_project_table_split: DorisProjectTableSplit;
   eval_templates: EvalTemplate;
   job_configurations: JobConfiguration;
   job_executions: JobExecution;
@@ -1016,6 +1044,7 @@ export type DB = {
   observations: LegacyPrismaObservation;
   organization_memberships: OrganizationMembership;
   organizations: Organization;
+  otel_file_ledger: OtelFileLedger;
   otel_poison_jobs: OtelPoisonJob;
   pending_deletions: PendingDeletion;
   posthog_integrations: PosthogIntegration;
@@ -1031,6 +1060,7 @@ export type DB = {
   Session: Session;
   slack_integrations: SlackIntegration;
   sso_configs: SsoConfig;
+  stripe_webhook_events: StripeWebhookEvent;
   surveys: Survey;
   table_view_presets: TableViewPreset;
   trace_media: TraceMedia;

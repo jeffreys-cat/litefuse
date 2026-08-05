@@ -4,7 +4,12 @@ import { DorisParameterProcessor } from "../doris/parameterProcessor";
 import { logger } from "../logger";
 import { instrumentAsync } from "../instrumentation";
 import { randomUUID } from "crypto";
-import { convertDateToAnalyticsDateTime } from "./analytics";
+// Import from the leaf, not ./analytics — analytics imports THIS module, so the
+// back-edge would form an analytics ↔ doris require cycle (TDZ under dd-trace).
+import { convertDateToAnalyticsDateTime } from "./analyticsDateTime";
+// Runtime-only call (no module-init use) — tableRouting depends on env/schema/
+// tableSplitCache, none of which import this module, so no require cycle.
+import { tableFor } from "../doris/tableRouting";
 
 /**
  * Upsert records into Doris using Stream Load
@@ -103,6 +108,15 @@ export async function partialUpdateDoris(opts: {
     }
   }
 
+  // traces_scalar (UNIQUE+MoW) is the authoritative store for the mutable flags
+  // (bookmark/public/tags) and keeps a real "last modified": every partial
+  // UPDATE bumps updated_at to now. events_full is append-only DUPLICATE (no
+  // updated_at column, UPDATE unsupported) and the legacy tables are dead-write,
+  // so this only applies to traces_scalar.
+  if (opts.table === "traces_scalar" && !("updated_at" in opts.set)) {
+    setClauses.push("`updated_at` = now(3)");
+  }
+
   const whereClauses: string[] = [];
   for (const [key, value] of Object.entries(opts.where)) {
     const paramName = `where_${key}`;
@@ -110,7 +124,18 @@ export async function partialUpdateDoris(opts: {
     params[paramName] = value;
   }
 
-  const sql = `UPDATE \`${opts.table}\` SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
+  // Route to the split project's physical table (Stage 1 review #A). The UPDATE
+  // carries project_id in its WHERE (every caller — bookmark/public/tags toggle),
+  // so a split project's traces_scalar_<pid>/events_full_<pid> is targeted; a
+  // literal `traces_scalar` here would UPDATE the shared table, match no row, and
+  // silently drop the toggle. Non-split projects / non-splittable tables are
+  // identity, and a missing project_id falls back to the logical name unchanged.
+  const projectId = opts.where.project_id;
+  const physicalTable =
+    typeof projectId === "string"
+      ? tableFor(projectId, opts.table)
+      : opts.table;
+  const sql = `UPDATE \`${physicalTable}\` SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}`;
 
   await queryDoris({ query: sql, params });
 }

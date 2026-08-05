@@ -37,12 +37,16 @@ import {
   otelRegisteredKey,
   scanStagedOtelGroups,
   otelPendingOldestAgeMs,
+  laneForDesignated,
+  getDesignatedProjectIds,
+  refreshSplitCache,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
 import { env } from "../../env";
 
 import { classifyOtelFile, type OtelFileVerdict } from "./classify";
+import { candidateGroupingKeys, reinjectionGroupingKey } from "./routing";
 
 const arg = (name: string): string | undefined => {
   const i = process.argv.indexOf(`--${name}`);
@@ -70,6 +74,8 @@ const main = async () => {
            COUNT(*) AS total_rows,
            COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS distinct_spans,
            COUNT(*) - COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS duplicate_rows
+         -- CROSS-PROJECT duplicate-accounting scan (no project_id filter) —
+         -- deliberately NOT routed through tableFor. Do not "fix" it.
          FROM events_full
          WHERE date_trunc(start_time, 'day') = date_trunc('${day} 00:00:00', 'day')`,
       );
@@ -93,6 +99,13 @@ const main = async () => {
       "--older-than-hours >= registered-key TTL: the auto-reinject category degenerates (registration evidence expires first); everything unexplained will fall to manual audit",
     );
   }
+  const ledgerRetentionMs =
+    env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS * 24 * 3600_000;
+  if (OLDER_THAN_MS >= ledgerRetentionMs) {
+    throw new Error(
+      `--older-than-hours (${OLDER_THAN_MS / 3600_000}h) must stay BELOW the ledger retention (LITEFUSE_OTEL_LEDGER_RETENTION_DAYS = ${env.LITEFUSE_OTEL_LEDGER_RETENTION_DAYS}d): a completed file whose ledger row already expired would classify as reinject and be re-ingested — the backstop would manufacture duplicates`,
+    );
+  }
 
   // Same topology-aware factory the pipeline itself uses (connection string /
   // sentinel / cluster / TLS all honored, no ioredis keyPrefix) — a hand-rolled
@@ -107,6 +120,23 @@ const main = async () => {
     sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
   );
 
+  // Load the split=true set from PG up front. laneFor/getSplitProjectIds read
+  // the tableSplitCache snapshot, which the periodic refresh loop (web+worker
+  // boot) fills — but this standalone script never starts that loop, so without
+  // this laneFor() returns null for everyone and every lane-aware branch below
+  // silently degrades to shard-only. mode=none → snapshot stays empty → those
+  // branches are byte-identical to the pre-split behaviour.
+  await refreshSplitCache();
+  // Split projects register into a dedicated lane, not a shard — so the
+  // "healthy pipeline" preflight and the re-inject target must both cover
+  // lanes. Derive them from the authoritative PG DESIGNATED set (live OR
+  // pending — a stuck/pending project's files must still re-inject into its
+  // lane, never a shared shard), NOT the Redis lane index, which can itself be
+  // partially lost in the very DR scenario reconcile exists to repair.
+  const laneKeys = getDesignatedProjectIds()
+    .map((pid) => laneForDesignated(pid))
+    .filter((k): k is string => k !== null);
+
   // ⓪ Execute-mode preflight: re-injection is only safe against a HEALTHY
   // pipeline. Two disaster shapes make it double-load instead (invariant
   // review, case 8):
@@ -119,17 +149,20 @@ const main = async () => {
   // (b) no pending entry older than the re-inject threshold (oldest-age <
   // threshold ⇒ no over-age file can still be queued).
   if (EXECUTE) {
-    for (const shard of shards) {
-      const staged = await scanStagedOtelGroups({ redis, shard });
+    for (const key of [...shards, ...laneKeys]) {
+      const staged = await scanStagedOtelGroups({ redis, groupingKey: key });
       if (staged.length > 0) {
         throw new Error(
-          `[reconcile] preflight failed: shard ${shard} has ${staged.length} leftover staging manifest(s) — the pipeline is not healthy; drain recovery first (re-injection against a stuck pipeline double-loads)`,
+          `[reconcile] preflight failed: grouping key ${key} has ${staged.length} leftover staging manifest(s) — the pipeline is not healthy; drain recovery first (re-injection against a stuck pipeline double-loads)`,
         );
       }
-      const oldestAge = await otelPendingOldestAgeMs({ redis, shard });
+      const oldestAge = await otelPendingOldestAgeMs({
+        redis,
+        groupingKey: key,
+      });
       if (oldestAge != null && oldestAge >= OLDER_THAN_MS) {
         throw new Error(
-          `[reconcile] preflight failed: shard ${shard} pending backlog is older (${Math.round(oldestAge / 3600_000)}h) than the re-inject threshold — over-age files may still be queued; drain the grouper first`,
+          `[reconcile] preflight failed: grouping key ${key} pending backlog is older (${Math.round(oldestAge / 3600_000)}h) than the re-inject threshold — over-age files may still be queued; drain the grouper first`,
         );
       }
     }
@@ -160,19 +193,17 @@ const main = async () => {
     ),
   );
 
-  // ③ Ledger membership, batched IN queries (multiple rows per fileKey are
-  // possible — event_id is part of the UNIQUE KEY — membership only).
+  // ③ Ledger membership (PG otel_file_ledger; multiple rows per fileKey are
+  // possible — reconcile reinjection creates a second (fileKey, groupId)
+  // pair — membership only).
   const withLedger = new Set<string>();
   for (let i = 0; i < files.length; i += BATCH) {
     const batch = files.slice(i, i + BATCH);
-    const inList = batch
-      .map((f) => `'${f.file.replace(/'/g, "''")}'`)
-      .join(",");
-    const rows = await client.query(
-      `SELECT DISTINCT entity_id FROM blob_storage_file_log
-       WHERE entity_type = 'otel-file' AND entity_id IN (${inList})`,
-    );
-    for (const r of rows ?? []) withLedger.add(String(r.entity_id));
+    const rows = await prisma.otelFileLedger.findMany({
+      where: { fileKey: { in: batch.map((f) => f.file) } },
+      select: { fileKey: true },
+    });
+    for (const r of rows) withLedger.add(r.fileKey);
   }
 
   // ④ Classify + act.
@@ -185,10 +216,21 @@ const main = async () => {
     audit: 0,
   };
   for (const f of files) {
+    // projectId is encoded in the path: <prefix>otel/<projectId>/...
+    const projectId = f.file.slice(prefix.length).split("/")[0] ?? "";
+    // Every grouping key this file could live under (lane first for a split
+    // project, then shards). Used for BOTH the registered-key evidence scan and
+    // the DEL below — a split project's reg key is under lane-<pid>, invisible
+    // to a shard-only scan, which would misclassify a lost file as `audit`.
+    const candidates = candidateGroupingKeys(
+      projectId,
+      shards,
+      laneForDesignated,
+    );
     let hasRegisteredKey = false;
     if (!withLedger.has(f.file)) {
-      for (const shard of shards) {
-        if ((await redis.exists(otelRegisteredKey(shard, f.file))) === 1) {
+      for (const key of candidates) {
+        if ((await redis.exists(otelRegisteredKey(key, f.file))) === 1) {
           hasRegisteredKey = true;
           break;
         }
@@ -212,15 +254,22 @@ const main = async () => {
     );
 
     if (verdict.verdict === "reinject" && EXECUTE) {
-      // projectId is encoded in the path: <prefix>otel/<projectId>/...
-      const projectId = f.file.slice(prefix.length).split("/")[0];
-      const shard = shards[Math.floor(Math.random() * shards.length)] as string;
+      // Re-inject into the same pool the live write path uses: a split
+      // project's dedicated lane, else a random shard (unchanged).
+      const groupingKey = reinjectionGroupingKey(
+        projectId,
+        shards,
+        (s) => s[Math.floor(Math.random() * s.length)] as string,
+        laneForDesignated,
+      );
       // Force re-admission: the registered key would absorb the register as
-      // an idempotent no-op (review: reconciliation × SETNX conflict).
-      for (const s of shards) await redis.del(otelRegisteredKey(s, f.file));
+      // an idempotent no-op (review: reconciliation × SETNX conflict). DEL
+      // under every candidate key so a stale lane/shard key can't block it.
+      for (const key of candidates)
+        await redis.del(otelRegisteredKey(key, f.file));
       const admitted = await registerOtelFile({
         redis,
-        shard,
+        groupingKey,
         ttlMs: sharedEnv.LITEFUSE_OTEL_REGISTERED_TTL_MS,
         entry: {
           v: 1,
@@ -232,7 +281,7 @@ const main = async () => {
         },
       });
       console.log(
-        JSON.stringify({ fileKey: f.file, reinjected: admitted, shard }),
+        JSON.stringify({ fileKey: f.file, reinjected: admitted, groupingKey }),
       );
     }
   }

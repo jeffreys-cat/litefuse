@@ -1,6 +1,22 @@
 import { parseJsonPrioritised } from "../../utils/json";
 import { MetadataDomain } from "../../domain";
 
+/**
+ * Doris VARIANT stores dotted metadata keys as nested paths (a key "a.b.c" is
+ * stored as {a:{b:{c}}}). Turn a raw metadata filter key into the nested
+ * subscript chain the query builder appends after the column, e.g.
+ *   "a.b.c" -> `['a']['b']['c']`, "user" -> `['user']`.
+ * Each segment is single-quote-escaped for SQL. Used by the query builder and
+ * the trace-list metadata filter fast path so per-key filters keep matching the
+ * old flattened-key semantics on the VARIANT column.
+ */
+export function variantMetadataSubscript(rawKey: string): string {
+  return rawKey
+    .split(".")
+    .map((seg) => `['${seg.replace(/'/g, "''")}']`)
+    .join("");
+}
+
 export function parseMetadataCHRecordToDomain(
   metadata: Record<string, string> | string,
 ): MetadataDomain {

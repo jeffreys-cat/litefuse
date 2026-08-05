@@ -2,13 +2,7 @@ import { VERSION } from "@/src/constants";
 import { cors, runMiddleware } from "@/src/features/public-api/server/cors";
 import { telemetry } from "@/src/features/telemetry";
 import { prisma } from "@langfuse/shared/src/db";
-import {
-  convertDateToAnalyticsDateTime,
-  logger,
-  measureAndReturn,
-  queryDoris,
-  traceException,
-} from "@langfuse/shared/src/server";
+import { logger, traceException } from "@langfuse/shared/src/server";
 import { type NextApiRequest, type NextApiResponse } from "next";
 
 export default async function handler(
@@ -37,65 +31,30 @@ export default async function handler(
 
     try {
       if (failIfNoRecentEvents) {
-        const now = new Date();
-        const traces = await measureAndReturn({
-          operationName: "healthCheckTraces",
-          projectId: "__CROSS_PROJECT__",
-          input: {
-            now: convertDateToAnalyticsDateTime(now),
-          },
-          fn: async (input: { now: string }) => {
-            return queryDoris<{ trace_id: string }>({
-              query: `
-                SELECT trace_id
-                FROM events_full
-                WHERE is_root = 1
-                AND start_time <= {now: DateTime}
-                AND start_time >= {now: DateTime} - INTERVAL 3 MINUTE
-                LIMIT 1
-              `,
-              params: input,
-              tags: {
-                feature: "health-check",
-                type: "trace",
-              },
-            });
-          },
+        // Liveness of the ingestion pipeline, read from the PG completion
+        // ledger (otel_file_ledger) — NOT a cross-project Doris scan. Under
+        // table split a project's data lives in its own events_full_<pid>, so a
+        // scan of the shared events_full would false-negative once active
+        // projects are split. The ledger records every completed group across
+        // ALL projects with created_at, so "most recent row within 3 minutes"
+        // is a cross-project-safe liveness signal that touches no Doris table.
+        const cutoff = new Date(Date.now() - 3 * 60_000);
+        const recent = await prisma.otelFileLedger.findFirst({
+          where: { createdAt: { gte: cutoff } },
+          select: { id: true },
         });
-        const observations = await queryDoris<{ span_id: string }>({
-          query: `
-            SELECT span_id
-            FROM events_full
-            WHERE start_time <= {now: DateTime}
-            AND start_time >= {now: DateTime} - INTERVAL 3 MINUTE
-            LIMIT 1
-          `,
-          params: {
-            now: convertDateToAnalyticsDateTime(now),
-          },
-          tags: {
-            feature: "health-check",
-            type: "observation",
-          },
-        });
-        if (traces.length === 0 || observations.length === 0) {
+        if (!recent) {
           return res.status(503).json({
-            status: `No ${
-              traces.length === 0
-                ? "traces"
-                : observations.length === 0
-                  ? "observations"
-                  : "<should not happen>"
-            } within the last 3 minutes`,
+            status: "No otel ingestion completed within the last 3 minutes",
             version: VERSION.replace("v", ""),
           });
         }
       }
     } catch (e) {
-      logger.error("Couldn't fetch recent events", e);
+      logger.error("Couldn't check recent ingestion", e);
       traceException(e);
       return res.status(503).json({
-        status: "Couldn't fetch recent events",
+        status: "Couldn't check recent ingestion",
         version: VERSION.replace("v", ""),
       });
     }

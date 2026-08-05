@@ -1,4 +1,5 @@
 import { type ViewDeclarationType } from "./types";
+import { tableFor } from "@langfuse/shared/src/server";
 
 // Hybrid model over the events_full deployment (migrations 0037/0039/0040):
 // - tracesViewDoris reads traces_scalar (one row per trace — the root span's
@@ -35,7 +36,7 @@ export const RELATION_SQL_TO_TIMESTAMP = "__RELATION_TO_TIMESTAMP__";
 // exact trace-level window is enforced by the base traces_scalar.start_time
 // filter). GROUP BY (project_id, trace_id) is a subset of the MV keys; the
 // rollup regroups across days.
-const traceMetricsAggRelationSql = `(
+const traceMetricsAggRelationSql = (projectId: string) => `(
   SELECT
     project_id,
     trace_id,
@@ -46,14 +47,14 @@ const traceMetricsAggRelationSql = `(
     SUM(total_tokens_calculated) AS total_tokens,
     SUM(total_cost) AS total_cost,
     SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) AS observation_count
-  FROM events_full
+  FROM ${tableFor(projectId, "events_full")}
   WHERE project_id = '${RELATION_SQL_PROJECT_ID}'
     AND date_trunc(start_time, 'day') >= date_trunc('${RELATION_SQL_FROM_TIMESTAMP}', 'day')
     AND date_trunc(start_time, 'day') <= date_trunc('${RELATION_SQL_TO_TIMESTAMP}', 'day')
   GROUP BY project_id, trace_id
 )`;
 
-export const tracesViewDoris: ViewDeclarationType = {
+export const tracesViewDoris = (projectId: string): ViewDeclarationType => ({
   name: "traces",
   description:
     "Traces represent a group of observations and typically represent a single request or operation.",
@@ -201,7 +202,7 @@ export const tracesViewDoris: ViewDeclarationType = {
     // Raw span rows — only for observation-level dimensions (observationName).
     // Per-trace metrics use observations_agg below, not this relation.
     observations: {
-      name: "events_full",
+      name: tableFor(projectId, "events_full"),
       joinConditionSql:
         "ON traces.id = observations.trace_id AND traces.project_id = observations.project_id",
       timeDimension: "start_time",
@@ -210,7 +211,7 @@ export const tracesViewDoris: ViewDeclarationType = {
     // timeDimension is declaratively required but unused: derived-table
     // relations carry their bounds inside (see RELATION_SQL_* tokens).
     observations_agg: {
-      name: traceMetricsAggRelationSql,
+      name: traceMetricsAggRelationSql(projectId),
       joinConditionSql:
         "ON traces.id = observations_agg.trace_id AND traces.project_id = observations_agg.project_id",
       timeDimension: "start_time",
@@ -226,10 +227,10 @@ export const tracesViewDoris: ViewDeclarationType = {
   // segment needed.
   segments: [],
   timeDimension: "start_time",
-  baseCte: `traces_scalar traces`,
-};
+  baseCte: `${tableFor(projectId, "traces_scalar")} traces`,
+});
 
-export const observationsViewDoris: ViewDeclarationType = {
+export const observationsViewDoris = (projectId: string): ViewDeclarationType => ({
   name: "observations",
   description:
     "Observations represent individual requests or operations within a trace. They are grouped into Spans, Generations, and Events.",
@@ -530,7 +531,7 @@ export const observationsViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces_scalar",
+      name: tableFor(projectId, "traces_scalar"),
       joinConditionSql:
         "ON observations.trace_id = traces.id AND observations.project_id = traces.project_id",
       timeDimension: "start_time",
@@ -549,8 +550,8 @@ export const observationsViewDoris: ViewDeclarationType = {
   // wrong. No segment is needed.
   segments: [],
   timeDimension: "start_time",
-  baseCte: `events_full observations`,
-};
+  baseCte: `${tableFor(projectId, "events_full")} observations`,
+});
 
 // Base dimensions for score views (shared between numeric and categorical)
 export const scoreBaseDimensionsDoris = {
@@ -670,7 +671,7 @@ export const scoreBaseDimensionsDoris = {
   },
 };
 
-export const scoresNumericViewDoris: ViewDeclarationType = {
+export const scoresNumericViewDoris = (projectId: string): ViewDeclarationType => ({
   name: "scores_numeric",
   description:
     "Scores are flexible objects that are used for evaluations. This view contains numeric scores.",
@@ -694,13 +695,13 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces_scalar",
+      name: tableFor(projectId, "traces_scalar"),
       joinConditionSql:
         "ON scores_numeric.trace_id = traces.id AND scores_numeric.project_id = traces.project_id",
       timeDimension: "start_time",
     },
     observations: {
-      name: "events_full",
+      name: tableFor(projectId, "events_full"),
       joinConditionSql:
         "ON scores_numeric.observation_id = observations.span_id AND scores_numeric.project_id = observations.project_id",
       timeDimension: "start_time",
@@ -717,9 +718,9 @@ export const scoresNumericViewDoris: ViewDeclarationType = {
   ],
   timeDimension: "timestamp",
   baseCte: `scores scores_numeric`,
-};
+});
 
-export const scoresCategoricalViewDoris: ViewDeclarationType = {
+export const scoresCategoricalViewDoris = (projectId: string): ViewDeclarationType => ({
   name: "scores_categorical",
   description:
     "Scores are flexible objects that are used for evaluations. This view contains categorical scores.",
@@ -743,13 +744,13 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
   },
   tableRelations: {
     traces: {
-      name: "traces_scalar",
+      name: tableFor(projectId, "traces_scalar"),
       joinConditionSql:
         "ON scores_categorical.trace_id = traces.id AND scores_categorical.project_id = traces.project_id",
       timeDimension: "start_time",
     },
     observations: {
-      name: "events_full",
+      name: tableFor(projectId, "events_full"),
       joinConditionSql:
         "ON scores_categorical.observation_id = observations.span_id AND scores_categorical.project_id = observations.project_id",
       timeDimension: "start_time",
@@ -765,7 +766,7 @@ export const scoresCategoricalViewDoris: ViewDeclarationType = {
   ],
   timeDimension: "timestamp",
   baseCte: `scores scores_categorical`,
-};
+});
 
 export const viewDeclarationsDoris = {
   traces: tracesViewDoris,

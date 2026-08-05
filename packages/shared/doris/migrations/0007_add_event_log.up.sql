@@ -17,5 +17,5 @@ CREATE TABLE IF NOT EXISTS event_log
 DUPLICATE KEY(`id`, `project_id`)
 DISTRIBUTED BY HASH(`project_id`) BUCKETS AUTO
 PROPERTIES (
-"replication_allocation" = "tag.location.default: 1"
+"replication_allocation" = "tag.location.default: 3"
 );

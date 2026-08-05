@@ -13,6 +13,7 @@ import {
 } from "../queries/doris-sql/factory";
 import { orderByToDorisSQL } from "../queries/doris-sql/orderby-factory";
 import { DateTimeFilter as DorisDateTimeFilter } from "../queries/doris-sql/doris-filter";
+import { tableFor } from "../doris/tableRouting";
 
 type SessionEventsBaseReturnType = {
   session_id: string;
@@ -57,7 +58,7 @@ export const getSessionTracesFromEvents = async (props: {
       start_time AS \`timestamp\`,
       environment,
       COALESCE(user_id, '') AS user_id
-    FROM traces_scalar t
+    FROM ${tableFor(props.projectId, "traces_scalar")} t
     WHERE t.session_id = {sessionId: String}
       AND t.project_id = {projectId: String}
     ORDER BY start_time ASC
@@ -226,9 +227,8 @@ const getSessionsTableFromEventsGeneric = async <T>(
         start_time,
         tags,
         environment,
-        bookmarked,
-        event_ts
-      FROM traces_scalar
+        bookmarked
+      FROM ${tableFor(projectId, "traces_scalar")}
     ) t
     WHERE t.project_id = {projectId: String}
       AND t.session_id IS NOT NULL AND t.session_id != ''

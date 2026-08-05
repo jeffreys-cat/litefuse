@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { ZodError } from "zod/v4";
 
 import {
@@ -9,11 +9,24 @@ import {
 import {
   computeGroupId,
   eventsFullLabelForGroup,
+  labelForGroupTable,
+  __setSplitSnapshotForTest,
+  handleMissingSplitTable,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
   type StreamLoadBodySource,
 } from "@langfuse/shared/src/server";
 import { ForbiddenError } from "@langfuse/shared";
+
+// Keep the whole shared barrel real (computeGroupId, labels, split routing,
+// __setSplitSnapshotForTest all read/mutate the real module state) — only stub
+// handleMissingSplitTable, which otherwise hits PG. The scalar/events
+// missing-table three-way is exercised by driving its return value per test.
+vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@langfuse/shared/src/server")>();
+  return { ...actual, handleMissingSplitTable: vi.fn() };
+});
 
 /**
  * Core-orchestration tests for the self-contained group job — the
@@ -92,6 +105,21 @@ const makeDeps = (
       };
     }),
     ledgerExists: vi.fn(async () => overrides.ledger ?? false),
+    // PG completion ledger (moved off Doris — the tiny per-group stream
+    // loads were the tablet-version incident trigger). Recorded into the
+    // same timeline as loads so ordering assertions still work.
+    persistLedger: vi.fn(async ({ groupId, entries }) => {
+      loads.push({
+        table: "pg:otel_file_ledger",
+        rows: entries.map((e: OtelPendingEntryType) => ({
+          fileKey: e.fileKey,
+          projectId: e.projectId,
+          groupId,
+        })),
+        count: entries.length,
+        options: {},
+      });
+    }),
     upsertSessions: vi.fn(async () => {}),
     transformConcurrency: 2,
     ...overrides,
@@ -100,6 +128,12 @@ const makeDeps = (
 };
 
 describe("processOtelGroupJob (core EO semantics)", () => {
+  // Prime a ready, empty (no-splits) snapshot so the cache-readiness gate passes
+  // in project_id_with_rule runs; isSplitProject stays false → shared-table
+  // routing, exactly what these core cases assert.
+  beforeEach(() => __setSplitSnapshotForTest([]));
+  afterEach(() => __setSplitSnapshotForTest(null));
+
   it("happy path: label derivation, ndjson framing, no filter ratio, ledger LAST", async () => {
     const payload = payloadFor(["f1.json", "f2.json"]);
     const { deps, loads } = makeDeps();
@@ -114,17 +148,22 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(events.options).not.toHaveProperty("max_filter_ratio");
     expect(events.rows).toHaveLength(4); // 2 files × 2 records
 
+    // Both Doris loads carry deterministic labels — a group's lifetime FE
+    // label-registry footprint is exactly 2 slots regardless of retries
+    // (random per-attempt labels flooded the registry and evicted events
+    // labels: duplicate-data incident 2026-07-28).
     expect(scalar.table).toBe("traces_scalar");
-    expect(scalar.options).not.toHaveProperty("label"); // MoW, no label
+    expect(scalar.options.label).toBe(
+      labelForGroupTable(payload.groupId, "traces_scalar"),
+    );
 
-    // Ledger is the LAST load — its existence certifies end-to-end completion.
-    expect(ledger.table).toBe("blob_storage_file_log");
+    // Ledger (PG) is written LAST — its existence certifies end-to-end
+    // completion.
+    expect(ledger.table).toBe("pg:otel_file_ledger");
     expect(ledger.rows).toHaveLength(2);
     expect(ledger.rows[0]).toMatchObject({
-      entity_type: "otel-file",
-      entity_id: "f1.json",
-      event_id: payload.groupId,
-      is_deleted: 0,
+      fileKey: "f1.json",
+      groupId: payload.groupId,
     });
     expect(deps.upsertSessions).toHaveBeenCalledTimes(1);
   });
@@ -156,7 +195,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     const events = loads.find((l) => l.table === "events_full")!;
     expect(events.rows).toHaveLength(1); // only good.json's record
     // Ledger still covers BOTH files (bad one is dead-lettered, not retried).
-    const ledger = loads.find((l) => l.table === "blob_storage_file_log")!;
+    const ledger = loads.find((l) => l.table === "pg:otel_file_ledger")!;
     expect(ledger.rows).toHaveLength(2);
   });
 
@@ -181,7 +220,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     );
 
     await processOtelGroupJob(payload, deps);
-    expect(loads.map((l) => l.table)).toEqual(["blob_storage_file_log"]);
+    expect(loads.map((l) => l.table)).toEqual(["pg:otel_file_ledger"]);
   });
 
   it("C6 replay: label deduped + ledger MISSING → scalar MUST be loaded", async () => {
@@ -195,7 +234,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(loads.map((l) => l.table)).toEqual([
       "events_full",
       "traces_scalar",
-      "blob_storage_file_log",
+      "pg:otel_file_ledger",
     ]);
   });
 
@@ -206,7 +245,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     await processOtelGroupJob(payload, deps);
     expect(loads.map((l) => l.table)).toEqual([
       "events_full",
-      "blob_storage_file_log",
+      "pg:otel_file_ledger",
     ]);
   });
 
@@ -240,5 +279,120 @@ describe("isDeterministicIngestError", () => {
     expect(isDeterministicIngestError(new ForbiddenError("gone"))).toBe(true);
     expect(isDeterministicIngestError(new Error("ECONNRESET"))).toBe(false);
     expect(isDeterministicIngestError("string error")).toBe(false);
+  });
+});
+
+// Split-target routing + retention filter (Stage 1.6). The mode is parsed at
+// import in the shared dist, so these run only when the process was launched
+// with LITEFUSE_DORIS_TABLE_SPLIT_MODE=project_id_with_rule; skipped otherwise.
+const splitMode =
+  process.env.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule";
+const itSplit = (name: string, fn: () => Promise<void>) =>
+  it(name, async (ctx) => {
+    if (!splitMode) return ctx.skip();
+    await fn();
+  });
+
+describe("processOtelGroupJob (Stage 1.6 split targets)", () => {
+  afterEach(() => __setSplitSnapshotForTest(null)); // never leak into other tests
+
+  itSplit("routes a split project's loads to events_full_<pid>/traces_scalar_<pid>", async () => {
+    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    await processOtelGroupJob(payload, deps);
+    const tables = loads
+      .filter((l) => l.table !== "pg:otel_file_ledger")
+      .map((l) => l.table);
+    expect(tables).toContain("events_full_p1");
+    expect(tables).toContain("traces_scalar_p1");
+    expect(tables).not.toContain("events_full");
+  });
+
+  itSplit("drops over-retention rows before the split load (row dead-letter)", async () => {
+    __setSplitSnapshotForTest([["p1", { retentionDays: 7 }]]);
+    const payload = payloadFor(["f1.json"]);
+    const oldTs = Date.now() - 30 * 86_400_000; // 30d old, retention 7d
+    const nowTs = Date.now();
+    const { deps, loads } = makeDeps({
+      transformFile: vi.fn(async () => ({
+        eventRecords: [
+          eventRecord("recent", { start_time: nowTs }),
+          eventRecord("old", { start_time: oldTs }),
+        ],
+        scalarRecords: [],
+        sessions: new Map(),
+      })),
+    });
+    await processOtelGroupJob(payload, deps);
+    const eventsLoad = loads.find((l) => l.table === "events_full_p1");
+    expect(eventsLoad).toBeDefined();
+    // only the in-window row survived
+    expect(eventsLoad!.count).toBe(1);
+    expect(eventsLoad!.rows).toHaveLength(1);
+  });
+
+  itSplit("shared (non-split) project still targets the shared table", async () => {
+    __setSplitSnapshotForTest([["other", { retentionDays: null }]]); // p1 NOT split
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    await processOtelGroupJob(payload, deps);
+    const tables = loads.map((l) => l.table);
+    expect(tables).toContain("events_full");
+    expect(tables).not.toContain("events_full_p1");
+  });
+});
+
+// Stage 1 review #4: the traces_scalar load must have the SAME missing-table
+// three-way as events_full. Without it, a scalar table lost AFTER go-live (ops
+// DROP / rebuild window / replica loss) means events commit, the scalar load
+// throws uncaught, and the job retries to the DLQ forever — events in, scalar
+// silently lost, table never reprovisioned.
+describe("processOtelGroupJob (Stage 1 #4: scalar missing-table three-way)", () => {
+  afterEach(() => {
+    __setSplitSnapshotForTest(null);
+    vi.mocked(handleMissingSplitTable).mockReset();
+  });
+
+  // events_full_p1 loads fine; traces_scalar_p1 is gone.
+  const scalarMissingDeps = () => {
+    const { deps, loads } = makeDeps();
+    (deps.streamLoadBody as ReturnType<typeof vi.fn>).mockImplementation(
+      async (table, body, count, options) => {
+        if (table === "traces_scalar_p1") {
+          throw new Error("errCode = 2, Table [traces_scalar_p1] does not exist");
+        }
+        loads.push({ table, rows: decodeBody(body), count, options });
+        return { dedupedByLabel: false };
+      },
+    );
+    return { deps, loads };
+  };
+
+  itSplit("reprovision/pg-error → job throws (events committed, ledger withheld so replay heals)", async () => {
+    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+    vi.mocked(handleMissingSplitTable).mockResolvedValue("retry");
+    const { deps, loads } = scalarMissingDeps();
+
+    await expect(
+      processOtelGroupJob(payloadFor(["f1.json"]), deps),
+    ).rejects.toThrow(/does not exist/);
+
+    const tables = loads.map((l) => l.table);
+    expect(tables).toContain("events_full_p1"); // events already committed
+    expect(tables).not.toContain("pg:otel_file_ledger"); // ledger withheld → replay re-runs scalar
+    expect(handleMissingSplitTable).toHaveBeenCalledWith("p1");
+  });
+
+  itSplit("tombstoned project → dead-letter + ledger, NO throw (no infinite retry)", async () => {
+    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+    vi.mocked(handleMissingSplitTable).mockResolvedValue("skip");
+    const { deps, loads } = scalarMissingDeps();
+
+    await processOtelGroupJob(payloadFor(["f1.json"]), deps); // resolves, no throw
+
+    const tables = loads.map((l) => l.table);
+    expect(tables).toContain("events_full_p1");
+    expect(tables).toContain("pg:otel_file_ledger"); // ledger written → group never resurfaces
   });
 });

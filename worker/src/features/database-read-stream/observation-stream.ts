@@ -28,6 +28,7 @@ import {
 } from "./getDatabaseReadStream";
 import { fetchCommentsForExport } from "./fetchCommentsForExport";
 import type { Model, Price } from "@prisma/client";
+import { tableFor } from "@langfuse/shared/src/server";
 
 const DEFAULT_BATCH_SIZE = 1000;
 const REDUCED_BATCH_SIZE = 200; // Smaller batch for JSON/JSONL which hold parsed objects in memory
@@ -209,9 +210,9 @@ export const getObservationStream = async (props: {
             user_id,
             ROW_NUMBER() OVER (
               PARTITION BY trace_id, project_id
-              ORDER BY event_ts DESC
+              ORDER BY created_at DESC
             ) AS rn
-          FROM events_full
+          FROM ${tableFor(projectId, "events_full")}
           WHERE project_id = {projectId: String}
             AND is_root = 1
         ) ranked
@@ -237,7 +238,6 @@ export const getObservationStream = async (props: {
         o.version AS version,
         o.parent_span_id AS parent_observation_id,
         o.created_at AS created_at,
-        o.updated_at AS updated_at,
         o.provided_model_name AS provided_model_name,
         o.total_cost AS total_cost,
         o.prompt_id AS prompt_id,
@@ -246,14 +246,14 @@ export const getObservationStream = async (props: {
         o.model_id AS internal_model_id,
         o.input AS input,
         o.output AS output,
-        to_json(o.metadata) AS metadata,
+        json_object_flatten(o.metadata) AS metadata,
         t.trace_name AS traceName,
         t.tags AS traceTags,
         t.trace_timestamp AS traceTimestamp,
         t.user_id AS userId,
         s.scores_avg AS scores_avg,
         s.score_categories AS score_categories
-      FROM events_full o
+      FROM ${tableFor(projectId, "events_full")} o
         LEFT JOIN trace_root t
           ON t.trace_id = o.trace_id AND t.project_id = o.project_id
         LEFT JOIN scores_agg s

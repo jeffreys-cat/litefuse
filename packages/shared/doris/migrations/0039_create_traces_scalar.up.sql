@@ -8,7 +8,11 @@
 --
 -- Included for the compact byId: input_trim/output_trim — the 200-char
 -- ingestion-precomputed previews (~<=800B/row, keeps the table narrow) — and
--- created_at/updated_at (the domain trace object requires them).
+-- created_at/updated_at. Unlike events_full (DUPLICATE, append-only), this table
+-- is UNIQUE+MoW and genuinely MUTATED post-ingestion: the bookmarked/public/tags
+-- toggles UPDATE it (partialUpdateDoris) — it is the AUTHORITATIVE store for
+-- those flags. So updated_at is a real "last modified" column (bumped to now on
+-- every such UPDATE), distinct from created_at (the ingestion time).
 --
 -- Deliberately NOT here:
 --   * full input/output — the giant payloads stay on events_full; content
@@ -27,15 +31,19 @@
 --
 -- Storage model mirrors events_full: Unique Key + Merge-on-Write. Ingestion
 -- always writes the full post-merge root row, so the newest load wins per key.
--- start_time is in the UNIQUE KEY only because the partition column must be a
--- key column; a root span's start_time is fixed by the SDK, so the key is
--- stable across re-writes of the same trace.
+-- start_time is in the UNIQUE KEY both because the partition column must be a
+-- key column (UNIQUE model) and because a root span's start_time is fixed by the
+-- SDK, so the key is stable across re-writes of the same trace. The key leads
+-- with id (a trace's row co-locates by id / prefix-seeks on the trace-detail
+-- point read); project_id follows so a project's rows share the tenant prefix.
+-- AUTO PARTITION BY date_trunc(start_time,'day') prunes partitions natively from
+-- any start_time predicate (plain ranges and DATE(start_time)=x — verified on
+-- 4.0.6), so no derived start_time_date mirror column is needed.
 
 CREATE TABLE IF NOT EXISTS traces_scalar (
-    `project_id`      varchar(64) NOT NULL,
     `id`              varchar(64),
+    `project_id`      varchar(64) NOT NULL,
     `start_time`      DateTime(3) NOT NULL,
-    `start_time_date` Date        NOT NULL,
     `end_time`        DateTime(3),
     `name`            String,
     `user_id`         String,
@@ -46,12 +54,13 @@ CREATE TABLE IF NOT EXISTS traces_scalar (
     `bookmarked`      Boolean DEFAULT 'false',
     `public`          Boolean DEFAULT 'false',
     `tags`            ARRAY<String>,
-    `metadata`        Map<String, String>,
+    `metadata`        Variant,
     `input_trim`      String,
     `output_trim`     String,
     `created_at`      DateTime(3),
+    -- Real "last modified": ingestion writes it = created_at, and the
+    -- bookmarked/public/tags UPDATEs bump it to now (MoW value column).
     `updated_at`      DateTime(3),
-    `event_ts`        DateTime(3) NOT NULL,
 
     INDEX idx_user_id (`user_id`) USING INVERTED COMMENT 'inverted index for user_id',
     INDEX idx_session_id (`session_id`) USING INVERTED COMMENT 'inverted index for session_id',
@@ -59,11 +68,12 @@ CREATE TABLE IF NOT EXISTS traces_scalar (
     INDEX idx_tags (`tags`) USING INVERTED COMMENT 'inverted index for tags',
     INDEX idx_environment (`environment`) USING INVERTED COMMENT 'inverted index for environment'
 ) ENGINE = OLAP
-UNIQUE KEY(`project_id`, `id`, `start_time`)
+UNIQUE KEY(`id`, `project_id`, `start_time`)
 AUTO PARTITION BY RANGE (date_trunc(`start_time`, 'day')) ()
-DISTRIBUTED BY HASH(`id`) BUCKETS 12
+-- BUCKETS AUTO: sized per new partition from observed volume (see 0037 note).
+DISTRIBUTED BY HASH(`id`) BUCKETS AUTO
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1",
+    "replication_allocation" = "tag.location.default: 3",
     "enable_unique_key_merge_on_write" = "true"
 );
 
@@ -74,10 +84,9 @@ PROPERTIES (
 --
 -- INSERT INTO traces_scalar
 -- SELECT
---   project_id,
 --   trace_id AS id,
+--   project_id,
 --   start_time,
---   DATE(start_time) AS start_time_date,
 --   end_time,
 --   NULLIF(trace_name, '') AS name,
 --   NULLIF(user_id, '') AS user_id,
@@ -92,7 +101,6 @@ PROPERTIES (
 --   input_trim,
 --   output_trim,
 --   created_at,
---   updated_at,
---   event_ts
+--   created_at AS updated_at   -- historical rows: initialize last-modified = creation
 -- FROM events_full
 -- WHERE is_root = 1 AND trace_id IS NOT NULL;

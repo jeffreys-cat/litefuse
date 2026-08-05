@@ -5,6 +5,51 @@ import turboConfig from "eslint-config-turbo/flat";
 import eslintPluginPrettierRecommended from "eslint-plugin-prettier/recommended";
 import "eslint-plugin-only-warn";
 
+// Table-split guard (docs/project-per-table-*.md, Stage 0.7): inside the
+// query-building layer the two per-project logical tables must never appear as
+// a bare `FROM events_full` / `JOIN traces_scalar` clause — they have to be
+// routed through tableFor(projectId, "...") so a split project reads its own
+// physical table, or through the named sharedTableFor("...") escape hatch for a
+// deliberate cross-project shared read. An interpolated `${tableFor(...)}`
+// splits the template into separate elements so the raw table token never
+// appears in one; only genuinely un-migrated clauses trip the rule.
+//
+// The clause must sit at the START of a line (optionally behind a JOIN-type
+// keyword) — this is how every real multi-line SQL clause here is written, and
+// it excludes design-comment prose like `-- read from events_full` where the
+// keyword falls mid-sentence (or behind a `--`). Case-insensitive (some queries
+// lower-case their SQL). `\b` after the name means physical `events_full_<pid>`
+// names never match.
+const TABLE_CLAUSE_RE =
+  "(?:\\n|^)\\s*(?:(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL)\\s+)*(?:FROM|JOIN)\\s+(?:events_full|traces_scalar)\\b";
+const TABLE_ROUTING_MESSAGE =
+  'Bare events_full/traces_scalar in SQL is not per-project-safe. Route it through tableFor(projectId, "...") — or, for a deliberate cross-project shared read, sharedTableFor("...").';
+const tableRoutingSelectors = [
+  {
+    selector: `TemplateElement[value.raw=/${TABLE_CLAUSE_RE}/i]`,
+    message: TABLE_ROUTING_MESSAGE,
+  },
+  {
+    selector: `Literal[value=/${TABLE_CLAUSE_RE}/i]`,
+    message: TABLE_ROUTING_MESSAGE,
+  },
+];
+
+/**
+ * A flat-config block that enforces the table-routing rule on the given file
+ * globs (the caller passes globs relative to its own package root, since each
+ * package runs eslint from its own cwd).
+ *
+ * @param {string[]} files - eslint file globs the rule applies to
+ */
+export const tableRoutingRule = (files) => ({
+  name: "langfuse/doris-table-routing",
+  files,
+  rules: {
+    "no-restricted-syntax": ["error", ...tableRoutingSelectors],
+  },
+});
+
 export default tseslint.config(
   // Global ignores
   {

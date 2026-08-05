@@ -1,4 +1,4 @@
-import { convertDateToAnalyticsDateTime, dq } from "./analytics";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -20,6 +20,7 @@ import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
 import { parseDorisStringArray } from "../utils/dorisArrays";
 import { queryDoris, commandDoris, queryDorisStream } from "./doris";
+import { tableFor, sharedTableFor } from "../doris/tableRouting";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
@@ -54,28 +55,27 @@ const TRACES_SCALAR_SELECT = `
       bookmarked,
       ${dq("public")},
       tags,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       input_trim,
       output_trim,
       created_at,
-      updated_at,
-      event_ts`;
+      updated_at`;
 
 /**
  * Full input/output for ONE trace: point read of the root span row.
- * ORDER BY event_ts DESC — events_full is DUPLICATE-model, a re-delivered
+ * ORDER BY created_at DESC — events_full is DUPLICATE-model, a re-delivered
  * root span lands as a second row; pick the newest copy deterministically.
  */
-const TRACE_ROOT_IO_QUERY = `
+const traceRootIoQuery = (projectId: string) => `
     SELECT
       CAST(input AS STRING) AS input,
       CAST(output AS STRING) AS output
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND trace_id = {traceId: String}
     AND is_root = 1
     AND DATE(start_time) = DATE({rootDay: DateTime})
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 
@@ -83,7 +83,7 @@ const TRACE_ROOT_IO_QUERY = `
  * Batch variant: full input/output for a SET of scalar rows, merged in TS.
  * The root span's start_time is byte-identical to the scalar row's (both
  * dual-written from the same root record), so the scalar rows' own timestamps
- * bound the partition range exactly. DUPLICATE model: ORDER BY event_ts DESC
+ * bound the partition range exactly. DUPLICATE model: ORDER BY created_at DESC
  * + first-wins keeps the newest copy of a re-delivered root.
  */
 const attachRootIO = async (params: {
@@ -104,13 +104,13 @@ const attachRootIO = async (params: {
         trace_id AS id,
         CAST(input AS STRING) AS input,
         CAST(output AS STRING) AS output
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       AND trace_id IN ({ioTraceIds: Array(String)})
       AND is_root = 1
       AND DATE(start_time) >= DATE({ioMinTs: DateTime})
       AND DATE(start_time) <= DATE({ioMaxTs: DateTime})
-      ORDER BY event_ts DESC
+      ORDER BY created_at DESC
     `,
     params: {
       projectId,
@@ -141,12 +141,13 @@ const attachRootIO = async (params: {
  * (bookmarked/public/tags) read here are the ingestion-time snapshot.
  */
 const buildRootSpanTraceQuery = (params: {
+  projectId: string;
   whereSql: string;
   /** Skip the full input/output Variant; only input_trim/output_trim are
    * returned. Used for verbosity "compact". */
   excludeFullIO?: boolean;
 }): string => {
-  const { whereSql, excludeFullIO = false } = params;
+  const { projectId, whereSql, excludeFullIO = false } = params;
   const fullIO = excludeFullIO
     ? ""
     : `
@@ -166,17 +167,14 @@ const buildRootSpanTraceQuery = (params: {
       bookmarked,
       ${dq("public")},
       created_at,
-      updated_at,
-      event_ts,
-      is_deleted,
       tags,
       input_trim,
       output_trim,${fullIO}
       metadata
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE ${whereSql}
     AND is_root = 1
-    ORDER BY event_ts DESC
+    ORDER BY created_at DESC
     LIMIT 1
   `;
 };
@@ -266,7 +264,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
             COUNT(CASE WHEN level = 'DEBUG' THEN 1 END) as debug_count,
             trace_id,
             project_id
-        FROM events_full o
+        FROM ${tableFor(projectId, "events_full")} o
         WHERE o.project_id = '${projectId}'
         ${timeStampFilter ? `AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'` : ""}
         AND o.start_time >= '${toDorisDateTime(timestamp, -172800)}'
@@ -275,7 +273,7 @@ export const checkTraceExistsAndGetTimestamp = async ({
     SELECT
       t.trace_id as id,
       t.project_id as project_id
-    FROM events_full t
+    FROM ${tableFor(projectId, "events_full")} t
     ${observationFilterRes ? `INNER JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id` : ""}
     WHERE ${tracesFilterRes.query}
     AND t.project_id = '${projectId}'
@@ -321,7 +319,7 @@ export const getTracesByIds = async (
   const scalarRows = await queryDoris<TraceRecordReadType>({
     query: `
       SELECT ${TRACES_SCALAR_SELECT}
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String}
         AND id IN ({traceIds: Array(String)})
         ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
@@ -386,7 +384,7 @@ export const getTraceUsageBreakdown = async ({
       SELECT
         to_json(usage_details) AS usage_details,
         to_json(cost_details) AS cost_details
-      FROM events_full
+      FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       AND trace_id = {traceId: String}
       AND is_root = 0
@@ -457,11 +455,11 @@ export const getTracesBySessionId = async (
   const scalarRows = await queryDoris<TraceRecordReadType>({
     query: `
       SELECT ${TRACES_SCALAR_SELECT}
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String}
         AND session_id IN ({sessionIds: Array(String)})
         ${timestamp ? `AND start_time >= {timestamp: DateTime}` : ""}
-      ORDER BY event_ts DESC
+      ORDER BY created_at DESC
     `,
     params: {
       sessionIds,
@@ -508,7 +506,7 @@ export const getTracesBySessionId = async (
 // trace-counting reads below run on a table ~2 orders of magnitude smaller
 // than events_full (one row per trace vs one per span) instead of full-project
 // is_root = 1 scans across every partition.
-const TRACES_SCALAR_AS_T = `(
+const tracesScalarAsT = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -523,15 +521,14 @@ const TRACES_SCALAR_AS_T = `(
         COALESCE(\`release\`, '') AS \`release\`,
         COALESCE(version, '') AS version,
         start_time,
-        created_at,
-        event_ts
-      FROM traces_scalar
+        created_at
+      FROM ${tableFor(projectId, "traces_scalar")}
     ) t`;
 
 export const hasAnyTrace = async (projectId: string) => {
   const query = `
     SELECT 1
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     LIMIT 1
   `;
@@ -562,11 +559,16 @@ export const getTraceCountsByProjectInCreationInterval = async ({
   // traces_scalar: one row per trace, created_at dual-written since migration
   // 0039's trim/audit columns (pre-existing rows need the documented backfill,
   // which carries created_at from events_full).
+  // CROSS-PROJECT (no single projectId; GROUP BY project_id over all
+  // projects) — deliberately NOT routed through tableFor. Under table split
+  // this must fan out over every split project's traces_scalar_<pid> UNION
+  // the shared table; deferred to the table-split cross-project work
+  // (design §五). Do not "fix" this to tableFor — it has no projectId.
   const query = `
     SELECT
       project_id,
       count(*) as count
-    FROM traces_scalar
+    FROM ${sharedTableFor("traces_scalar")}
     WHERE created_at >= {start: DateTime}
     AND created_at < {end: DateTime}
     GROUP BY project_id
@@ -591,6 +593,12 @@ export const getTraceCountsByProjectInCreationInterval = async ({
   }));
 };
 
+// Billing free-tier usage (billingUsageService): total trace units a set of
+// projects produced since a cutoff. traces_scalar is one row per trace (MoW,
+// deduped), so this is a plain row count. Observations COUNT(*) events_full
+// separately (billing model counts the synthetic root as an observation too).
+// CROSS-PROJECT (project_id IN over many projects) — shared table, NOT tableFor;
+// under table split this must fan out over traces_scalar_<pid> (design §五).
 export const getTraceCountOfProjectsSinceCreationDate = async ({
   projectIds,
   start,
@@ -599,12 +607,11 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
   start: Date;
 }) => {
   const query = `
-    SELECT
-      count(*) as count
-    FROM traces_scalar
-    WHERE project_id IN ({projectIds: Array(String)})
-    AND created_at >= {start: DateTime}
-  `;
+      SELECT count(*) as count
+      FROM ${sharedTableFor("traces_scalar")}
+      WHERE project_id IN ({projectIds: Array(String)})
+      AND created_at >= {start: DateTime}
+    `;
 
   const rows = await queryDoris<{ count: string }>({
     query,
@@ -657,7 +664,7 @@ export const getTraceById = async ({
   const scalarRows = await queryDoris<TraceRecordReadType>({
     query: `
       SELECT ${TRACES_SCALAR_SELECT}
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String}
         AND id = {traceId: String}
         ${timestamp ? `AND DATE(start_time) = DATE({timestamp: DateTime})` : ""}
@@ -688,7 +695,7 @@ export const getTraceById = async ({
         input: string | null;
         output: string | null;
       }>({
-        query: TRACE_ROOT_IO_QUERY,
+        query: traceRootIoQuery(projectId),
         params: {
           traceId,
           projectId,
@@ -752,6 +759,7 @@ export const getTraceById = async ({
     // skip the full input/output Variant; full/truncated read the Variants
     // straight off the root row.
     const query = buildRootSpanTraceQuery({
+      projectId,
       whereSql,
       excludeFullIO: excludeInputOutput,
     });
@@ -822,7 +830,7 @@ export const getTracesGroupedByName = async (
       select
         name as name,
         count(*) as count
-      from ${TRACES_SCALAR_AS_T}
+      from ${tracesScalarAsT(projectId)}
       WHERE t.project_id = {projectId: String}
       AND t.name IS NOT NULL
       ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
@@ -879,7 +887,7 @@ export const getTracesGroupedBySessionId = async (
       select
         session_id as session_id,
         count(*) as count
-      from ${TRACES_SCALAR_AS_T}
+      from ${tracesScalarAsT(projectId)}
       WHERE t.project_id = {projectId: String}
       AND t.session_id IS NOT NULL
       AND t.session_id != ''
@@ -935,7 +943,7 @@ export const getTracesGroupedByUsers = async (
     select
       user_id as user,
       count(*) as count
-    from ${TRACES_SCALAR_AS_T}
+    from ${tracesScalarAsT(projectId)}
     WHERE t.project_id = {projectId: String}
     AND t.user_id IS NOT NULL
     AND t.user_id != ''
@@ -988,7 +996,7 @@ export const getTracesGroupedByTags = async (props: GroupedTracesQueryProp) => {
   // which multiplied the scanned rows by the tag count before DISTINCT.
   const query = `
     select group_array_union(t.tags) as tags_union
-    from ${TRACES_SCALAR_AS_T}
+    from ${tracesScalarAsT(projectId)}
     WHERE t.project_id = {projectId: String}
     ${filterRes?.query ? `AND ${filterRes.query}` : ""}
   `;
@@ -1030,7 +1038,7 @@ export const getTracesIdentifierForSession = async (
       start_time AS timestamp,
       project_id,
       environment
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND session_id = {sessionId: String}
     ORDER BY start_time ASC;
@@ -1070,7 +1078,7 @@ export const getTracesIdentifierForSession = async (
 
 export const deleteTraces = async (projectId: string, traceIds: string[]) => {
   const query = `
-    DELETE FROM events_full
+    DELETE FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND trace_id IN ({traceIds: Array(String)});
   `;
@@ -1091,7 +1099,7 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
   // migration 0039) so deleted traces don't linger in the flat list fast path.
   await commandDoris({
     query: `
-      DELETE FROM traces_scalar
+      DELETE FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String}
       AND id IN ({traceIds: Array(String)});
     `,
@@ -1116,7 +1124,7 @@ export const hasAnyTraceOlderThan = async (
 ) => {
   const query = `
     SELECT 1
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime}
     LIMIT 1
@@ -1156,7 +1164,7 @@ export const deleteTracesOlderThanDays = async (
   // deleteObservationsOlderThanDays applies, so retention semantics stay
   // aligned across the two.
   const query = `
-    DELETE FROM events_full
+    DELETE FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND start_time < {cutoffDate: DateTime};
   `;
@@ -1176,7 +1184,7 @@ export const deleteTracesOlderThanDays = async (
   // Mirror into traces_scalar (root rows only by construction).
   await commandDoris({
     query: `
-      DELETE FROM traces_scalar
+      DELETE FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String}
       AND start_time < {cutoffDate: DateTime};
     `,
@@ -1205,7 +1213,7 @@ export const deleteTracesByProjectId = async (
   }
 
   const query = `
-    DELETE FROM events_full
+    DELETE FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String};
   `;
   await commandDoris({
@@ -1223,7 +1231,7 @@ export const deleteTracesByProjectId = async (
   // Mirror into traces_scalar.
   await commandDoris({
     query: `
-      DELETE FROM traces_scalar
+      DELETE FROM ${tableFor(projectId, "traces_scalar")}
       WHERE project_id = {projectId: String};
     `,
     params: {
@@ -1246,7 +1254,7 @@ export const hasAnyUser = async (projectId: string) => {
   // is the equivalent of the old "IS NOT NULL AND != ''" pair.
   const query = `
     SELECT 1
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE project_id = {projectId: String}
     AND user_id IS NOT NULL
     LIMIT 1
@@ -1277,7 +1285,7 @@ export const hasAnyUser = async (projectId: string) => {
 // stores NULL where events_full root rows store '' (user_id/session_id/
 // release/version), so "trace has a user" is `user_id IS NOT NULL` here (no
 // `!= ''` needed).
-const TRACES_SCALAR_AS_T_FOR_USERS = `(
+const tracesScalarAsTForUsers = (projectId: string) => `(
       SELECT
         project_id,
         id AS trace_id,
@@ -1292,7 +1300,7 @@ const TRACES_SCALAR_AS_T_FOR_USERS = `(
         COALESCE(${dq("release")}, '') AS ${dq("release")},
         COALESCE(version, '') AS version,
         metadata
-      FROM traces_scalar
+      FROM ${tableFor(projectId, "traces_scalar")}
     ) t`;
 
 export const getTotalUserCount = async (
@@ -1318,7 +1326,7 @@ export const getTotalUserCount = async (
 
   const query = `
     SELECT COUNT(DISTINCT t.user_id) AS totalCount
-    FROM ${TRACES_SCALAR_AS_T_FOR_USERS}
+    FROM ${tracesScalarAsTForUsers(projectId)}
     WHERE ${tracesFilterRes.query}
     ${search.query}
     AND t.user_id != ''
@@ -1403,7 +1411,7 @@ export const getUserMetrics = async (
             SUM(output_tokens_calculated) as output_usage,
             SUM(total_tokens_calculated) as total_usage,
             SUM(CASE WHEN is_root = 0 THEN 1 ELSE 0 END) as observation_count
-        FROM events_full
+        FROM ${tableFor(projectId, "events_full")}
         WHERE project_id = {projectId: String}
         ${timestampFilter ? `AND date_trunc(start_time, 'day') >= date_trunc(DATE_SUB({traceTimestamp: DateTime}, ${OBSERVATIONS_TO_TRACE_INTERVAL}), 'day')` : ""}
         GROUP BY project_id, trace_id
@@ -1419,7 +1427,7 @@ export const getUserMetrics = async (
           COALESCE(SUM(m.sum_total_cost), 0) as sum_total_cost,
           MAX(t.start_time) as max_timestamp,
           MIN(t.start_time) as min_timestamp
-      FROM ${TRACES_SCALAR_AS_T_FOR_USERS}
+      FROM ${tracesScalarAsTForUsers(projectId)}
       JOIN per_trace_metrics m
         ON m.project_id = t.project_id
         AND m.trace_id = t.trace_id
@@ -1487,7 +1495,7 @@ export const getTracesForBlobStorageExport = function (
       name,
       environment,
       project_id,
-      to_json(metadata) AS metadata,
+      json_object_flatten(metadata) AS metadata,
       user_id,
       session_id,
       ${dq("release")},
@@ -1497,7 +1505,7 @@ export const getTracesForBlobStorageExport = function (
       tags,
       input,
       output
-    FROM events_full
+    FROM ${tableFor(projectId, "events_full")}
     WHERE is_root = 1
     AND project_id = {projectId: String}
     AND start_time >= {minTimestamp: DateTime}
@@ -1538,7 +1546,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
                CASE WHEN max(start_time) > max(end_time) THEN max(start_time) ELSE max(end_time) END,
                CASE WHEN min(start_time) < min(end_time) THEN min(start_time) ELSE min(end_time) END
              ) as latency_milliseconds
-      FROM events_full o
+      FROM ${tableFor(projectId, "events_full")} o
       WHERE o.project_id = {projectId: String}
       AND o.start_time >= DATE_SUB({minTimestamp: DateTime}, ${TRACE_TO_OBSERVATIONS_INTERVAL})
       GROUP BY o.project_id, o.trace_id
@@ -1557,7 +1565,7 @@ export const getTracesForAnalyticsIntegrations = async function* (
       o.total_cost as total_cost,
       o.latency_milliseconds / 1000 as latency,
       o.observation_count as observation_count
-    FROM events_full t
+    FROM ${tableFor(projectId, "events_full")} t
     LEFT JOIN observations_agg o ON t.trace_id = o.trace_id AND t.project_id = o.project_id
     WHERE t.project_id = {projectId: String}
     AND t.is_root = 1
@@ -1615,11 +1623,16 @@ export const getTracesForAnalyticsIntegrations = async function* (
 export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   // id/project only → traces_scalar; id is its distribution column, so the
   // old unindexed cross-project events_full scan becomes a targeted read.
+  //
+  // CROSS-PROJECT (resolves a trace id with NO projectId — the /trace/[id]
+  // redirect page) — deliberately NOT routed through tableFor; it has no
+  // projectId. Under table split this must fan out over every split project's
+  // traces_scalar_<pid> UNION the shared table (design §五). Do not "fix" it.
   const query = `
       SELECT id, project_id
-      FROM traces_scalar
+      FROM ${sharedTableFor("traces_scalar")}
       WHERE id IN ({traceIds: Array(String)})
-      ORDER BY event_ts DESC;`;
+      ORDER BY created_at DESC;`;
   const records = await queryDoris<{
     id: string;
     project_id: string;
@@ -1647,7 +1660,7 @@ export const traceWithSessionIdExists = async (
 ) => {
   const query = `
     SELECT id, project_id
-    FROM traces_scalar
+    FROM ${tableFor(projectId, "traces_scalar")}
     WHERE session_id = {sessionId: String}
     AND project_id = {projectId: String}
     LIMIT 1
@@ -1689,7 +1702,7 @@ export async function getAgentGraphData(params: {
             metadata['langgraph_node'] AS node,
             metadata['langgraph_step'] AS step
           FROM
-            events_full
+            ${tableFor(projectId, "events_full")}
           WHERE
             project_id = {projectId: String}
             AND trace_id = {traceId: String}
@@ -1707,76 +1720,3 @@ export async function getAgentGraphData(params: {
     },
   });
 }
-
-/**
- * Get trace counts grouped by project and day within a date range.
- *
- * Returns one row per project per day with the count of traces created on that day.
- * Uses half-open interval [startDate, endDate) for filtering.
- *
- * @param startDate - Start of date range (inclusive)
- * @param endDate - End of date range (exclusive)
- * @returns Array of { count, projectId, date } objects
- *
- * @example
- * // Get trace counts for March 1-2, 2024
- * const counts = await getTraceCountsByProjectAndDay({
- *   startDate: new Date('2024-03-01T00:00:00Z'),
- *   endDate: new Date('2024-03-03T00:00:00Z')
- * });
- * // Returns: [
- * //   { count: 1500, projectId: 'proj-123', date: '2024-03-01' },
- * //   { count: 1200, projectId: 'proj-123', date: '2024-03-02' },
- * //   { count: 2300, projectId: 'proj-456', date: '2024-03-01' },
- * //   ...
- * // ]
- *
- * Note: Skips using FINAL (double counting risk) for faster and cheaper
- * queries against Doris. Generous 4x overcompensation before blocking allows
- * for usage aggregation to be meaningful.
- *
- */
-export const getTraceCountsByProjectAndDay = async ({
-  startDate,
-  endDate,
-}: {
-  startDate: Date;
-  endDate: Date;
-}) => {
-  // Pure trace counts → traces_scalar (start_time_date is the precomputed
-  // DATE(start_time) and the partition column). The sibling
-  // getTraceCountsByProjectInCreationInterval already reads traces_scalar.
-  const query = `
-    SELECT
-      count(*) as count,
-      project_id,
-      start_time_date as date
-    FROM traces_scalar
-    WHERE start_time >= {startDate: DateTime}
-    AND start_time < {endDate: DateTime}
-    GROUP BY project_id, start_time_date
-  `;
-
-  const rows = await queryDoris<{
-    count: string;
-    project_id: string;
-    date: string;
-  }>({
-    query,
-    params: {
-      startDate: convertDateToAnalyticsDateTime(startDate),
-      endDate: convertDateToAnalyticsDateTime(endDate),
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "analytic",
-    },
-  });
-
-  return rows.map((row) => ({
-    count: Number(row.count),
-    projectId: row.project_id,
-    date: row.date,
-  }));
-};

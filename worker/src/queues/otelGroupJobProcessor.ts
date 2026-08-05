@@ -4,14 +4,19 @@ import pLimit from "p-limit";
 import {
   dorisClient,
   eventsFullLabelForGroup,
+  labelForGroupTable,
   formatRecordForDoris,
   getS3EventStorageClient,
   logger,
   recordHistogram,
   recordIncrement,
   traceException,
-  convertDateToAnalyticsDateTime,
   OtelIngestionProcessor,
+  isSplitProject,
+  isSplitCacheReady,
+  tableFor,
+  getSplitRetentionDays,
+  handleMissingSplitTable,
   type EventRecordInsertType,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
@@ -71,6 +76,12 @@ export const isDeterministicIngestError = (e: unknown): boolean => {
   if (e instanceof SyntaxError) return true;
   if (e instanceof ForbiddenError) return true;
   return false;
+};
+
+/** Doris "target table doesn't exist" — the split-table three-way trigger. */
+const isMissingTableError = (e: unknown): boolean => {
+  const m = e instanceof Error ? e.message : String(e);
+  return /does not exist|unknown table|table.*not found|TableNotFound/i.test(m);
 };
 
 const deadLetterRow = (params: {
@@ -137,6 +148,11 @@ export type GroupJobDeps = {
     options: Record<string, unknown>,
   ) => Promise<StreamLoadOutcome>;
   ledgerExists: (groupId: string) => Promise<boolean>;
+  /** Idempotent PG write of the completion ledger (one row per fileKey). */
+  persistLedger: (params: {
+    groupId: string;
+    entries: OtelPendingEntryType[];
+  }) => Promise<void>;
   upsertSessions: (
     sessions: Array<{ id: string; projectId: string; environment: string }>,
   ) => Promise<void>;
@@ -169,6 +185,61 @@ export const processOtelGroupJob = async (
     seen.add(e.fileKey);
     return true;
   });
+
+  // Cache-readiness gate — SYMMETRIC to the web registration gate
+  // (OtelIngestionProcessor). The routing below reads isSplitProject from the
+  // in-memory snapshot; a COLD/failed cache answers "not split" and would
+  // silently load a split project's rows into the SHARED table. Unlike a missing
+  // table (which retries via handleMissingSplitTable), the shared table EXISTS —
+  // the load succeeds, the label + ledger commit, and a replay dedups → the
+  // misroute is permanent (rows invisible to the project's own-table reads).
+  // Defer (BullMQ retry) until the snapshot is loaded rather than route blind.
+  if (
+    sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule" &&
+    !isSplitCacheReady()
+  ) {
+    throw new Error(
+      "otel group job deferred: split-cache not ready (retry to avoid misrouting a split project to the shared table)",
+    );
+  }
+
+  // Target tables (Stage 1.6). A group is homogeneous: a project lane holds one
+  // split project (→ events_full_<pid>); a shared shard holds only non-split
+  // projects (→ shared events_full). So the target derives from any entry's
+  // projectId — tableFor returns the shared name for a non-split project and the
+  // per-project name for a split one. Registration's fail-and-retry gate (1.3)
+  // guarantees a split project's files never land in a shared shard group.
+  const targetProjectId = entries[0]?.projectId;
+  const split = targetProjectId ? isSplitProject(targetProjectId) : false;
+  const eventsTable = targetProjectId
+    ? tableFor(targetProjectId, "events_full")
+    : "events_full";
+  const scalarTable = targetProjectId
+    ? tableFor(targetProjectId, "traces_scalar")
+    : "traces_scalar";
+
+  // Retention filter (SPLIT targets only, design §4.3): a split table is
+  // dynamic_partition — a row older than the project's retention would be
+  // committed then silently TTL-dropped (tablet-version churn, the E-235
+  // incident). Drop such rows before the load (row-level dead letter). Shared
+  // targets skip: no dynamic_partition, deletion is the batch cleaner's job, and
+  // filtering here would wrongly kill a shared project's historical replay.
+  // The cutoff is anchored to the group's newest registration ts (deterministic
+  // across replays — I5), not Date.now().
+  const retentionDays = split
+    ? await getSplitRetentionDays(targetProjectId!)
+    : null;
+  const nowRef =
+    entries.length > 0 ? Math.max(...entries.map((e) => e.ts)) : Date.now();
+  const retentionCutoffMs =
+    retentionDays != null ? nowRef - retentionDays * 86_400_000 : null;
+  let overWindowRows = 0;
+  const withinRetention = (startTimeMs: number): boolean => {
+    if (retentionCutoffMs === null || startTimeMs >= retentionCutoffMs)
+      return true;
+    overWindowRows++;
+    return false;
+  };
 
   // ① Download + transform under the transform semaphore. Deterministic
   // errors dead-letter the FILE (its rows are skipped, the rest of the group
@@ -215,13 +286,26 @@ export const processOtelGroupJob = async (
   // them during the remaining (slow, up-to-600s) loads instead of holding
   // ~5-6x the source size until the function exits.
   let eventRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.eventRecords.map((r) => formatRecordForDoris(r, "events_full")),
+    t.eventRecords
+      .filter((r) => withinRetention(r.start_time))
+      .map((r) => formatRecordForDoris(r, eventsTable)),
   );
   let scalarRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.scalarRecords.map((r) => formatRecordForDoris(r, "traces_scalar")),
+    t.scalarRecords
+      .filter((r) => withinRetention(r.start_time))
+      .map((r) => formatRecordForDoris(r, scalarTable)),
   );
   const eventRowCount = eventRows.length;
   const scalarRowCount = scalarRows.length;
+  if (overWindowRows > 0) {
+    recordIncrement(
+      "langfuse.otel_group.retention_filtered_rows",
+      overWindowRows,
+    );
+    logger.warn(
+      `event=otel_retention_filtered group=${groupId.slice(0, 12)} project=${targetProjectId} rows=${overWindowRows} retentionDays=${retentionDays} — rows older than retention dropped before load`,
+    );
+  }
 
   // ② Empty group (every file dead-lettered): nothing to load — write the
   // ledger so the files never resurface in reconciliation, and ack.
@@ -242,12 +326,33 @@ export const processOtelGroupJob = async (
   const hadEventsBody = eventsBody !== null;
   const eventsBytes = eventsBody?.byteLength ?? 0;
   const tEvents = Date.now();
-  const outcome = eventsBody
-    ? await deps.streamLoadBody("events_full", eventsBody, eventRowCount, {
-        ...LOAD_OPTS,
-        label,
-      })
-    : { dedupedByLabel: false };
+  let outcome: StreamLoadOutcome;
+  try {
+    outcome = eventsBody
+      ? await deps.streamLoadBody(eventsTable, eventsBody, eventRowCount, {
+          ...LOAD_OPTS,
+          label,
+        })
+      : { dedupedByLabel: false };
+  } catch (e) {
+    // "Table doesn't exist" three-way (design §4.2 / Stage 1.2d): a split
+    // target's table is gone. handleMissingSplitTable classifies via PG —
+    // reprovision+retry (live project), pg-error→retry (never guess), or
+    // skip (tombstoned project → dead-letter the group so it doesn't retry
+    // forever recreating a table the deletion flow is dropping).
+    if (split && isMissingTableError(e)) {
+      const action = await handleMissingSplitTable(targetProjectId!);
+      if (action === "skip") {
+        deadLetterRow({
+          fileKey: `group:${groupId}`,
+          reason: `split tables missing for tombstoned project ${targetProjectId}`,
+        });
+        await writeLedger(payload, deps);
+        return;
+      }
+    }
+    throw e; // transient / reprovision → BullMQ replay
+  }
   eventsBody = null; // release the group-sized Buffers before the scalar load
   const eventsMs = Date.now() - tEvents;
 
@@ -266,15 +371,46 @@ export const processOtelGroupJob = async (
     }
   }
   const tScalar = Date.now();
+  let scalarDeduped = false;
   if (scalarRows && scalarRowCount > 0 && !skipScalar) {
     const scalarBody = ndjsonBody(scalarRows);
     scalarRows = null;
-    await deps.streamLoadBody(
-      "traces_scalar",
-      scalarBody,
-      scalarRowCount,
-      LOAD_OPTS,
-    );
+    // Deterministic label (see labelForGroupTable): dedup here is a
+    // server-side no-op bonus on top of MoW folding — the DELETE-protection
+    // semantics still belong to the ledger gate above, which short-circuits
+    // before this load is even attempted.
+    try {
+      const scalarOutcome = await deps.streamLoadBody(
+        scalarTable,
+        scalarBody,
+        scalarRowCount,
+        { ...LOAD_OPTS, label: labelForGroupTable(groupId, "traces_scalar") },
+      );
+      scalarDeduped = scalarOutcome.dedupedByLabel;
+    } catch (e) {
+      // Same "table doesn't exist" three-way as the events load (③). Reachable
+      // only when traces_scalar_<pid> is lost AFTER go-live (ops DROP, rebuild
+      // window, replica loss) — the flip gate keeps split=true from ever being
+      // set with a base table missing, so this is never a provisioning race.
+      // events_full is ALREADY committed here, so on reprovision+retry the
+      // replay label-dedups events and the scalar gate (ledger still absent)
+      // re-attempts THIS load once the table is back. A tombstoned project →
+      // dead-letter + ledger (events already in; the deletion flow drops the
+      // rest), so the job doesn't retry forever recreating a table being torn
+      // down.
+      if (split && isMissingTableError(e)) {
+        const action = await handleMissingSplitTable(targetProjectId!);
+        if (action === "skip") {
+          deadLetterRow({
+            fileKey: `group:${groupId}`,
+            reason: `scalar table missing for tombstoned project ${targetProjectId}`,
+          });
+          await writeLedger(payload, deps);
+          return;
+        }
+      }
+      throw e; // transient / reprovision → BullMQ replay
+    }
   }
   scalarRows = null;
   const scalarMs = Date.now() - tScalar;
@@ -338,38 +474,32 @@ export const processOtelGroupJob = async (
       : "none";
   const scalarPart = skipScalar
     ? "SKIPPED(gate)"
-    : scalarRowCount > 0
-      ? `${scalarMs}ms ${scalarRowCount}rows`
-      : "none";
+    : scalarDeduped
+      ? "LABEL_DEDUP"
+      : scalarRowCount > 0
+        ? `${scalarMs}ms ${scalarRowCount}rows`
+        : "none";
   logger.info(
     `[OtelGroupJob] group=${groupId.slice(0, 12)} files=${entries.length}${deadFiles > 0 ? ` dead_files=${deadFiles}` : ""} | transform=${transformMs}ms | events_full: ${eventsPart} | scalar: ${scalarPart} | ledger=${ledgerMs}ms | total=${totalMs}ms e2e_lag=${((Date.now() - oldestTs) / 1000).toFixed(1)}s`,
   );
 };
 
+// The ledger lives in POSTGRES (otel_file_ledger), not Doris. Its Doris
+// incarnation was a per-group 2-row stream load — tablet versions piled up on
+// the tiny table's few tablets and tripped max_tablet_version_num (E-235,
+// the 2026-07-28 incident trigger). PG absorbs small frequent inserts
+// natively, replays fold via the (file_key, group_id) unique key
+// (createMany skipDuplicates), no label needed — and PG is already on this
+// job's critical path (upsertSessions precedes the ledger write), so this
+// adds zero new failure modes.
 const writeLedger = async (
   payload: OtelGroupIngestionEventType,
   deps: GroupJobDeps,
 ): Promise<void> => {
-  const now = convertDateToAnalyticsDateTime(new Date());
-  const rows = payload.entries.map((e) => ({
-    project_id: e.projectId,
-    entity_type: "otel-file",
-    entity_id: e.fileKey,
-    event_id: payload.groupId,
-    event_ts: now,
-    is_deleted: 0,
-    id: e.fileKey,
-    bucket_name: sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET ?? "",
-    bucket_path: e.fileKey,
-  }));
-  // blob_storage_file_log is UNIQUE KEY(project_id, entity_type, entity_id,
-  // event_id) — replayed ledger writes fold, no label needed.
-  await deps.streamLoadBody(
-    "blob_storage_file_log",
-    ndjsonBody(rows),
-    rows.length,
-    LOAD_OPTS,
-  );
+  await deps.persistLedger({
+    groupId: payload.groupId,
+    entries: payload.entries,
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -406,10 +536,21 @@ export const buildGroupJobDeps = (params: {
       });
     },
     ledgerExists: async (groupId) => {
-      const rows = await client.query(
-        `SELECT 1 AS e FROM blob_storage_file_log WHERE event_id = '${groupId.replace(/'/g, "''")}' AND entity_type = 'otel-file' LIMIT 1`,
-      );
-      return Array.isArray(rows) && rows.length > 0;
+      const row = await prisma.otelFileLedger.findFirst({
+        where: { groupId },
+        select: { id: true },
+      });
+      return row !== null;
+    },
+    persistLedger: async ({ groupId, entries }) => {
+      await prisma.otelFileLedger.createMany({
+        data: entries.map((e) => ({
+          projectId: e.projectId,
+          fileKey: e.fileKey,
+          groupId,
+        })),
+        skipDuplicates: true,
+      });
     },
     upsertSessions: async (sessions) => {
       await prisma.traceSession.createMany({

@@ -47,7 +47,6 @@ import {
   EventRecordInsertType,
   TraceScalarRecordInsertType,
   traceException,
-  flattenJsonToPathArrays,
   getDatasetItemById,
   extractToolsFromObservation,
   convertDefinitionsToMap,
@@ -154,19 +153,17 @@ export type EventInput = {
   eventRaw?: string;
   eventBytes?: number;
 
-  // Experiment fields
+  // Experiment fields (metadata as raw objects → VARIANT)
   experimentId?: string;
   experimentName?: string;
-  experimentMetadataNames?: string[];
-  experimentMetadataValues?: Array<string | null | undefined>;
+  experimentMetadata?: Record<string, unknown>;
   experimentDescription?: string;
   experimentDatasetId?: string;
   experimentItemId?: string;
   experimentItemVersion?: string;
   experimentItemRootSpanId?: string;
   experimentItemExpectedOutput?: string;
-  experimentItemMetadataNames?: string[];
-  experimentItemMetadataValues?: Array<string | null | undefined>;
+  experimentItemMetadata?: Record<string, unknown>;
 
   // Catch-all for future fields
   [key: string]: any;
@@ -230,13 +227,13 @@ export const toTraceScalarRecord = (
     tags: eventRecord.tags ?? [],
     metadata: eventRecord.metadata ?? {},
     // Precomputed compact previews + audit timestamps: let the
-    // verbosity="compact" byId point read be served entirely from
-    // traces_scalar (convertDorisToDomain needs created_at/updated_at).
+    // verbosity="compact" byId point read be served entirely from traces_scalar.
+    // At ingestion updated_at = created_at; later bookmark/public/tags UPDATEs
+    // bump updated_at (this MoW table is the authoritative store for those flags).
     input_trim: eventRecord.input_trim ?? null,
     output_trim: eventRecord.output_trim ?? null,
     created_at: eventRecord.created_at,
-    updated_at: eventRecord.updated_at,
-    event_ts: eventRecord.event_ts,
+    updated_at: eventRecord.created_at,
   };
 };
 
@@ -361,21 +358,11 @@ export class IngestionService {
     // land in year 58000+). events_full partitions directly on start_time.
     const now = this.getMillisecondTimestamp();
 
-    // Flatten raw metadata first (before stringification destroys nested structure)
-    const flattened = eventData.metadata
-      ? flattenJsonToPathArrays(eventData.metadata)
-      : { names: [], values: [] };
-    const metadataNames = flattened.names;
-    // Defensive: coerce null/undefined to empty string for Array(String) Doris column.
-    // Should not be required as convertValueToPlainJavascript() never returns null.
-    const metadataValues = flattened.values.map((v) => v ?? "");
-    // Map mirror of the parallel arrays (see events_full migration 0037): drives
-    // native map-access metadata filtering and the trace-list MV's metadata
-    // column. formatDataForDoris/normalizeMetadataForDoris handle the Map column.
-    const metadataMap: Record<string, string> = {};
-    metadataNames.forEach((n, i) => {
-      metadataMap[n] = metadataValues[i] ?? "";
-    });
+    // Metadata → events_full `metadata` VARIANT: store the raw (possibly nested)
+    // object as-is. Doris Variant normalizes dotted keys into nested paths on
+    // ingest; the flattening that used to happen here now happens at read via
+    // json_object_flatten(metadata). No parallel arrays / Map mirror any more.
+    const metadataObject: Record<string, unknown> = eventData.metadata ?? {};
 
     const resolvedInput: string | null | undefined = eventData.input;
 
@@ -504,13 +491,8 @@ export class IngestionService {
       input_trim,
       output_trim,
 
-      // Metadata (parallel arrays). The old `metadata` Map + `metadata_raw_values`
-      // shape was a transitional fork artifact; events_full uses just the two
-      // arrays — same as langfuse-main V4. Cross-batch metadata merge does not
-      // happen here (OTel-only ingestion has no create/update split).
-      metadata_names: metadataNames,
-      metadata_values: metadataValues,
-      metadata: metadataMap,
+      // Metadata VARIANT — the raw object (see events_full migration 0037).
+      metadata: metadataObject,
 
       // Source/instrumentation metadata
       source: eventData.source,
@@ -529,24 +511,18 @@ export class IngestionService {
       // Experiment fields
       experiment_id: eventData.experimentId,
       experiment_name: eventData.experimentName,
-      experiment_metadata_names: eventData.experimentMetadataNames ?? [],
-      experiment_metadata_values: eventData.experimentMetadataValues ?? [],
+      experiment_metadata: eventData.experimentMetadata ?? {},
       experiment_description: eventData.experimentDescription,
       experiment_dataset_id: eventData.experimentDatasetId,
       experiment_item_id: eventData.experimentItemId,
       experiment_item_version: eventData.experimentItemVersion,
       experiment_item_root_span_id: eventData.experimentItemRootSpanId,
       experiment_item_expected_output: eventData.experimentItemExpectedOutput,
-      experiment_item_metadata_names:
-        eventData.experimentItemMetadataNames ?? [],
-      experiment_item_metadata_values:
-        eventData.experimentItemMetadataValues ?? [],
+      experiment_item_metadata: eventData.experimentItemMetadata ?? {},
 
-      // System timestamps
+      // Single audit timestamp (events_full migration 0037): created_at serves
+      // as created/updated/event_ts (all identical at write).
       created_at: now,
-      updated_at: now,
-      event_ts: now,
-      is_deleted: 0,
     };
 
     return eventRecord;

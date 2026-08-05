@@ -361,6 +361,8 @@ export enum QueueName {
   OtelIngestionQueue = "otel-ingestion-queue",
   IngestionQueue = "ingestion-queue", // Process single events with S3-merge
   IngestionSecondaryQueue = "secondary-ingestion-queue", // Separates high priority + high throughput projects from other projects.
+  CloudUsageMeteringQueue = "cloud-usage-metering-queue",
+  CloudFreeTierUsageThresholdQueue = "cloud-free-tier-usage-threshold-queue",
   ExperimentCreate = "experiment-create-queue",
   PostHogIntegrationQueue = "posthog-integration-queue",
   PostHogIntegrationProcessingQueue = "posthog-integration-processing-queue",
@@ -378,6 +380,7 @@ export enum QueueName {
   EntityChangeQueue = "entity-change-queue",
   EventPropagationQueue = "event-propagation-queue",
   NotificationQueue = "notification-queue",
+  DorisSplitTableProvisioningQueue = "doris-split-table-provisioning-queue",
 }
 
 export enum QueueJobs {
@@ -391,6 +394,8 @@ export enum QueueJobs {
   OtelIngestionJob = "otel-ingestion-job",
   IngestionJob = "ingestion-job",
   IngestionSecondaryJob = "secondary-ingestion-job",
+  CloudUsageMeteringJob = "cloud-usage-metering-job",
+  CloudFreeTierUsageThresholdJob = "cloud-free-tier-usage-threshold-job",
   ExperimentCreateJob = "experiment-create-job",
   PostHogIntegrationJob = "posthog-integration-job",
   PostHogIntegrationProcessingJob = "posthog-integration-processing-job",
@@ -408,6 +413,7 @@ export enum QueueJobs {
   EntityChangeJob = "entity-change-job",
   EventPropagationJob = "event-propagation-job",
   NotificationJob = "notification-job",
+  DorisSplitTableProvisioningJob = "doris-split-table-provisioning-job",
 }
 
 export type TQueueJobTypes = {
@@ -501,6 +507,18 @@ export type TQueueJobTypes = {
     payload: IngestionEventQueueType;
     name: QueueJobs.IngestionJob;
   };
+  [QueueName.CloudUsageMeteringQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: Record<string, never>;
+    name: QueueJobs.CloudUsageMeteringJob;
+  };
+  [QueueName.CloudFreeTierUsageThresholdQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: Record<string, never>;
+    name: QueueJobs.CloudFreeTierUsageThresholdJob;
+  };
   [QueueName.ExperimentCreate]: {
     timestamp: Date;
     id: string;
@@ -566,5 +584,11 @@ export type TQueueJobTypes = {
     id: string;
     payload: NotificationEventType;
     name: QueueJobs.NotificationJob;
+  };
+  [QueueName.DorisSplitTableProvisioningQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: { projectId: string };
+    name: QueueJobs.DorisSplitTableProvisioningJob;
   };
 };

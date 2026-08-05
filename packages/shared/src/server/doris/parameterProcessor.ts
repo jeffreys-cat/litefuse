@@ -1,4 +1,4 @@
-import { convertDateToAnalyticsDateTime } from "../repositories/analytics";
+import { convertDateToAnalyticsDateTime } from "../repositories/analyticsDateTime";
 
 /**
  * Unified parameter processor for Doris SQL queries

@@ -4,7 +4,13 @@ import {
   protectedProjectProcedure,
 } from "@/src/server/api/trpc";
 import { dorisClient } from "@langfuse/shared/src/server";
-import { isLangfuseDatabase, injectProjectIdFilter } from "./queryUtils";
+import { TRPCError } from "@trpc/server";
+import {
+  isLangfuseDatabase,
+  injectProjectIdFilter,
+  findForeignSplitTables,
+  filterVisibleTables,
+} from "./queryUtils";
 
 function escapeIdentifier(value: string) {
   return value.replace(/`/g, "``");
@@ -33,7 +39,15 @@ export const discoverRouter = createTRPCRouter({
       const rows = await dorisClient({ database: input.database }).query(
         `SHOW TABLES FROM \`${escapeIdentifier(input.database)}\``,
       );
-      return { rows };
+      // Hide other projects' split tables so they can't be enumerated (their
+      // cuid suffix would otherwise leak, and be queryable — see `query`).
+      const visible = isLangfuseDatabase(input.database)
+        ? filterVisibleTables(
+            rows as Record<string, unknown>[],
+            input.projectId,
+          )
+        : rows;
+      return { rows: visible };
     }),
 
   fields: protectedProjectProcedure
@@ -86,6 +100,19 @@ export const discoverRouter = createTRPCRouter({
         sql = trimmed.slice(useMatch[0].length).trim();
       }
 
+      if (isLangfuseDatabase(database)) {
+        // Hard allowlist (design §五 / review B-1): reject any reference to
+        // another project's split table BEFORE execution. No project_id filter
+        // can make cross-tenant access safe, so this is a rejection, not a
+        // rewrite. Scans the whole SQL (subqueries/JOINs included).
+        const foreign = findForeignSplitTables(sql, input.projectId);
+        if (foreign.length > 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Access denied: query references another project's tables: ${foreign.join(", ")}`,
+          });
+        }
+      }
       const finalSql = isLangfuseDatabase(database)
         ? injectProjectIdFilter(sql, input.projectId)
         : sql;

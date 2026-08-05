@@ -26,5 +26,5 @@ CREATE TABLE IF NOT EXISTS dataset_run_items_rmt (
 UNIQUE KEY(`project_id`, `dataset_id`, `dataset_run_id`, `id`)
 DISTRIBUTED BY HASH(project_id) BUCKETS 8
 PROPERTIES (
-"replication_allocation" = "tag.location.default: 1"
+"replication_allocation" = "tag.location.default: 3"
 );

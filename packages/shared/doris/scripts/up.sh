@@ -26,6 +26,22 @@ if [ -z "${DORIS_USER}" ]; then
     export DORIS_USER="root"
 fi
 
+# Table replication factor. Migration files carry the reliability-safe default
+# (3); at apply time every "tag.location.default: N" is rewritten to this
+# value. Set to 1 for single-BE dev boxes and for SelectDB Cloud /
+# compute-storage-separated Doris (cloud enforces single replica — durability
+# comes from object storage there, not from tablet replicas).
+if [ -z "${DORIS_REPLICATION_NUM}" ]; then
+    export DORIS_REPLICATION_NUM="3"
+fi
+case "${DORIS_REPLICATION_NUM}" in
+    ''|*[!0-9]*)
+        echo "Error: DORIS_REPLICATION_NUM must be a positive integer, got '${DORIS_REPLICATION_NUM}'"
+        exit 1
+        ;;
+esac
+echo "Using replication factor: ${DORIS_REPLICATION_NUM} (DORIS_REPLICATION_NUM)"
+
 # Parse DORIS_FE_HTTP_URL to extract protocol and host using POSIX-compatible methods.
 case "${DORIS_FE_HTTP_URL}" in
     *://*)
@@ -48,7 +64,16 @@ echo "Connecting to Doris at ${DORIS_HTTP_PROTOCOL}://${DORIS_HOST}:${DORIS_PORT
 echo "Debug: DORIS_USER=${DORIS_USER}, DORIS_PASSWORD=${DORIS_PASSWORD}"
 
 # Build MySQL connection arguments
-MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP --ssl=0"
+# SSL-off flag differs by client flavor and neither is universal:
+# Oracle mysql 8/9 only accepts --ssl-mode=DISABLED (--ssl was removed),
+# MariaDB / older mysql clients only accept --ssl=0 (--ssl-mode unknown).
+# Probe the client's help output and pick the flag it supports.
+if mysql --help 2>&1 | grep -q -- "--ssl-mode"; then
+    SSL_ARG="--ssl-mode=DISABLED"
+else
+    SSL_ARG="--ssl=0"
+fi
+MYSQL_ARGS="-h${DORIS_HOST} -P${DORIS_PORT} -u${DORIS_USER} --protocol=TCP ${SSL_ARG}"
 if [ -n "${DORIS_PASSWORD}" ]; then
     MYSQL_ARGS="${MYSQL_ARGS} -p${DORIS_PASSWORD}"
 fi
@@ -72,7 +97,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 DUPLICATE KEY(version)
 DISTRIBUTED BY HASH(version) BUCKETS 1
 PROPERTIES (
-    "replication_allocation" = "tag.location.default: 1"
+    "replication_allocation" = "tag.location.default: ${DORIS_REPLICATION_NUM}"
 );
 EOF
 
@@ -113,8 +138,10 @@ for migration_file in $(ls ${MIGRATION_DIR}/*.up.sql | sort); do
 
     echo "  Applying migration ${version}..."
 
-    # Execute the migration
-    mysql ${MYSQL_ARGS} "${DORIS_DB}" < "${migration_file}"
+    # Execute the migration, rewriting the replication factor to the
+    # configured value (files carry the safe default 3).
+    sed -E "s/tag\.location\.default: [0-9]+/tag.location.default: ${DORIS_REPLICATION_NUM}/g" "${migration_file}" \
+        | mysql ${MYSQL_ARGS} "${DORIS_DB}"
 
     if [ $? -eq 0 ]; then
         # Mark migration as applied

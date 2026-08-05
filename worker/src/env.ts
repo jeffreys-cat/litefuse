@@ -65,6 +65,7 @@ const EnvSchema = z.object({
   EMAIL_FROM_ADDRESS: z.string().optional(),
   SMTP_CONNECTION_URL: z.string().optional(),
   CLOUD_CRM_EMAIL: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().optional(),
   LITEFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()
@@ -89,6 +90,13 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(10_000),
+  // Lane-domain lease TTL (Stage 1.4 / design F7): the single leader for all
+  // project lanes. Kept SHORTER than the per-shard lock so a stalled leader is
+  // taken over fast (≤ this) — data waits in pending, only cut latency spikes.
+  LITEFUSE_OTEL_LANE_DOMAIN_LEASE_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(5_000),
   LITEFUSE_OTEL_GROUPER_TICK_MS: z.coerce.number().positive().default(200),
   // Self-contained group job (design §3.3): per-worker semaphores.
   // TRANSFORM bounds concurrent S3 download + JSON.parse (event-loop/heap
@@ -107,6 +115,13 @@ const EnvSchema = z.object({
     .default(3 * 24 * 60 * 60 * 1000),
   LITEFUSE_OTEL_DLQ_MAX_REDRIVES: z.coerce.number().positive().default(5),
   LITEFUSE_OTEL_DLQ_BATCH_LIMIT: z.coerce.number().positive().default(500),
+  // PG completion-ledger retention. MUST stay ABOVE the reconcile re-inject
+  // threshold (--older-than-hours, default 80h) or the backstop manufactures
+  // duplicates: a completed file whose ledger row expired, but whose
+  // registered key (4d TTL) is still alive, classifies as reinject and gets
+  // re-ingested. Ideally >= the reconcile scan window (8d) so completed
+  // files never even degrade into audit noise. Default 10 days.
+  LITEFUSE_OTEL_LEDGER_RETENTION_DAYS: z.coerce.number().positive().default(10),
   LITEFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: z.coerce
     .number()
     .positive()
@@ -266,6 +281,9 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED: z
+    .enum(["true", "false"])
+    .default("true"),
+  QUEUE_CONSUMER_DORIS_SPLIT_TABLE_PROVISIONING_QUEUE_IS_ENABLED: z
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_BATCH_EXPORT_QUEUE_IS_ENABLED: z

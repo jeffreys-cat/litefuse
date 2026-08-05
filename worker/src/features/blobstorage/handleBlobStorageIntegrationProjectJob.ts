@@ -25,6 +25,7 @@ import {
 import { decrypt } from "@langfuse/shared/encryption";
 import { randomUUID } from "crypto";
 import { env } from "../../env";
+import { tableFor } from "@langfuse/shared/src/server";
 
 const getMinTimestampForExport = async (
   projectId: string,
@@ -50,7 +51,7 @@ const getMinTimestampForExport = async (
               SELECT min(UNIX_TIMESTAMP(ts)) * 1000 as min_timestamp
               FROM (
                 SELECT min(start_time) as ts
-                FROM events_full
+                FROM ${tableFor(projectId, "events_full")}
                 WHERE project_id = {projectId: String}
 
                 UNION ALL

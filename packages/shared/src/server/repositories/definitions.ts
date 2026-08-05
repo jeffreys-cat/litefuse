@@ -715,33 +715,24 @@ export const eventRecordBaseSchema = z.object({
   input_trim: z.string().nullish(),
   output_trim: z.string().nullish(),
 
-  // Flattened metadata (parallel arrays, matches langfuse-main V4 events_full).
-  // The previous fork shape — a separate `metadata` Map plus `metadata_hashes`
-  // + `metadata_long_values` — was a transitional design that langfuse-main
-  // has since dropped. Doris events_full only carries the two parallel arrays.
-  metadata_names: z.array(z.string()).default([]),
-  metadata_values: z.array(z.string().nullish()).default([]),
-  // Map mirror of the parallel arrays above. Carried so (a) trace-list metadata
-  // filtering uses native map access `metadata['key'] <op> value` — the only
-  // representation that supports the per-key value operators (=, contains,
-  // starts/ends with) correctly — and (b) the trace-list MV can expose
-  // MAX(IF(parent_span_id='', CAST(metadata AS STRING), NULL)) as a single
-  // rewrite-friendly column for the list preview. Arrays stay for byId detail /
-  // existing readers.
-  metadata: z.record(z.string(), z.string()).nullish(),
+  // Metadata as the raw (possibly nested) object, stored in the events_full
+  // `metadata` VARIANT column. Read the whole map via
+  // json_object_flatten(metadata) (dot-path keys); filter per key via
+  // metadata['key'] (a dotted key a.b.c is adapted to the nested path
+  // metadata['a']['b']['c'] by the query builder). Replaces the old
+  // metadata_names/metadata_values parallel arrays + Map mirror.
+  metadata: z.record(z.string(), z.unknown()).nullish(),
 
   // Experiment properties
   experiment_id: z.string().nullish(),
   experiment_name: z.string().nullish(),
-  experiment_metadata_names: z.array(z.string()).default([]),
-  experiment_metadata_values: z.array(z.string().nullish()).default([]),
+  experiment_metadata: z.record(z.string(), z.unknown()).nullish(),
   experiment_description: z.string().nullish(),
   experiment_dataset_id: z.string().nullish(),
   experiment_item_id: z.string().nullish(),
   experiment_item_version: dorisStringDateSchema.nullish(),
   experiment_item_expected_output: z.string().nullish(),
-  experiment_item_metadata_names: z.array(z.string()).default([]),
-  experiment_item_metadata_values: z.array(z.string().nullish()).default([]),
+  experiment_item_metadata: z.record(z.string(), z.unknown()).nullish(),
   experiment_item_root_span_id: z.string().nullish(),
 
   // Source metadata (Instrumentation)
@@ -757,7 +748,6 @@ export const eventRecordBaseSchema = z.object({
   // Generic props
   blob_storage_file_path: z.string(),
   event_bytes: z.number(),
-  is_deleted: z.number(),
 });
 
 // Base type for event records - used by converters that work with both Insert and Read types
@@ -776,9 +766,10 @@ export const eventRecordReadSchema = eventRecordBaseSchema.extend({
   start_time: dorisStringDateSchema,
   end_time: dorisStringDateSchema.nullish(),
   completion_start_time: dorisStringDateSchema.nullish(),
+  // Single audit timestamp (events_full migration 0037): created_at ==
+  // updated_at == event_ts at write, so one column serves all; domain updatedAt
+  // maps from created_at.
   created_at: dorisStringDateSchema,
-  updated_at: dorisStringDateSchema,
-  event_ts: dorisStringDateSchema,
 });
 export type EventRecordReadType = z.infer<typeof eventRecordReadSchema>;
 
@@ -793,17 +784,17 @@ export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
   end_time: z.number().nullish(),
   completion_start_time: z.number().nullish(),
   created_at: z.number(),
-  updated_at: z.number(),
-  event_ts: z.number(),
 });
 export type EventRecordInsertType = z.infer<typeof eventRecordInsertSchema>;
 
 // traces_scalar: one row per trace — the root span's scalar fields, dual-written
 // at ingestion next to events_full (see migration 0039). Timestamps are epoch-ms
-// numbers like the other *InsertType shapes; start_time_date is derived by
-// formatRecordForDoris from start_time. Empty-string user_id/session_id/release/
-// version are normalized to null at the dual-write site so filters match the
-// MV's NULLIF(x, '') semantics.
+// numbers like the other *InsertType shapes. Empty-string user_id/session_id/
+// release/version are normalized to null at the dual-write site so filters match
+// the MV's NULLIF(x, '') semantics. Partition prunes natively from start_time (no
+// start_time_date mirror). Unlike events_full (append-only), this UNIQUE+MoW
+// table is mutated post-ingestion (bookmark/public/tags UPDATEs), so it keeps a
+// real updated_at ("last modified") distinct from created_at.
 export const traceScalarRecordInsertSchema = z.object({
   project_id: z.string(),
   id: z.string(),
@@ -818,14 +809,15 @@ export const traceScalarRecordInsertSchema = z.object({
   bookmarked: z.boolean().nullish(),
   public: z.boolean().nullish(),
   tags: z.array(z.string()).nullish(),
-  metadata: z.record(z.string(), z.string()).nullish(),
+  // Raw (possibly nested) object → traces_scalar `metadata` VARIANT (mirrors
+  // events_full; read via json_object_flatten, filter via nested path).
+  metadata: z.record(z.string(), z.unknown()).nullish(),
   // 200-char ingestion-precomputed previews — serve traces.byId
   // verbosity="compact" (the trace-list cell preview) as a flat point read.
   input_trim: z.string().nullish(),
   output_trim: z.string().nullish(),
   created_at: z.number(),
   updated_at: z.number(),
-  event_ts: z.number(),
 });
 export type TraceScalarRecordInsertType = z.infer<
   typeof traceScalarRecordInsertSchema

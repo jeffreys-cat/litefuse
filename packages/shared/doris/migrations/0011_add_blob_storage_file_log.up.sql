@@ -16,5 +16,5 @@ CREATE TABLE IF NOT EXISTS blob_storage_file_log
 UNIQUE KEY(project_id,entity_type,entity_id,event_id)
 DISTRIBUTED BY HASH(project_id,entity_type,entity_id,event_id) BUCKETS AUTO
 PROPERTIES (
-"replication_allocation" = "tag.location.default: 1"
+"replication_allocation" = "tag.location.default: 3"
 );
