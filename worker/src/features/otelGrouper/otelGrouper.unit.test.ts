@@ -349,16 +349,12 @@ describe("OtelGrouper orchestration (real Redis)", () => {
   );
 });
 
-// The lane domain only engages when the split mode is on — the shared env
-// parses it at import (before any test-time override could reach the shared
-// dist), so this case runs only when the process was launched with
-// LITEFUSE_DORIS_TABLE_SPLIT_MODE=project_id_with_rule, and skips otherwise
-// (same "skip when the prerequisite isn't provided" pattern as itR for Redis).
-const splitModeOn =
-  process.env.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule";
+// The lane domain is always engaged (table split is universal); it just needs
+// real Redis, so this case skips only when Redis is unavailable (same "skip when
+// the prerequisite isn't provided" pattern as itR).
 const itLane = (name: string, fn: () => Promise<void>) =>
   it(name, async (ctx: TestContext) => {
-    if (!redisUp || !splitModeOn) return ctx.skip();
+    if (!redisUp) return ctx.skip();
     await fn();
   });
 
@@ -366,8 +362,8 @@ describe("OtelGrouper lane domain (real Redis, Stage 1.4)", () => {
   itLane("cuts a split project's lane into a single-project group", async () => {
     const pid = `test${randomUUID().slice(0, 8)}`;
     const lane = `lane-${pid}`;
-    // Split project in the cache + registered in the lane index.
-    __setSplitSnapshotForTest([[pid, { retentionDays: null }]]);
+    // Split project LIVE in the cache + registered in the lane index.
+    __setSplitSnapshotForTest([[pid, true]]);
     await removeLaneFromIndex(redis, lane);
     await addLaneToIndex(redis, lane);
     const e = entry({

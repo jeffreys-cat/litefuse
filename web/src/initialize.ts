@@ -9,14 +9,12 @@ import {
   logger,
   startSplitCacheRefresh,
 } from "@langfuse/shared/src/server";
-import { env as sharedEnv } from "@langfuse/shared/src/env";
 
-// Doris per-project table-split: keep the split-project snapshot warm so the
-// synchronous isSplitProject can answer from memory. Only project_id_with_rule
-// consults the PG control table; the other modes need no refresh loop.
-if (sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule") {
-  startSplitCacheRefresh();
-}
+// Doris per-project table-split (universal): keep the split-project snapshot
+// warm so the synchronous isSplitProject can answer from memory. Loads the PG
+// control table; an empty table just means every project reads the shared
+// tables until it is designated + provisioned.
+startSplitCacheRefresh();
 
 // Warn if LITEFUSE_INIT_* variables are set but LITEFUSE_INIT_ORG_ID is missing
 if (!env.LITEFUSE_INIT_ORG_ID) {

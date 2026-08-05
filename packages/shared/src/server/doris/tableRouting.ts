@@ -1,4 +1,3 @@
-import { env } from "../../env";
 import { DorisTableName } from "./schema";
 import {
   splitProjectInCache,
@@ -11,42 +10,34 @@ import {
  *
  * THREE functions, each one concern, none named `shard` (that word stays
  * reserved for BullMQ queue sharding — design §4.2d):
- *   - isSplitProject(pid): does this project get its own tables?
+ *   - isSplitProject(pid): does this project's data live in its own tables?
  *   - tableFor(pid, logical): the PHYSICAL table name to read/write.
  *   - laneFor(pid): the grouping-key (Redis pending lane) a file registers into.
  *
- * Stage 0 ships with LITEFUSE_DORIS_TABLE_SPLIT_MODE defaulting to "none", so
- * tableFor is the identity of today's shared-table names and laneFor is a no-op
- * placeholder — the 300+ literal call sites can be migrated to these functions
- * with zero behaviour change. Stage 1 wires the `project_id_with_rule` control
- * table and the actual lane routing.
+ * Split is universal — every project is designated at creation — but per
+ * project: a project routes to its own tables only once they are provisioned
+ * (LIVE); until then it reads the shared tables and its writes are held on its
+ * lane. The control table doris_project_table_split (cached in tableSplitCache)
+ * is the source of truth for that live/pending state, so an existing project
+ * that has not been designated/provisioned yet keeps using the shared tables.
  */
 
 /**
- * Whether a project's telemetry lives in its own `<logical>_<projectId>`
- * tables (vs the shared tables).
+ * Whether a project's telemetry lives in its own `<logical>_<projectId>` tables
+ * (vs the shared tables) — synchronous, LIVE-only (the read / group-load sites).
  *
- * - none                 → always false (current behaviour / rollback position)
- * - project_id           → always true (only safe for bounded project counts)
- * - project_id_with_rule → per the PG control table doris_project_table_split
- *   (Stage 1). Stage 0 stub returns false until that table exists.
+ * A project is LIVE once its tables are provisioned (split=true in the control
+ * table). A project that is not yet designated (existing, pre-backfill) or still
+ * provisioning (PENDING) reads as NOT live here → it keeps using the shared
+ * tables. The write path uses laneForIngestion / resolveIngestionSplitState,
+ * which route a PENDING project to its lane so its rows never leak to shared.
+ *
+ * Reads the cached snapshot (tableSplitCache): LIVE (split=true) projects only,
+ * a miss = not live. Cold cache (never loaded) reads as not-live; the write path
+ * gates on isSplitCacheReady() so it never misroutes on a cold/failed cache.
  */
-export const isSplitProject = (projectId: string): boolean => {
-  switch (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE) {
-    case "none":
-      return false;
-    case "project_id":
-      return true;
-    case "project_id_with_rule":
-      // Cached snapshot of doris_project_table_split (tableSplitCache): only
-      // split=true projects are held, a miss = not split (no negative cache).
-      // Cold cache (never loaded) reads as not-split; the write path gates on
-      // isSplitCacheReady() so it never misroutes on a cold/failed cache.
-      return splitProjectInCache(projectId);
-    default:
-      return false;
-  }
-};
+export const isSplitProject = (projectId: string): boolean =>
+  splitProjectInCache(projectId);
 
 /**
  * Physical table name for a project's logical table.
@@ -155,21 +146,6 @@ export const laneForDesignated = (projectId: string): string | null =>
 export const laneForIngestion = async (
   projectId: string,
 ): Promise<string | null> => {
-  // Mode switch mirrors isSplitProject — never touch the cache / PG in the
-  // modes that don't use the control table (else `none`/`project_id`, which
-  // don't run the refresh loop, would PG-probe every project's first write).
-  switch (env.LITEFUSE_DORIS_TABLE_SPLIT_MODE) {
-    case "none":
-      return null;
-    case "project_id":
-      return `lane-${projectId}`;
-    case "project_id_with_rule": {
-      const state = await resolveIngestionSplitState(projectId);
-      return state === "live" || state === "pending"
-        ? `lane-${projectId}`
-        : null;
-    }
-    default:
-      return null;
-  }
+  const state = await resolveIngestionSplitState(projectId);
+  return state === "live" || state === "pending" ? `lane-${projectId}` : null;
 };

@@ -1,7 +1,8 @@
 -- Per-project Doris table-split control table (docs/project-per-table-*.md).
 -- One row per project routed to its own events_full_<pid> / traces_scalar_<pid>
--- / trace_metrics_agg_<pid> tables. isSplitProject consults a cached snapshot of
--- this table when LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
+-- / trace_metrics_agg_<pid> tables. Table split is universal (every project is
+-- designated at creation); isSplitProject consults a cached snapshot of this
+-- table and routes a project to its own tables once provisioned (split=true).
 CREATE TABLE "doris_project_table_split" (
     "project_id" TEXT NOT NULL,
     "split" BOOLEAN NOT NULL DEFAULT false,

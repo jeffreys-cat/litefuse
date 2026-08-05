@@ -7,7 +7,8 @@ import { createNewRedisInstance } from "../redis/redis";
  * In-memory snapshot of the doris_project_table_split control table, so that
  * isSplitProject can stay SYNCHRONOUS (it backs tableFor, called at hundreds of
  * sync SQL-build sites — making it async would ripple through the whole query
- * layer). Only relevant when LITEFUSE_DORIS_TABLE_SPLIT_MODE = project_id_with_rule.
+ * layer). Split is universal; this snapshot is what tells each project apart:
+ * a project routes to its own tables only once it is LIVE here.
  *
  * Design invariants (docs/project-per-table-*.md §二):
  *   - NO negative caching: the snapshot holds ONLY split=true projects; a miss

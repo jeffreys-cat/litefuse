@@ -11,12 +11,7 @@ import {
   type Organization,
   type Prisma,
 } from "@langfuse/shared/src/db";
-import {
-  getBillingCycleEnd,
-  logger,
-  provisionSplitForPaidOrganization,
-  redis,
-} from "@langfuse/shared/src/server";
+import { getBillingCycleEnd, logger, redis } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 import type { Session } from "next-auth";
 import Stripe from "stripe";
@@ -765,25 +760,9 @@ export async function syncSubscriptionToOrganization(
   });
 
   await new ApiAuthService(prisma, redis).invalidateCachedOrgApiKeys(org.id);
-
-  // Billing-driven Doris table split: on the transition INTO a paid plan,
-  // provision each of the org's projects onto its own tables. Best-effort — a
-  // Doris/queue hiccup must never fail the Stripe webhook; provisioning is
-  // idempotent and re-driven by the new-project hook + grouper self-heal. Split
-  // is sticky: a later cancellation does NOT un-split (see design note).
-  const planChanged = previousPlan !== syncState.resolvedPlan;
-  if (syncState.paid && planChanged) {
-    await provisionSplitForPaidOrganization(org.id).catch((e) =>
-      logger.error(
-        `[billing] table-split provisioning for paid org ${org.id} failed`,
-        e,
-      ),
-    );
-  }
-
   return {
     orgId: org.id,
-    planChanged,
+    planChanged: previousPlan !== syncState.resolvedPlan,
   };
 }
 

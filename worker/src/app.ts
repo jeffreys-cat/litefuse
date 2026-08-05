@@ -35,15 +35,13 @@ import {
   CloudUsageMeteringQueue,
   CloudFreeTierUsageThresholdQueue,
 } from "@langfuse/shared/src/server";
-import { env as sharedEnv } from "@langfuse/shared/src/env";
 import { env } from "./env";
 
-// Doris per-project table-split: keep the split-project snapshot warm so the
-// synchronous isSplitProject (and the write-path readiness gate) can answer
-// from memory. Only project_id_with_rule consults the PG control table.
-if (sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule") {
-  startSplitCacheRefresh();
-}
+// Doris per-project table-split (universal): keep the split-project snapshot
+// warm so the synchronous isSplitProject (and the write-path readiness gate)
+// can answer from memory. Loads the PG control table; an empty table just means
+// every project reads the shared tables until it is designated + provisioned.
+startSplitCacheRefresh();
 import { ingestionQueueProcessorBuilder } from "./queues/ingestionQueue";
 import { BackgroundMigrationManager } from "./backgroundMigrations/backgroundMigrationManager";
 import { prisma } from "@langfuse/shared/src/db";

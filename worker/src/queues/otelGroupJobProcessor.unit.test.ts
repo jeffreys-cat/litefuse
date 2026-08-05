@@ -12,6 +12,7 @@ import {
   labelForGroupTable,
   __setSplitSnapshotForTest,
   handleMissingSplitTable,
+  getSplitRetentionDays,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
   type StreamLoadBodySource,
@@ -20,12 +21,19 @@ import { ForbiddenError } from "@langfuse/shared";
 
 // Keep the whole shared barrel real (computeGroupId, labels, split routing,
 // __setSplitSnapshotForTest all read/mutate the real module state) — only stub
-// handleMissingSplitTable, which otherwise hits PG. The scalar/events
-// missing-table three-way is exercised by driving its return value per test.
+// the two functions that otherwise hit PG: handleMissingSplitTable (its
+// scalar/events missing-table three-way is driven per test) and
+// getSplitRetentionDays (retention is single-sourced on Project.retentionDays in
+// PG; default to "effectively no TTL" so only the retention test opts into a
+// finite window).
 vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@langfuse/shared/src/server")>();
-  return { ...actual, handleMissingSplitTable: vi.fn() };
+  return {
+    ...actual,
+    handleMissingSplitTable: vi.fn(),
+    getSplitRetentionDays: vi.fn(async () => Number.MAX_SAFE_INTEGER),
+  };
 });
 
 /**
@@ -282,22 +290,18 @@ describe("isDeterministicIngestError", () => {
   });
 });
 
-// Split-target routing + retention filter (Stage 1.6). The mode is parsed at
-// import in the shared dist, so these run only when the process was launched
-// with LITEFUSE_DORIS_TABLE_SPLIT_MODE=project_id_with_rule; skipped otherwise.
-const splitMode =
-  process.env.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule";
-const itSplit = (name: string, fn: () => Promise<void>) =>
-  it(name, async (ctx) => {
-    if (!splitMode) return ctx.skip();
-    await fn();
+// Split-target routing + retention filter. Table split is universal now, so
+// these run in the normal suite: prime the cache snapshot with a LIVE project
+// (split=true) and its loads route to the per-project tables. Retention is read
+// from PG via the mocked getSplitRetentionDays (default: effectively no TTL).
+describe("processOtelGroupJob (split targets)", () => {
+  afterEach(() => {
+    __setSplitSnapshotForTest(null); // never leak into other tests
+    vi.mocked(getSplitRetentionDays).mockResolvedValue(Number.MAX_SAFE_INTEGER);
   });
 
-describe("processOtelGroupJob (Stage 1.6 split targets)", () => {
-  afterEach(() => __setSplitSnapshotForTest(null)); // never leak into other tests
-
-  itSplit("routes a split project's loads to events_full_<pid>/traces_scalar_<pid>", async () => {
-    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+  it("routes a split project's loads to events_full_<pid>/traces_scalar_<pid>", async () => {
+    __setSplitSnapshotForTest([["p1", true]]);
     const payload = payloadFor(["f1.json"]);
     const { deps, loads } = makeDeps();
     await processOtelGroupJob(payload, deps);
@@ -309,8 +313,9 @@ describe("processOtelGroupJob (Stage 1.6 split targets)", () => {
     expect(tables).not.toContain("events_full");
   });
 
-  itSplit("drops over-retention rows before the split load (row dead-letter)", async () => {
-    __setSplitSnapshotForTest([["p1", { retentionDays: 7 }]]);
+  it("drops over-retention rows before the split load (row dead-letter)", async () => {
+    __setSplitSnapshotForTest([["p1", true]]);
+    vi.mocked(getSplitRetentionDays).mockResolvedValue(7); // 7d retention
     const payload = payloadFor(["f1.json"]);
     const oldTs = Date.now() - 30 * 86_400_000; // 30d old, retention 7d
     const nowTs = Date.now();
@@ -332,8 +337,8 @@ describe("processOtelGroupJob (Stage 1.6 split targets)", () => {
     expect(eventsLoad!.rows).toHaveLength(1);
   });
 
-  itSplit("shared (non-split) project still targets the shared table", async () => {
-    __setSplitSnapshotForTest([["other", { retentionDays: null }]]); // p1 NOT split
+  it("shared (non-split) project still targets the shared table", async () => {
+    __setSplitSnapshotForTest([["other", true]]); // p1 NOT split
     const payload = payloadFor(["f1.json"]);
     const { deps, loads } = makeDeps();
     await processOtelGroupJob(payload, deps);
@@ -369,8 +374,8 @@ describe("processOtelGroupJob (Stage 1 #4: scalar missing-table three-way)", () 
     return { deps, loads };
   };
 
-  itSplit("reprovision/pg-error → job throws (events committed, ledger withheld so replay heals)", async () => {
-    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+  it("reprovision/pg-error → job throws (events committed, ledger withheld so replay heals)", async () => {
+    __setSplitSnapshotForTest([["p1", true]]);
     vi.mocked(handleMissingSplitTable).mockResolvedValue("retry");
     const { deps, loads } = scalarMissingDeps();
 
@@ -384,8 +389,8 @@ describe("processOtelGroupJob (Stage 1 #4: scalar missing-table three-way)", () 
     expect(handleMissingSplitTable).toHaveBeenCalledWith("p1");
   });
 
-  itSplit("tombstoned project → dead-letter + ledger, NO throw (no infinite retry)", async () => {
-    __setSplitSnapshotForTest([["p1", { retentionDays: null }]]);
+  it("tombstoned project → dead-letter + ledger, NO throw (no infinite retry)", async () => {
+    __setSplitSnapshotForTest([["p1", true]]);
     vi.mocked(handleMissingSplitTable).mockResolvedValue("skip");
     const { deps, loads } = scalarMissingDeps();
 

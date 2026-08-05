@@ -10,8 +10,7 @@ import { laneFor } from "@langfuse/shared/src/server";
  * split project's registered-key evidence (misclassifying a lost file as
  * `audit` instead of `reinject`) and (b) re-injects into the wrong pool. These
  * two helpers restore lane awareness; both degrade to the original shard-only
- * behaviour when `resolveLane` returns null (non-split project, or
- * LITEFUSE_DORIS_TABLE_SPLIT_MODE = none).
+ * behaviour when `resolveLane` returns null (project not designated for split).
  *
  * `resolveLane` is injected (defaults to the real `laneFor`) purely so these
  * stay pure/unit-testable without standing up the split-cache + env state.

@@ -1,14 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// env is module-level-parsed; a hoisted holder lets each case flip the mode.
-const { envMock, splitCacheMock } = vi.hoisted(() => ({
-  envMock: { LITEFUSE_DORIS_TABLE_SPLIT_MODE: "none" } as {
-    LITEFUSE_DORIS_TABLE_SPLIT_MODE: string;
-  },
+// Table split is universal: isSplitProject reads ONLY the split cache (a project
+// is split once it is LIVE in the control-table snapshot). Mock the cache so the
+// live/not-live decision can be driven without PG.
+const { splitCacheMock } = vi.hoisted(() => ({
   splitCacheMock: { members: new Set<string>() },
 }));
-vi.mock("../../../env", () => ({ env: envMock }));
-// Mock the split cache so project_id_with_rule can be driven without PG.
 vi.mock("../tableSplitCache", () => ({
   splitProjectInCache: (projectId: string) =>
     splitCacheMock.members.has(projectId),
@@ -26,17 +23,13 @@ import {
 const PID = "cmqiwxsca0006pj070fdkn0vd";
 
 beforeEach(() => {
-  envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = "none";
   splitCacheMock.members = new Set<string>();
 });
 
 describe("tableRouting", () => {
-  describe("mode=none (Stage 0 identity — zero behaviour change)", () => {
-    it("isSplitProject is false", () => {
+  describe("project NOT live in the split cache (pre-provision / pre-backfill)", () => {
+    it("isSplitProject is false → shared tables", () => {
       expect(isSplitProject(PID)).toBe(false);
-    });
-
-    it("tableFor returns the shared logical name for splittable tables", () => {
       expect(tableFor(PID, "events_full")).toBe("events_full");
       expect(tableFor(PID, "traces_scalar")).toBe("traces_scalar");
     });
@@ -50,9 +43,9 @@ describe("tableRouting", () => {
     });
   });
 
-  describe("mode=project_id (every project split)", () => {
+  describe("project LIVE in the split cache", () => {
     beforeEach(() => {
-      envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = "project_id";
+      splitCacheMock.members = new Set([PID]);
     });
 
     it("isSplitProject is true", () => {
@@ -71,29 +64,8 @@ describe("tableRouting", () => {
     it("laneFor returns the dedicated lane", () => {
       expect(laneFor(PID)).toBe(`lane-${PID}`);
     });
-  });
 
-  describe("mode=project_id_with_rule (control table via cache)", () => {
-    beforeEach(() => {
-      envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = "project_id_with_rule";
-    });
-
-    it("project NOT in the split cache → not split (cold cache reads shared)", () => {
-      expect(isSplitProject(PID)).toBe(false);
-      expect(tableFor(PID, "events_full")).toBe("events_full");
-      expect(laneFor(PID)).toBeNull();
-    });
-
-    it("project IN the split cache → split", () => {
-      splitCacheMock.members = new Set([PID]);
-      expect(isSplitProject(PID)).toBe(true);
-      expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
-      expect(tableFor(PID, "traces_scalar")).toBe(`traces_scalar_${PID}`);
-      expect(metricsAggTableFor(PID)).toBe(`trace_metrics_agg_${PID}`);
-      expect(laneFor(PID)).toBe(`lane-${PID}`);
-    });
-
-    it("only cached projects split — a different project stays shared", () => {
+    it("only live projects split — a different project stays shared", () => {
       splitCacheMock.members = new Set(["other-project"]);
       expect(isSplitProject(PID)).toBe(false);
       expect(tableFor(PID, "events_full")).toBe("events_full");
@@ -116,10 +88,9 @@ describe("tableRouting", () => {
       expect(toLogicalTable("trace_metrics_agg")).toBe("trace_metrics_agg");
     });
 
-    it("round-trips tableFor in both modes", () => {
-      envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = "none";
+    it("round-trips tableFor whether live or not", () => {
       expect(toLogicalTable(tableFor(PID, "events_full"))).toBe("events_full");
-      envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = "project_id";
+      splitCacheMock.members = new Set([PID]);
       expect(toLogicalTable(tableFor(PID, "events_full"))).toBe("events_full");
       expect(toLogicalTable(tableFor(PID, "traces_scalar"))).toBe(
         "traces_scalar",
@@ -128,9 +99,9 @@ describe("tableRouting", () => {
   });
 
   describe("sharedTableFor (cross-project escape hatch)", () => {
-    it("returns the logical name in every split mode (always shared)", () => {
-      for (const mode of ["none", "project_id", "project_id_with_rule"]) {
-        envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = mode;
+    it("returns the logical name whether or not the project is split", () => {
+      for (const members of [new Set<string>(), new Set([PID])]) {
+        splitCacheMock.members = members;
         expect(sharedTableFor("events_full")).toBe("events_full");
         expect(sharedTableFor("traces_scalar")).toBe("traces_scalar");
       }
@@ -138,13 +109,11 @@ describe("tableRouting", () => {
   });
 
   describe("non-splittable tables are never suffixed", () => {
-    it("returns the logical name regardless of split mode", () => {
-      for (const mode of ["none", "project_id", "project_id_with_rule"]) {
-        envMock.LITEFUSE_DORIS_TABLE_SPLIT_MODE = mode;
-        expect(tableFor(PID, "traces")).toBe("traces");
-        expect(tableFor(PID, "observations")).toBe("observations");
-        expect(tableFor(PID, "scores")).toBe("scores");
-      }
+    it("returns the logical name even for a live split project", () => {
+      splitCacheMock.members = new Set([PID]);
+      expect(tableFor(PID, "traces")).toBe("traces");
+      expect(tableFor(PID, "observations")).toBe("observations");
+      expect(tableFor(PID, "scores")).toBe("scores");
     });
   });
 });

@@ -317,11 +317,7 @@ export class OtelGrouper {
     // the only pre-OOM early warning and must not go dark exactly when the leader
     // is down. Only the cut/recover work in tickLanes() needs the domain lease.
     const laneGaugeRedis = this.redis;
-    if (
-      emitGauges &&
-      sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE !== "none" &&
-      laneGaugeRedis
-    ) {
+    if (emitGauges && laneGaugeRedis) {
       try {
         for (const lane of await this.candidateLanes(laneGaugeRedis)) {
           if (this.stopped) return;
@@ -357,7 +353,6 @@ export class OtelGrouper {
    * follow recover — recovering is multi-RTT + can't pipeline with cut).
    */
   private async tickLanes(): Promise<void> {
-    if (sharedEnv.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "none") return;
     const redis = this.redis!;
     // One leader for ALL lanes (shorter TTL → fast takeover of a stalled leader).
     // NOTE: lane backlog gauges are emitted BEFORE this gate, in tickAll(), by

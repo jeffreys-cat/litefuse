@@ -223,10 +223,7 @@ export class OtelIngestionProcessor {
       // route answers 5xx and the SDK re-sends once the cache is warm (the same
       // EO re-send contract as any registration failure; a re-send is a new
       // fileKey, the orphan S3 object is reconciled).
-      if (
-        env.LITEFUSE_DORIS_TABLE_SPLIT_MODE === "project_id_with_rule" &&
-        !isSplitCacheReady()
-      ) {
+      if (!isSplitCacheReady()) {
         throw new Error(
           "otel registration deferred: split-cache not ready (retry to avoid misrouting a split project)",
         );
