@@ -739,7 +739,7 @@ const getObservationsTableInternal = async <T>(
           AVG(COALESCE(CHAR_LENGTH(CAST(o.input AS STRING)), 0)) as avg_input_bytes,
           AVG(COALESCE(CHAR_LENGTH(CAST(o.output AS STRING)), 0)) as avg_output_bytes,
           AVG(
-            COALESCE(CHAR_LENGTH(to_json(o.metadata)), 0)
+            COALESCE(CHAR_LENGTH(json_object_flatten(o.metadata)), 0)
           ) as avg_metadata_bytes
         `
         : `
