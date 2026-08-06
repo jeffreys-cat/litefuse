@@ -4,54 +4,23 @@ import { logger } from "../logger";
 import { createNewRedisInstance } from "../redis/redis";
 
 /**
- * In-memory snapshot of the doris_project_table_split control table, so that
- * isSplitProject can stay SYNCHRONOUS (it backs tableFor, called at hundreds of
- * sync SQL-build sites — making it async would ripple through the whole query
- * layer). Split is universal; this snapshot is what tells each project apart:
- * a project routes to its own tables only once it is LIVE here.
+ * In-memory snapshot of the doris_project_table_split control table.
  *
- * Design invariants (docs/project-per-table-*.md §二):
- *   - NO negative caching: the snapshot holds ONLY split=true projects; a miss
- *     means "not split". A newly-split project appears at the next refresh; there
- *     is no negative entry that could pin a project to the wrong answer.
- *   - Full atomic replace: each refresh swaps in a brand-new Map. A failed
- *     refresh keeps the LAST good snapshot (logged, never overwrite good data
- *     with an error) — or null on cold start.
- *   - Readiness: snapshot === null means "never loaded". Reads tolerate this
- *     (default to the shared table); the WRITE path must gate on
- *     isSplitCacheReady() and fail-and-retry rather than misroute a split
- *     project's rows to the shared table (wired in Stage 1.3/1.6).
+ * Table names are deterministic in the all-split model, so this cache is only a
+ * readiness signal: split=true means the base tables are provisioned and the
+ * grouper may cut the project's lane. A miss means "not live yet"; it never
+ * means "route telemetry to shared tables".
  *
- * Ordering that keeps this safe (Stage 1.2/1.3): the creation hook creates the
- * two BASE tables (events_full_<pid> / traces_scalar_<pid> — fast) BEFORE the
- * control row flips split=true, so once split=true is visible the base tables
- * exist (reads return empty until data; writes have a target). The MV
- * (trace_metrics_agg_<pid>) is provisioned async and gated separately — it only
- * affects the rollup rewrite, not correctness (base queries have a fallback).
- *
- * Staleness window (CLOSED): with periodic refresh alone, a just-flipped split
- * project would keep reading not-split in OTHER processes for up to the refresh
- * interval, and a grouper cut during that lag would route to the SHARED table
- * → stranded rows. Both halves of the fix have landed: the eager Redis-pub/sub
- * invalidation broadcast below (control-table change → every process refreshes
- * immediately) and the write-path fail-and-retry gate on isSplitCacheReady()
- * (OtelIngestionProcessor). So the cross-process staleness window is no longer
- * the constraint.
- *
- * REMAINING operational caveat (until Stage 2): still only flip split=true for a
- * project that is not yet ingesting — NOT because of staleness, but because
- * splitting an ALREADY-ingesting project can poison an in-flight shared-shard
- * group (Stage 1 review #3: a mixed group whose entries[0] just became split
- * routes the whole group to events_full_<pid>). Stage 2 adds the active-project
- * guard; until then, designate at project creation, before the first trace.
+ * Each refresh atomically swaps in a new snapshot. Failed refreshes keep the
+ * last good snapshot, and process startup waits for the first successful load.
  */
 
 // Snapshot of EVERY control row: projectId → split flag.
-//   true  = LIVE    (tables provisioned; route reads/writes to events_full_<pid>)
+//   true  = LIVE    (tables provisioned; grouper may cut the lane)
 //   false = PENDING (designated, tables being provisioned; writes must be held on
 //                    the project's lane, NOT routed to the shared table)
-// A missing key = not designated (route to the shared table). Per-project
-// retention is single-sourced on Project.retentionDays, deliberately NOT cached.
+// A missing key = not designated/live yet. Per-project retention is
+// single-sourced on Project.retentionDays, deliberately NOT cached.
 type SplitSnapshot = ReadonlyMap<string, boolean>;
 
 /** Ingestion routing state for a project (write path). */
@@ -101,9 +70,8 @@ export const getSplitProjectIds = (): string[] => {
   return out;
 };
 
-/** All DESIGNATED project ids (live OR pending). Used by the offline reconcile
- * so a pending project's files re-inject into its lane (held) rather than a
- * shared shard. */
+/** All DESIGNATED project ids (live OR pending). Used by offline reconcile
+ * preflight; per-file routing can always derive a deterministic project lane. */
 export const getDesignatedProjectIds = (): string[] => {
   const s = getSnapshot();
   return s ? [...s.keys()] : [];
@@ -119,13 +87,9 @@ export const splitProjectDesignatedInCache = (projectId: string): boolean =>
 const NEGATIVE_CACHE_CAP = 100_000;
 
 /**
- * Resolve a project's INGESTION routing state (write path only). Cache-first;
- * on a cache MISS (a just-designated project whose pub/sub invalidation has not
- * propagated to this process yet) it falls back to a single PG lookup and caches
- * the result — closing the cross-process cache-propagation window so a paid
- * org's brand-new project can never leak its first rows to the shared table.
- * Async: call only in the (already-async) registration path, never the
- * synchronous isSplitProject/tableFor read sites.
+ * Legacy diagnostic helper for tests and scripts that need to distinguish live
+ * vs pending vs absent control rows. The production ingestion path uses
+ * ensureProjectSplitDesignated and deterministic project lanes instead.
  */
 export const resolveIngestionSplitState = async (
   projectId: string,
@@ -164,7 +128,27 @@ export const refreshSplitCache = async (): Promise<void> => {
   // check in resolveIngestionSplitState precedes the negative check, so a
   // just-designated project is picked up from `next` regardless of a stale
   // negative entry. Clearing every refresh would re-probe PG for every active
-  // non-split project each cycle for no correctness gain.
+  // project without a control row each cycle for no correctness gain.
+};
+
+/**
+ * Cold-start readiness barrier. A process must not serve reads or start queue
+ * consumers until the first authoritative snapshot has loaded successfully.
+ */
+export const initializeSplitCache = async (
+  retryMs: number = 5_000,
+): Promise<void> => {
+  while (!isSplitCacheReady()) {
+    try {
+      await refreshSplitCache();
+    } catch (error) {
+      logger.error("Initial Doris split-cache load failed; retrying", {
+        retryMs,
+        error,
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, retryMs));
+    }
+  }
 };
 
 /**

@@ -27,10 +27,7 @@ import { parseDorisStringArray } from "../utils/dorisArrays";
 import { recordDistribution } from "../instrumentation";
 import { scoresColumnsTableUiColumnDefinitionsForDoris } from "../tableMappings/mapScoresColumnsTable";
 import { scoresTableCols } from "../../tableDefinitions/scoresTable";
-import {
-  convertDateToAnalyticsDateTime,
-  dq,
-} from "./analyticsDateTime";
+import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   queryDoris,
   upsertDoris,
@@ -1489,16 +1486,20 @@ export const getAggregatedScoresForPrompts = async (
 export const getScoreCountsByProjectInCreationInterval = async ({
   start,
   end,
+  projectIds,
 }: {
   start: Date;
   end: Date;
+  projectIds: string[];
 }) => {
+  if (projectIds.length === 0) return [];
   const query = `
       SELECT 
         project_id,
         count(*) as count
       FROM scores
-      WHERE created_at >= {start: DateTime}
+      WHERE project_id IN ({projectIds: Array(String)})
+      AND created_at >= {start: DateTime}
       AND created_at < {end: DateTime}
       GROUP BY project_id
     `;
@@ -1508,6 +1509,7 @@ export const getScoreCountsByProjectInCreationInterval = async ({
     params: {
       start: convertDateToAnalyticsDateTime(start),
       end: convertDateToAnalyticsDateTime(end),
+      projectIds,
     },
     tags: {
       feature: "tracing",

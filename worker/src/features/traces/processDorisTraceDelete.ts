@@ -1,5 +1,4 @@
 import {
-  deleteEventsByTraceIds,
   deleteScoresByTraceIds,
   deleteTraces,
   getS3MediaStorageClient,
@@ -140,9 +139,6 @@ export const processDorisTraceDelete = async (
       // both kinds of spans, so no separate observations-table delete is needed.
       deleteTraces(projectId, traceIds),
       deleteScoresByTraceIds(projectId, traceIds),
-      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
-        ? deleteEventsByTraceIds(projectId, traceIds)
-        : Promise.resolve(),
     ]);
   } catch (e) {
     logger.error(

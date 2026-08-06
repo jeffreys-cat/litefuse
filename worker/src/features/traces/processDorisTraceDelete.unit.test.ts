@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  deleteEventsByTraceIds,
   deleteObservationsByTraceIds,
   deleteScoresByTraceIds,
   deleteTraces,
@@ -55,5 +56,6 @@ describe("processDorisTraceDelete", () => {
     expect(deleteTraces).toHaveBeenCalledWith(projectId, traceIds);
     expect(deleteScoresByTraceIds).toHaveBeenCalledWith(projectId, traceIds);
     expect(deleteObservationsByTraceIds).not.toHaveBeenCalled();
+    expect(deleteEventsByTraceIds).not.toHaveBeenCalled();
   });
 });

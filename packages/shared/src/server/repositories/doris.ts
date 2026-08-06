@@ -2,14 +2,26 @@ import { env } from "../../env";
 import { dorisClient, formatDataForDoris } from "../doris/client";
 import { DorisParameterProcessor } from "../doris/parameterProcessor";
 import { logger } from "../logger";
-import { instrumentAsync } from "../instrumentation";
-import { randomUUID } from "crypto";
+import { instrumentAsync, recordIncrement } from "../instrumentation";
 // Import from the leaf, not ./analytics — analytics imports THIS module, so the
 // back-edge would form an analytics ↔ doris require cycle (TDZ under dd-trace).
 import { convertDateToAnalyticsDateTime } from "./analyticsDateTime";
 // Runtime-only call (no module-init use) — tableRouting depends on env/schema/
 // tableSplitCache, none of which import this module, so no require cycle.
 import { tableFor } from "../doris/tableRouting";
+
+const SPLIT_TABLE_READ_RE =
+  /\b(?:FROM|JOIN)\s+`?(?:events_full|traces_scalar|trace_metrics_agg)_[A-Za-z0-9_]+`?/i;
+
+const isMissingSplitTableRead = (query: string, error: unknown): boolean => {
+  if (!/^\s*SELECT\b/i.test(query) || !SPLIT_TABLE_READ_RE.test(query)) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /does not exist|unknown table|table.*not found|TableNotFound/i.test(
+    message,
+  );
+};
 
 /**
  * Upsert records into Doris using Stream Load
@@ -124,11 +136,9 @@ export async function partialUpdateDoris(opts: {
     params[paramName] = value;
   }
 
-  // Route to the split project's physical table (Stage 1 review #A). The UPDATE
-  // carries project_id in its WHERE (every caller — bookmark/public/tags toggle),
-  // so a split project's traces_scalar_<pid>/events_full_<pid> is targeted; a
-  // literal `traces_scalar` here would UPDATE the shared table, match no row, and
-  // silently drop the toggle. Non-split projects / non-splittable tables are
+  // Route to the project's physical split table. The UPDATE carries project_id
+  // in its WHERE (every caller — bookmark/public/tags toggle), so tableFor can
+  // target traces_scalar_<pid>/events_full_<pid>. Non-splittable tables remain
   // identity, and a missing project_id falls back to the logical name unchanged.
   const projectId = opts.where.project_id;
   const physicalTable =
@@ -177,6 +187,15 @@ export async function queryDoris<T>(opts: {
       return data as T[];
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      if (isMissingSplitTableRead(processedQuery, error)) {
+        recordIncrement("langfuse.doris.split_table.read_missing", 1, {
+          source: "queryDoris",
+        });
+        logger.warn(
+          `Doris split-table read target missing; returning empty result. SQL: ${processedQuery}`,
+        );
+        return [] as T[];
+      }
       logger.error(`Doris query failed: ${errMsg}, SQL: ${processedQuery}`);
       throw error;
     }
@@ -416,11 +435,3 @@ export const batchUpsertDoris = async <
     });
   }
 };
-
-/**
- * Convert Date to Doris DateTime format using consistent timezone
- */
-function convertDateToDorisDateTime(date: Date): string {
-  // Use the same timezone conversion as queries to ensure consistency
-  return convertDateToAnalyticsDateTime(date);
-}

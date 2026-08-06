@@ -27,10 +27,8 @@
  */
 
 import {
-  OtelIngestionQueue,
   createNewRedisInstance,
   redisQueueRetryOptions,
-  dorisClient,
   getS3EventStorageClient,
   logger,
   registerOtelFile,
@@ -40,6 +38,8 @@ import {
   laneForDesignated,
   getDesignatedProjectIds,
   refreshSplitCache,
+  executeDorisProjectFanout,
+  queryDoris,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 import { env as sharedEnv } from "@langfuse/shared/src/env";
@@ -61,25 +61,47 @@ const OLDER_THAN_MS = Number(arg("older-than-hours") ?? 80) * 3600_000;
 const BATCH = 500;
 
 const main = async () => {
-  const client = dorisClient();
-
   if (DUP_CHECK_ONLY) {
+    const projects = await prisma.project.findMany({
+      where: { deletedAt: null },
+      select: { id: true },
+    });
+    const projectIds = projects.map((project) => project.id);
     // Duplicate-rate accounting SQL (design §3.6) per recent day.
     for (let d = 0; d < WINDOW_DAYS; d++) {
       const day = new Date(Date.now() - d * 86_400_000)
         .toISOString()
         .slice(0, 10);
-      const rows = await client.query(
-        `SELECT
-           COUNT(*) AS total_rows,
-           COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS distinct_spans,
-           COUNT(*) - COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS duplicate_rows
-         -- CROSS-PROJECT duplicate-accounting scan (no project_id filter) —
-         -- deliberately NOT routed through tableFor. Do not "fix" it.
-         FROM events_full
-         WHERE date_trunc(start_time, 'day') = date_trunc('${day} 00:00:00', 'day')`,
+      const rows = await executeDorisProjectFanout<{
+        total_rows: string;
+        distinct_spans: string;
+        duplicate_rows: string;
+      }>({
+        logicalTable: "events_full",
+        projectIds,
+        queryTarget: (target) =>
+          queryDoris({
+            query: `
+              SELECT COUNT(*) AS total_rows,
+                COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS distinct_spans,
+                COUNT(*) - COUNT(DISTINCT project_id, trace_id, start_time, span_id) AS duplicate_rows
+              FROM \`${target.physicalTable}\`
+              WHERE project_id IN ({projectIds: Array(String)})
+                AND date_trunc(start_time, 'day') = date_trunc({day: DateTime}, 'day')
+            `,
+            params: { projectIds: target.projectIds, day: `${day} 00:00:00` },
+            tags: { feature: "otel-reconcile", kind: "duplicate-check" },
+          }),
+      });
+      const totals = rows.reduce(
+        (acc, row) => ({
+          total_rows: acc.total_rows + Number(row.total_rows),
+          distinct_spans: acc.distinct_spans + Number(row.distinct_spans),
+          duplicate_rows: acc.duplicate_rows + Number(row.duplicate_rows),
+        }),
+        { total_rows: 0, distinct_spans: 0, duplicate_rows: 0 },
       );
-      console.log(JSON.stringify({ day, ...(rows?.[0] ?? {}) }));
+      console.log(JSON.stringify({ day, ...totals }));
     }
     return;
   }
@@ -115,27 +137,20 @@ const main = async () => {
   if (!redis) {
     throw new Error("[reconcile] failed to create Redis connection");
   }
-  const shards = OtelIngestionQueue.getShardNames();
   const storage = getS3EventStorageClient(
     sharedEnv.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
   );
 
-  // Load the split=true set from PG up front. laneFor/getSplitProjectIds read
+  // Load the split control rows from PG up front. laneFor/getSplitProjectIds read
   // the tableSplitCache snapshot, which the periodic refresh loop (web+worker
-  // boot) fills — but this standalone script never starts that loop, so without
-  // this laneFor() returns null for everyone and every lane-aware branch below
-  // silently degrades to shard-only. mode=none → snapshot stays empty → those
-  // branches are byte-identical to the pre-split behaviour.
+  // boot) fills, but this standalone script never starts that loop.
   await refreshSplitCache();
-  // Split projects register into a dedicated lane, not a shard — so the
-  // "healthy pipeline" preflight and the re-inject target must both cover
-  // lanes. Derive them from the authoritative PG DESIGNATED set (live OR
-  // pending — a stuck/pending project's files must still re-inject into its
-  // lane, never a shared shard), NOT the Redis lane index, which can itself be
-  // partially lost in the very DR scenario reconcile exists to repair.
+  // All projects register into a dedicated lane. Derive the known preflight
+  // lanes from the control table; per-file classification below derives the
+  // exact lane from the S3 path project id.
   const laneKeys = getDesignatedProjectIds()
     .map((pid) => laneForDesignated(pid))
-    .filter((k): k is string => k !== null);
+    .filter((k): k is string => Boolean(k));
 
   // ⓪ Execute-mode preflight: re-injection is only safe against a HEALTHY
   // pipeline. Two disaster shapes make it double-load instead (invariant
@@ -149,7 +164,7 @@ const main = async () => {
   // (b) no pending entry older than the re-inject threshold (oldest-age <
   // threshold ⇒ no over-age file can still be queued).
   if (EXECUTE) {
-    for (const key of [...shards, ...laneKeys]) {
+    for (const key of laneKeys) {
       const staged = await scanStagedOtelGroups({ redis, groupingKey: key });
       if (staged.length > 0) {
         throw new Error(
@@ -218,15 +233,10 @@ const main = async () => {
   for (const f of files) {
     // projectId is encoded in the path: <prefix>otel/<projectId>/...
     const projectId = f.file.slice(prefix.length).split("/")[0] ?? "";
-    // Every grouping key this file could live under (lane first for a split
-    // project, then shards). Used for BOTH the registered-key evidence scan and
-    // the DEL below — a split project's reg key is under lane-<pid>, invisible
-    // to a shard-only scan, which would misclassify a lost file as `audit`.
-    const candidates = candidateGroupingKeys(
-      projectId,
-      shards,
-      laneForDesignated,
-    );
+    // Every grouping key this file could live under. All-split ingestion uses
+    // only the project lane; this is used for BOTH registered-key evidence and
+    // the DEL below.
+    const candidates = candidateGroupingKeys(projectId, [], laneForDesignated);
     let hasRegisteredKey = false;
     if (!withLedger.has(f.file)) {
       for (const key of candidates) {
@@ -258,7 +268,7 @@ const main = async () => {
       // project's dedicated lane, else a random shard (unchanged).
       const groupingKey = reinjectionGroupingKey(
         projectId,
-        shards,
+        [],
         (s) => s[Math.floor(Math.random() * s.length)] as string,
         laneForDesignated,
       );

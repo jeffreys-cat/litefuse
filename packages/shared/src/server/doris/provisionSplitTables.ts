@@ -6,6 +6,10 @@ import {
   buildTraceMetricsAggMV,
   buildAlterTtlStatement,
 } from "./splitTableTemplates";
+import {
+  assertValidDorisProjectId,
+  splitTableNameForProject,
+} from "./tableRouting";
 
 /**
  * Provisioning + readiness for a split project's Doris objects (Stage 1.2b/1.2c).
@@ -18,11 +22,14 @@ import {
  * project is ready = both base tables exist AND the MV build FINISHED.
  */
 
-const physical = (projectId: string) => ({
-  eventsFull: `events_full_${projectId}`,
-  tracesScalar: `traces_scalar_${projectId}`,
-  mv: `trace_metrics_agg_${projectId}`,
-});
+const physical = (projectId: string) => {
+  assertValidDorisProjectId(projectId);
+  return {
+    eventsFull: splitTableNameForProject(projectId, "events_full"),
+    tracesScalar: splitTableNameForProject(projectId, "traces_scalar"),
+    mv: `trace_metrics_agg_${projectId}`,
+  };
+};
 
 /**
  * Teardown counterpart of provisionSplitTablesForProject — DROPs a project's
@@ -41,6 +48,10 @@ export const dropSplitTablesForProject = async (
       query: `DROP TABLE IF EXISTS \`${table}\``,
       tags: { feature: "table-split", kind: "drop", projectId },
     });
+    logger.info("Dropped Doris split table if it existed", {
+      projectId,
+      table,
+    });
   }
 };
 
@@ -53,11 +64,7 @@ export const dorisTableExists = async (table: string): Promise<boolean> => {
   return rows.length > 0;
 };
 
-export type SplitMvStatus =
-  | "absent"
-  | "building"
-  | "finished"
-  | "cancelled";
+export type SplitMvStatus = "absent" | "building" | "finished" | "cancelled";
 
 /**
  * Status of a base table's sync MV build. Uses SHOW ALTER TABLE MATERIALIZED

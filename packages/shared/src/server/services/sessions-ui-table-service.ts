@@ -388,9 +388,9 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     twoPhaseQuery ??
     `
         WITH filtered_traces AS (
-          -- One row per trace from traces_scalar (migration 0039 — the root
+          -- One row per trace from the scalar split target (migration 0039 — the root
           -- span's scalars, dual-written at ingestion) instead of an
-          -- is_root = 1 events_full scan.
+          -- is_root = 1 event-table scan.
           -- Sessionless traces are excluded HERE, matching upstream (CH
           -- session_id is Nullable and the query keeps IS NOT NULL rows).
           -- traces_scalar stores NULL for unset ('' guarded defensively);
@@ -582,28 +582,6 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
     },
   });
 
-  const parseDetailsField = (
-    details: string | Record<string, number>,
-  ): Record<string, number> => {
-    if (!details) return {};
-    if (typeof details === "object" && !Array.isArray(details)) return details;
-    if (typeof details === "string") {
-      try {
-        const parsed = JSON.parse(details.trim());
-        if (typeof parsed === "object" && !Array.isArray(parsed)) {
-          const result: Record<string, number> = {};
-          for (const [key, value] of Object.entries(parsed)) {
-            result[key] = Number(value) || 0;
-          }
-          return result;
-        }
-      } catch {
-        /* ignore parse errors */
-      }
-    }
-    return {};
-  };
-
   // Post-process Doris results into the object shape downstream consumers expect
   if (select === "metrics") {
     const processedRes = (
@@ -652,7 +630,7 @@ const getSessionsTableGeneric = async <T>(props: FetchSessionsTableProps) => {
               return result;
             }
             return {};
-          } catch (error) {
+          } catch {
             return {};
           }
         }

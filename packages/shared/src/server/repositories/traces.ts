@@ -20,7 +20,12 @@ import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
 import { parseDorisStringArray } from "../utils/dorisArrays";
 import { queryDoris, commandDoris, queryDorisStream } from "./doris";
-import { tableFor, sharedTableFor } from "../doris/tableRouting";
+import { tableFor } from "../doris/tableRouting";
+import {
+  executeDorisProjectFanout,
+  findFirstDorisProjectTarget,
+} from "../doris/crossProjectTableRouting";
+import { prisma } from "../../db";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
@@ -552,39 +557,40 @@ export const hasAnyTrace = async (projectId: string) => {
 export const getTraceCountsByProjectInCreationInterval = async ({
   start,
   end,
+  projectIds,
 }: {
   start: Date;
   end: Date;
+  projectIds: string[];
 }) => {
   // traces_scalar: one row per trace, created_at dual-written since migration
   // 0039's trim/audit columns (pre-existing rows need the documented backfill,
   // which carries created_at from events_full).
-  // CROSS-PROJECT (no single projectId; GROUP BY project_id over all
-  // projects) — deliberately NOT routed through tableFor. Under table split
-  // this must fan out over every split project's traces_scalar_<pid> UNION
-  // the shared table; deferred to the table-split cross-project work
-  // (design §五). Do not "fix" this to tableFor — it has no projectId.
-  const query = `
-    SELECT
-      project_id,
-      count(*) as count
-    FROM ${sharedTableFor("traces_scalar")}
-    WHERE created_at >= {start: DateTime}
-    AND created_at < {end: DateTime}
-    GROUP BY project_id
-  `;
-
-  const rows = await queryDoris<{ project_id: string; count: string }>({
-    query,
-    params: {
-      start: convertDateToAnalyticsDateTime(start),
-      end: convertDateToAnalyticsDateTime(end),
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "analytic",
-    },
+  // Cross-project query: PostgreSQL-authoritative routing groups legacy and
+  // pending projects on shared while querying each LIVE physical table.
+  const rows = await executeDorisProjectFanout<{
+    project_id: string;
+    count: string;
+  }>({
+    logicalTable: "traces_scalar",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT project_id, count(*) as count
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+          AND created_at >= {start: DateTime}
+          AND created_at < {end: DateTime}
+          GROUP BY project_id
+        `,
+        params: {
+          projectIds: target.projectIds,
+          start: convertDateToAnalyticsDateTime(start),
+          end: convertDateToAnalyticsDateTime(end),
+        },
+        tags: { feature: "tracing", type: "trace", kind: "analytic" },
+      }),
   });
 
   return rows.map((row) => ({
@@ -597,8 +603,7 @@ export const getTraceCountsByProjectInCreationInterval = async ({
 // projects produced since a cutoff. traces_scalar is one row per trace (MoW,
 // deduped), so this is a plain row count. Observations COUNT(*) events_full
 // separately (billing model counts the synthetic root as an observation too).
-// CROSS-PROJECT (project_id IN over many projects) — shared table, NOT tableFor;
-// under table split this must fan out over traces_scalar_<pid> (design §五).
+// Cross-project routing is authoritative and bounded by the shared executor.
 export const getTraceCountOfProjectsSinceCreationDate = async ({
   projectIds,
   start,
@@ -606,27 +611,26 @@ export const getTraceCountOfProjectsSinceCreationDate = async ({
   projectIds: string[];
   start: Date;
 }) => {
-  const query = `
-      SELECT count(*) as count
-      FROM ${sharedTableFor("traces_scalar")}
-      WHERE project_id IN ({projectIds: Array(String)})
-      AND created_at >= {start: DateTime}
-    `;
-
-  const rows = await queryDoris<{ count: string }>({
-    query,
-    params: {
-      projectIds,
-      start: convertDateToAnalyticsDateTime(start),
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "analytic",
-    },
+  const rows = await executeDorisProjectFanout<{ count: string }>({
+    logicalTable: "traces_scalar",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT count(*) as count
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+          AND created_at >= {start: DateTime}
+        `,
+        params: {
+          projectIds: target.projectIds,
+          start: convertDateToAnalyticsDateTime(start),
+        },
+        tags: { feature: "tracing", type: "trace", kind: "analytic" },
+      }),
   });
 
-  return Number(rows[0]?.count ?? 0);
+  return rows.reduce((total, row) => total + Number(row.count), 0);
 };
 
 /**
@@ -1207,11 +1211,9 @@ export const deleteTracesOlderThanDays = async (
 export const deleteTracesByProjectId = async (
   projectId: string,
 ): Promise<boolean> => {
-  const hasData = await hasAnyTrace(projectId);
-  if (!hasData) {
-    return false;
-  }
-
+  // Intentionally unconditional: project-level telemetry deletion must remove
+  // events_full rows even if traces_scalar is already empty or partially
+  // written.
   const query = `
     DELETE FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String};
@@ -1624,28 +1626,31 @@ export const getTracesByIdsForAnyProject = async (traceIds: string[]) => {
   // id/project only → traces_scalar; id is its distribution column, so the
   // old unindexed cross-project events_full scan becomes a targeted read.
   //
-  // CROSS-PROJECT (resolves a trace id with NO projectId — the /trace/[id]
-  // redirect page) — deliberately NOT routed through tableFor; it has no
-  // projectId. Under table split this must fan out over every split project's
-  // traces_scalar_<pid> UNION the shared table (design §五). Do not "fix" it.
-  const query = `
-      SELECT id, project_id
-      FROM ${sharedTableFor("traces_scalar")}
-      WHERE id IN ({traceIds: Array(String)})
-      ORDER BY created_at DESC;`;
-  const records = await queryDoris<{
+  // Resolve active projects from PG, then stop assigning new bounded fan-out
+  // targets once a matching trace is found.
+  if (traceIds.length === 0) return [];
+  const projects = await prisma.project.findMany({
+    where: { deletedAt: null },
+    select: { id: true },
+  });
+  const records = await findFirstDorisProjectTarget<{
     id: string;
     project_id: string;
   }>({
-    query,
-    params: {
-      traceIds,
-    },
-    tags: {
-      feature: "tracing",
-      type: "trace",
-      kind: "list",
-    },
+    logicalTable: "traces_scalar",
+    projectIds: projects.map((project) => project.id),
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT id, project_id
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+          AND id IN ({traceIds: Array(String)})
+          ORDER BY created_at DESC
+        `,
+        params: { projectIds: target.projectIds, traceIds },
+        tags: { feature: "tracing", type: "trace", kind: "list" },
+      }),
   });
 
   return records.map((record) => ({

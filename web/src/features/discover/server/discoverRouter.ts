@@ -8,7 +8,7 @@ import { TRPCError } from "@trpc/server";
 import {
   isLangfuseDatabase,
   injectProjectIdFilter,
-  findForeignSplitTables,
+  findForbiddenTelemetryTables,
   filterVisibleTables,
 } from "./queryUtils";
 
@@ -101,15 +101,14 @@ export const discoverRouter = createTRPCRouter({
       }
 
       if (isLangfuseDatabase(database)) {
-        // Hard allowlist (design §五 / review B-1): reject any reference to
-        // another project's split table BEFORE execution. No project_id filter
-        // can make cross-tenant access safe, so this is a rejection, not a
-        // rewrite. Scans the whole SQL (subqueries/JOINs included).
-        const foreign = findForeignSplitTables(sql, input.projectId);
-        if (foreign.length > 0) {
+        // Hard allowlist: reject any reference to another project's split table
+        // or to the no-suffix shared telemetry table names before execution. No
+        // project_id filter can make those targets valid in the all-split model.
+        const forbidden = findForbiddenTelemetryTables(sql, input.projectId);
+        if (forbidden.length > 0) {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: `Access denied: query references another project's tables: ${foreign.join(", ")}`,
+            message: `Access denied: query references forbidden telemetry tables: ${forbidden.join(", ")}`,
           });
         }
       }

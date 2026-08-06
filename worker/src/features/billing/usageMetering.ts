@@ -84,10 +84,17 @@ export async function processCloudUsageMetering(job?: Job) {
           org.cloudConfig?.stripe?.activeSubscriptionId &&
           org.cloudConfig?.stripe?.resolvedPlan,
       );
+    const projectIds = organizations.flatMap((organization) =>
+      Array.from(organization.projectIds),
+    );
     const [traceCounts, observationCounts, scoreCounts] = await Promise.all([
-      getTraceCountsByProjectInCreationInterval({ start, end }),
-      getObservationCountsByProjectInCreationInterval({ start, end }),
-      getScoreCountsByProjectInCreationInterval({ start, end }),
+      getTraceCountsByProjectInCreationInterval({ start, end, projectIds }),
+      getObservationCountsByProjectInCreationInterval({
+        start,
+        end,
+        projectIds,
+      }),
+      getScoreCountsByProjectInCreationInterval({ start, end, projectIds }),
     ]);
     const stripe = new Stripe(env.STRIPE_SECRET_KEY);
     let totalUnits = 0;

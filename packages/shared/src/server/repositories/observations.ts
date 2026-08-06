@@ -41,7 +41,8 @@ import type { AnalyticsGenerationEvent } from "../analytics-integrations/types";
 import { ObservationType } from "../../domain";
 import { recordDistribution } from "../instrumentation";
 import { DEFAULT_RENDERING_PROPS, RenderingProps } from "../utils/rendering";
-import { tableFor, sharedTableFor } from "../doris/tableRouting";
+import { tableFor } from "../doris/tableRouting";
+import { executeDorisProjectFanout } from "../doris/crossProjectTableRouting";
 
 /**
  * Checks if observation exists in Doris.
@@ -1611,36 +1612,37 @@ export const getObservationsGroupedByTraceId = async (
 export const getObservationCountsByProjectInCreationInterval = async ({
   start,
   end,
+  projectIds,
 }: {
   start: Date;
   end: Date;
+  projectIds: string[];
 }) => {
-  // CROSS-PROJECT (no single projectId; GROUP BY project_id over all
-  // projects) — deliberately NOT routed through tableFor. Under table split
-  // this must fan out over every split project's events_full_<pid> UNION the
-  // shared table; deferred to the cross-project work (design §五). Do not
-  // "fix" this to tableFor — it has no projectId.
-  const query = `
-      SELECT
-        project_id,
-        count(*) as count
-      FROM ${sharedTableFor("events_full")}
-      WHERE created_at >= {start: DateTime}
-      AND created_at < {end: DateTime}
-      GROUP BY project_id
-    `;
-
-  const rows = await queryDoris<{ project_id: string; count: string }>({
-    query,
-    params: {
-      start: convertDateToAnalyticsDateTime(start),
-      end: convertDateToAnalyticsDateTime(end),
-    },
-    tags: {
-      feature: "tracing",
-      type: "observation",
-      kind: "analytic",
-    },
+  // Cross-project query: PostgreSQL-authoritative routing groups legacy and
+  // pending projects on shared while querying each LIVE physical table.
+  const rows = await executeDorisProjectFanout<{
+    project_id: string;
+    count: string;
+  }>({
+    logicalTable: "events_full",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT project_id, count(*) as count
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+          AND created_at >= {start: DateTime}
+          AND created_at < {end: DateTime}
+          GROUP BY project_id
+        `,
+        params: {
+          projectIds: target.projectIds,
+          start: convertDateToAnalyticsDateTime(start),
+          end: convertDateToAnalyticsDateTime(end),
+        },
+        tags: { feature: "tracing", type: "observation", kind: "analytic" },
+      }),
   });
 
   return rows.map((row) => ({
@@ -1653,9 +1655,7 @@ export const getObservationCountsByProjectInCreationInterval = async ({
 // of projects produced since a cutoff. Counts every span, INCLUDING the
 // synthetic root — a billing unit per the billing branch's model (aligns with
 // getObservationCountsByProjectInCreationInterval and billing.ts, which also
-// COUNT(*)). CROSS-PROJECT (project_id IN over many projects) — shared table,
-// NOT tableFor; under table split this must fan out over events_full_<pid>
-// (design §五).
+// COUNT(*)). Cross-project routing is authoritative and bounded.
 export const getObservationCountOfProjectsSinceCreationDate = async ({
   projectIds,
   start,
@@ -1663,27 +1663,26 @@ export const getObservationCountOfProjectsSinceCreationDate = async ({
   projectIds: string[];
   start: Date;
 }) => {
-  const query = `
-      SELECT count(*) as count
-      FROM ${sharedTableFor("events_full")}
-      WHERE project_id IN ({projectIds: Array(String)})
-      AND created_at >= {start: DateTime}
-    `;
-
-  const rows = await queryDoris<{ count: string }>({
-    query,
-    params: {
-      projectIds,
-      start: convertDateToAnalyticsDateTime(start),
-    },
-    tags: {
-      feature: "tracing",
-      type: "observation",
-      kind: "analytic",
-    },
+  const rows = await executeDorisProjectFanout<{ count: string }>({
+    logicalTable: "events_full",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT count(*) as count
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+          AND created_at >= {start: DateTime}
+        `,
+        params: {
+          projectIds: target.projectIds,
+          start: convertDateToAnalyticsDateTime(start),
+        },
+        tags: { feature: "tracing", type: "observation", kind: "analytic" },
+      }),
   });
 
-  return Number(rows[0]?.count ?? 0);
+  return rows.reduce((total, row) => total + Number(row.count), 0);
 };
 
 export const getTraceIdsForObservations = async (

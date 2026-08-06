@@ -109,7 +109,9 @@ const makeDeps = (
       loads.push({ table, rows: decodeBody(body), count, options });
       return {
         dedupedByLabel:
-          table === "events_full" ? (overrides.dedupedByLabel ?? false) : false,
+          table.startsWith("events_full")
+            ? (overrides.dedupedByLabel ?? false)
+            : false,
       };
     }),
     ledgerExists: vi.fn(async () => overrides.ledger ?? false),
@@ -136,9 +138,8 @@ const makeDeps = (
 };
 
 describe("processOtelGroupJob (core EO semantics)", () => {
-  // Prime a ready, empty (no-splits) snapshot so the cache-readiness gate passes
-  // in project_id_with_rule runs; isSplitProject stays false → shared-table
-  // routing, exactly what these core cases assert.
+  // Prime a ready, empty snapshot so the cache-readiness gate passes. Table
+  // routing is deterministic all-split and no longer depends on this snapshot.
   beforeEach(() => __setSplitSnapshotForTest([]));
   afterEach(() => __setSplitSnapshotForTest(null));
 
@@ -149,7 +150,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     await processOtelGroupJob(payload, deps);
 
     const [events, scalar, ledger] = loads;
-    expect(events.table).toBe("events_full");
+    expect(events.table).toBe("events_full_p1");
     expect(events.options.label).toBe(eventsFullLabelForGroup(payload.groupId));
     expect(events.options.format).toBe("json");
     // EO hard rule: silent row-dropping is forbidden.
@@ -160,7 +161,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     // label-registry footprint is exactly 2 slots regardless of retries
     // (random per-attempt labels flooded the registry and evicted events
     // labels: duplicate-data incident 2026-07-28).
-    expect(scalar.table).toBe("traces_scalar");
+    expect(scalar.table).toBe("traces_scalar_p1");
     expect(scalar.options.label).toBe(
       labelForGroupTable(payload.groupId, "traces_scalar"),
     );
@@ -200,7 +201,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     );
 
     await processOtelGroupJob(payload, deps);
-    const events = loads.find((l) => l.table === "events_full")!;
+    const events = loads.find((l) => l.table === "events_full_p1")!;
     expect(events.rows).toHaveLength(1); // only good.json's record
     // Ledger still covers BOTH files (bad one is dead-lettered, not retried).
     const ledger = loads.find((l) => l.table === "pg:otel_file_ledger")!;
@@ -236,12 +237,12 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     const { deps, loads } = makeDeps({ dedupedByLabel: true, ledger: false });
 
     await processOtelGroupJob(payload, deps);
-    // events_full was skipped by the FE (dedupedByLabel), but the partial
+    // events_full_<pid> was skipped by the FE (dedupedByLabel), but the partial
     // C6 crash (scalar never written) is only distinguishable via the
     // ledger — absent ledger means the scalar load must proceed.
     expect(loads.map((l) => l.table)).toEqual([
-      "events_full",
-      "traces_scalar",
+      "events_full_p1",
+      "traces_scalar_p1",
       "pg:otel_file_ledger",
     ]);
   });
@@ -252,7 +253,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
 
     await processOtelGroupJob(payload, deps);
     expect(loads.map((l) => l.table)).toEqual([
-      "events_full",
+      "events_full_p1",
       "pg:otel_file_ledger",
     ]);
   });
@@ -337,14 +338,15 @@ describe("processOtelGroupJob (split targets)", () => {
     expect(eventsLoad!.rows).toHaveLength(1);
   });
 
-  it("shared (non-split) project still targets the shared table", async () => {
+  it("a project not live in cache still targets its split tables", async () => {
     __setSplitSnapshotForTest([["other", true]]); // p1 NOT split
     const payload = payloadFor(["f1.json"]);
     const { deps, loads } = makeDeps();
     await processOtelGroupJob(payload, deps);
     const tables = loads.map((l) => l.table);
-    expect(tables).toContain("events_full");
-    expect(tables).not.toContain("events_full_p1");
+    expect(tables).toContain("events_full_p1");
+    expect(tables).toContain("traces_scalar_p1");
+    expect(tables).not.toContain("events_full");
   });
 });
 

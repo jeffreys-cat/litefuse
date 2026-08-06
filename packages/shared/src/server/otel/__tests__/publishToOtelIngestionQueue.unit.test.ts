@@ -1,22 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * Stage-2 behavior of publishToOtelIngestionQueue (exactly-once design §3.1):
- * grouping OFF → legacy one-job-per-file; grouping ON → S3 upload of the
- * exact serialized string, then idempotent registration (no queue.add).
+ * publishToOtelIngestionQueue always uses the all-split grouping path:
+ * upload the exact serialized string, then idempotently register the file in
+ * the project's dedicated lane.
  */
 
 // vi.mock factories are hoisted above imports — everything they close over
 // must be hoisted too.
-const { uploadJsonString, queueAdd, registerOtelFile, envMock } = vi.hoisted(
-  () => ({
-    uploadJsonString: vi.fn(async () => {}),
-    queueAdd: vi.fn(async () => ({})),
-    registerOtelFile: vi.fn(async () => true),
-    // env is module-level-parsed; tests mutate this holder per case.
-    envMock: {} as Record<string, unknown>,
-  }),
-);
+const {
+  uploadJsonString,
+  queueAdd,
+  registerOtelFile,
+  addLaneToIndex,
+  laneForIngestion,
+  envMock,
+} = vi.hoisted(() => ({
+  uploadJsonString: vi.fn(async () => {}),
+  queueAdd: vi.fn(async () => ({})),
+  registerOtelFile: vi.fn(async () => true),
+  addLaneToIndex: vi.fn(async () => {}),
+  laneForIngestion: vi.fn(async () => "lane-p1"),
+  // env is module-level-parsed; tests mutate this holder per case.
+  envMock: {} as Record<string, unknown>,
+}));
 
 // NB: paths resolve relative to THIS test file — src/env.ts is three levels up.
 vi.mock("../../../env", () => ({ env: envMock }));
@@ -29,13 +36,15 @@ vi.mock("../../redis/redis", () => ({
   // (potentially prefixed) singleton.
   getUnprefixedRedis: vi.fn(() => ({ fake: "unprefixed-redis-handle" })),
 }));
-vi.mock("../../redis/otelPendingGroups", () => ({ registerOtelFile }));
-vi.mock("../../redis/otelIngestionQueue", () => ({
-  OtelIngestionQueue: {
-    getInstance: vi.fn(() => ({ add: queueAdd })),
-    getShardNames: vi.fn(() => ["otel-ingestion-queue"]),
-  },
+vi.mock("../../redis/otelPendingGroups", () => ({
+  registerOtelFile,
+  addLaneToIndex,
 }));
+vi.mock("../../doris/tableRouting", () => ({ laneForIngestion }));
+vi.mock("../../doris/tableSplitCache", () => ({
+  isSplitCacheReady: vi.fn(() => true),
+}));
+vi.mock("../../redis/otelIngestionQueue", () => ({}));
 
 import { OtelIngestionProcessor } from "../OtelIngestionProcessor";
 
@@ -75,16 +84,18 @@ beforeEach(() => {
 });
 
 describe("publishToOtelIngestionQueue", () => {
-  it("grouping OFF: uploads then enqueues one legacy job, no registration", async () => {
+  it("grouping OFF: uploads then registers the project lane, no legacy queue job", async () => {
     await makeProcessor().publishToOtelIngestionQueue(resourceSpans);
 
     expect(uploadJsonString).toHaveBeenCalledTimes(1);
-    expect(queueAdd).toHaveBeenCalledTimes(1);
-    expect(registerOtelFile).not.toHaveBeenCalled();
-
-    const [, job] = queueAdd.mock.calls[0] as any[];
-    expect(job.payload.authCheck.scope.projectId).toBe("p1");
-    expect(job.payload.data.fileKey).toMatch(/^events\/otel\/p1\//);
+    expect(queueAdd).not.toHaveBeenCalled();
+    expect(addLaneToIndex).toHaveBeenCalledWith(
+      { fake: "unprefixed-redis-handle" },
+      "lane-p1",
+    );
+    expect(registerOtelFile).toHaveBeenCalledWith(
+      expect.objectContaining({ groupingKey: "lane-p1" }),
+    );
   });
 
   it("grouping ON: uploads the SAME serialized string it measures, registers, no queue.add", async () => {
@@ -94,8 +105,9 @@ describe("publishToOtelIngestionQueue", () => {
     expect(queueAdd).not.toHaveBeenCalled();
     expect(registerOtelFile).toHaveBeenCalledTimes(1);
 
-    const [{ shard, ttlMs, entry }] = registerOtelFile.mock.calls[0] as any[];
-    expect(shard).toBe("otel-ingestion-queue");
+    const [{ groupingKey, ttlMs, entry }] = registerOtelFile.mock
+      .calls[0] as any[];
+    expect(groupingKey).toBe("lane-p1");
     expect(ttlMs).toBe(345_600_000);
     // Entry mirrors the request context…
     expect(entry).toMatchObject({
@@ -136,12 +148,12 @@ describe("publishToOtelIngestionQueue", () => {
     uploadJsonString.mockImplementationOnce(async () => {
       order.push("upload");
     });
-    queueAdd.mockImplementationOnce(async () => {
-      order.push("enqueue");
-      return {};
+    registerOtelFile.mockImplementationOnce(async () => {
+      order.push("register");
+      return true;
     });
     await makeProcessor().publishToOtelIngestionQueue(resourceSpans);
-    expect(order).toEqual(["upload", "enqueue"]);
+    expect(order).toEqual(["upload", "register"]);
 
     envMock.LITEFUSE_OTEL_GROUPING_ENABLED = "true";
     const order2: string[] = [];

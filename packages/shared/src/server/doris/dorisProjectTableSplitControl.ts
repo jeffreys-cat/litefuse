@@ -1,5 +1,6 @@
 import { prisma } from "../../db";
 import { logger } from "../logger";
+import { recordIncrement } from "../instrumentation";
 import { enqueueDorisSplitTableProvisioning } from "../redis/dorisSplitTableProvisioningQueue";
 import { publishSplitCacheInvalidation } from "./tableSplitCache";
 
@@ -85,18 +86,14 @@ export const upsertDorisProjectTableSplit = async (params: {
   logger.info(
     `[table-split] designated ${projectId} (split=${split ?? false}); enqueuing provisioning`,
   );
-  // The control row above IS the designation guarantee (write path resolves it,
-  // with a PG fallback, so a designated project never leaks to the shared
-  // table). Propagation + the provisioning kick are RECOVERABLE (periodic
-  // refresh + grouper self-heal / reconcile re-drive them), so a Redis hiccup
-  // here must NOT fail the caller (e.g. project creation).
+  // The control row above is the provisioning/readiness guarantee for the
+  // project's lane. Propagation + the provisioning kick are RECOVERABLE
+  // (periodic refresh + grouper self-heal / reconcile re-drive them), so a
+  // Redis hiccup here must NOT fail the caller (e.g. project creation).
   try {
     await publishSplitCacheInvalidation();
   } catch (e) {
-    logger.error(
-      `[table-split] cache invalidation for ${projectId} failed`,
-      e,
-    );
+    logger.error(`[table-split] cache invalidation for ${projectId} failed`, e);
   }
   try {
     await enqueueDorisSplitTableProvisioning(projectId);
@@ -150,6 +147,55 @@ export const provisionSplitForNewProject = async (
 };
 
 /**
+ * All-split ingestion guard for existing/legacy projects. If a project has no
+ * split control row yet, create a PENDING designation and enqueue provisioning.
+ * Existing rows are left untouched so this can run on every ingestion request.
+ */
+export const ensureProjectSplitDesignated = async (
+  projectId: string,
+): Promise<void> => {
+  const existing = await prisma.dorisProjectTableSplit.findUnique({
+    where: { projectId },
+    select: { projectId: true },
+  });
+  if (existing) return;
+
+  try {
+    await prisma.dorisProjectTableSplit.create({
+      data: {
+        projectId,
+        split: false,
+        note: "auto-designated by all-split ingestion",
+      },
+    });
+  } catch (e) {
+    const rowAfterRace = await prisma.dorisProjectTableSplit.findUnique({
+      where: { projectId },
+      select: { projectId: true },
+    });
+    if (rowAfterRace) return;
+    throw e;
+  }
+
+  logger.info(
+    `[table-split] auto-designated ${projectId}; enqueuing provisioning`,
+  );
+  try {
+    await publishSplitCacheInvalidation();
+  } catch (e) {
+    logger.error(`[table-split] cache invalidation for ${projectId} failed`, e);
+  }
+  try {
+    await enqueueDorisSplitTableProvisioning(projectId);
+  } catch (e) {
+    logger.error(
+      `[table-split] provisioning enqueue for ${projectId} failed`,
+      e,
+    );
+  }
+};
+
+/**
  * Write-path "table doesn't exist" three-way decision (Stage 1.2d). When a load
  * targets a split project's events_full_<pid> / traces_scalar_<pid> that is
  * absent, the caller (the group-job load path, Stage 1.6) must NOT guess:
@@ -195,13 +241,22 @@ export const handleMissingSplitTable = async (
   switch (action) {
     case "reprovision":
       await enqueueDorisSplitTableProvisioning(projectId);
+      recordIncrement("langfuse.doris.split_table.missing", 1, {
+        action: "reprovision",
+      });
       logger.warn(
         `[table-split] missing tables for live project ${projectId}; re-enqueued provisioning, retrying job`,
       );
       return "retry";
     case "pg-error":
+      recordIncrement("langfuse.doris.split_table.missing", 1, {
+        action: "pg_error",
+      });
       return "retry";
     case "skip-tombstoned":
+      recordIncrement("langfuse.doris.split_table.missing", 1, {
+        action: "skip_tombstoned",
+      });
       logger.warn(
         `[table-split] missing tables for tombstoned project ${projectId}; skipping group`,
       );

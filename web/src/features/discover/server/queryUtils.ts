@@ -1,27 +1,31 @@
 import { env } from "@langfuse/shared/src/env";
 
 /**
- * Per-project split tables are `<logical>_<projectId>` (Stage 1). A user of one
+ * Per-project telemetry tables are `<logical>_<projectId>`. A user of one
  * project must never touch another project's split table via Discover — that is
- * a full cross-project data leak (no project_id filter can be trusted on a
- * table that IS entirely another tenant's). The security model is a hard
- * allowlist: a split-suffixed table is accessible ONLY when its suffix is the
- * caller's own projectId. The three splittable logicals have no shared prefix,
- * so the `<logical>_<suffix>` match is unambiguous; the SHARED tables
- * (events_full / traces_scalar / trace_metrics_agg, no suffix) never match and
- * keep their project_id-filter injection.
+ * a full cross-project data leak. The shared telemetry table names
+ * (events_full / traces_scalar / trace_metrics_agg, no suffix) are not business
+ * read targets in the all-split model, so they are hidden/rejected as well.
  */
 const SPLIT_TABLE_RE =
   /\b(?:events_full|traces_scalar|trace_metrics_agg)_([A-Za-z0-9]+)\b/g;
+const SHARED_TELEMETRY_TABLE_RE =
+  /\b(?:events_full|traces_scalar|trace_metrics_agg)\b/g;
+const SHARED_TELEMETRY_TABLES = new Set([
+  "events_full",
+  "traces_scalar",
+  "trace_metrics_agg",
+]);
 
 /** True if `tableName` is a split table belonging to a DIFFERENT project. */
 export function isForeignSplitTable(
   tableName: string,
   projectId: string,
 ): boolean {
-  const m = /^(?:events_full|traces_scalar|trace_metrics_agg)_([A-Za-z0-9]+)$/.exec(
-    tableName,
-  );
+  const m =
+    /^(?:events_full|traces_scalar|trace_metrics_agg)_([A-Za-z0-9]+)$/.exec(
+      tableName,
+    );
   return m !== null && m[1] !== projectId;
 }
 
@@ -37,6 +41,18 @@ export function findForeignSplitTables(
   return [...foreign];
 }
 
+/** Distinct telemetry tables that Discover must not query for this project. */
+export function findForbiddenTelemetryTables(
+  sql: string,
+  projectId: string,
+): string[] {
+  const forbidden = new Set(findForeignSplitTables(sql, projectId));
+  for (const m of sql.matchAll(SHARED_TELEMETRY_TABLE_RE)) {
+    forbidden.add(m[0]);
+  }
+  return [...forbidden];
+}
+
 /** Drop other projects' split tables from a SHOW TABLES result (a SHOW row has
  * a single `Tables_in_<db>` column whose value is the table name) — prevents
  * enumerating other tenants' `<logical>_<cuid>` tables. */
@@ -46,7 +62,11 @@ export function filterVisibleTables<T extends Record<string, unknown>>(
 ): T[] {
   return rows.filter((row) => {
     const name = Object.values(row)[0];
-    return typeof name !== "string" || !isForeignSplitTable(name, projectId);
+    return (
+      typeof name !== "string" ||
+      (!SHARED_TELEMETRY_TABLES.has(name) &&
+        !isForeignSplitTable(name, projectId))
+    );
   });
 }
 

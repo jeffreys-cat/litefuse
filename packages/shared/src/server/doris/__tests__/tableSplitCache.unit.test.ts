@@ -17,13 +17,16 @@ vi.mock("../../../db", () => ({
 vi.mock("../../logger", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
-vi.mock("../../redis/redis", () => ({ createNewRedisInstance: createRedisMock }));
+vi.mock("../../redis/redis", () => ({
+  createNewRedisInstance: createRedisMock,
+}));
 
 import {
   isSplitCacheReady,
   splitProjectInCache,
   resolveIngestionSplitState,
   refreshSplitCache,
+  initializeSplitCache,
   startSplitCacheRefresh,
   stopSplitCacheRefresh,
   publishSplitCacheInvalidation,
@@ -44,7 +47,9 @@ let madeRedis: FakeRedis[] = [];
 const makeFakeRedis = (publishImpl?: () => Promise<unknown>): FakeRedis => {
   const fake: FakeRedis = {
     publish: publishImpl ? vi.fn(publishImpl) : vi.fn(async () => 1),
-    subscribe: vi.fn((_ch: string, cb?: (e: Error | null) => void) => cb?.(null)),
+    subscribe: vi.fn((_ch: string, cb?: (e: Error | null) => void) =>
+      cb?.(null),
+    ),
     on: vi.fn(),
     disconnect: vi.fn(),
   };
@@ -81,6 +86,25 @@ describe("tableSplitCache", () => {
     // No where clause — the cache needs pending (split=false) rows too.
     const call = findManyMock.mock.calls[0][0];
     expect(call.where).toBeUndefined();
+  });
+
+  it("startup barrier remains unready after failure and retries until loaded", async () => {
+    vi.useFakeTimers();
+    try {
+      findManyMock
+        .mockRejectedValueOnce(new Error("postgres unavailable"))
+        .mockResolvedValueOnce([{ projectId: A, split: true }]);
+
+      const ready = initializeSplitCache(10);
+      expect(isSplitCacheReady()).toBe(false);
+      await vi.advanceTimersByTimeAsync(10);
+      await ready;
+
+      expect(isSplitCacheReady()).toBe(true);
+      expect(findManyMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolveIngestionSplitState: live/pending/not_split from cache", async () => {

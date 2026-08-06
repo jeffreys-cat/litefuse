@@ -87,3 +87,6 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
 - In `src/__tests__/server`, avoid `pruneDatabase` calls.
 - Confirm the target `*.clienttest.*` or `*.servertest.*` file exists before using `--testPathPatterns`; source files do not always have a matching colocated test file.
 - Do not hand-edit build artifacts: `.next/*`, `.next-check/*`, `dist/*`.
+- Node initialization must await the first Doris split-cache snapshot before
+  request handlers can issue telemetry queries. Cross-project server features
+  pass explicit active project IDs to shared aggregation repositories.

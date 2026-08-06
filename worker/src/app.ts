@@ -31,17 +31,11 @@ import {
   OtelIngestionQueue,
   TraceUpsertQueue,
   EventPropagationQueue,
-  startSplitCacheRefresh,
   CloudUsageMeteringQueue,
   CloudFreeTierUsageThresholdQueue,
 } from "@langfuse/shared/src/server";
 import { env } from "./env";
 
-// Doris per-project table-split (universal): keep the split-project snapshot
-// warm so the synchronous isSplitProject (and the write-path readiness gate)
-// can answer from memory. Loads the PG control table; an empty table just means
-// every project reads the shared tables until it is designated + provisioned.
-startSplitCacheRefresh();
 import { ingestionQueueProcessorBuilder } from "./queues/ingestionQueue";
 import { BackgroundMigrationManager } from "./backgroundMigrations/backgroundMigrationManager";
 import { prisma } from "@langfuse/shared/src/db";
@@ -76,10 +70,7 @@ import {
   cloudFreeTierUsageThresholdQueueProcessor,
   cloudUsageMeteringQueueProcessor,
 } from "./queues/cloudBillingQueues";
-import {
-  BatchProjectCleaner,
-  BATCH_DELETION_TABLES,
-} from "./features/batch-project-cleaner";
+import { BatchProjectCleaner } from "./features/batch-project-cleaner";
 import {
   BatchDataRetentionCleaner,
   BATCH_DATA_RETENTION_TABLES,
@@ -548,19 +539,9 @@ if (env.QUEUE_CONSUMER_NOTIFICATION_QUEUE_IS_ENABLED === "true") {
 export const batchProjectCleaners: BatchProjectCleaner[] = [];
 
 if (env.LITEFUSE_BATCH_PROJECT_CLEANER_ENABLED === "true") {
-  for (const table of BATCH_DELETION_TABLES) {
-    // Only start the events_full cleaner when the events table experiment is
-    // enabled (gate carries over from the upstream V4 transition; events_core
-    // / events tables no longer appear in BATCH_DELETION_TABLES for this fork).
-    if (
-      table !== "events_full" ||
-      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
-    ) {
-      const cleaner = new BatchProjectCleaner(table);
-      batchProjectCleaners.push(cleaner);
-      cleaner.start();
-    }
-  }
+  const cleaner = new BatchProjectCleaner();
+  batchProjectCleaners.push(cleaner);
+  cleaner.start();
 }
 
 // Batch data retention cleaners for bulk deletion of expired data
@@ -568,16 +549,9 @@ export const batchDataRetentionCleaners: BatchDataRetentionCleaner[] = [];
 
 if (env.LITEFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED === "true") {
   for (const table of BATCH_DATA_RETENTION_TABLES) {
-    // Only start the events_full cleaner when the events table experiment is
-    // enabled (see note above).
-    if (
-      table !== "events_full" ||
-      env.LITEFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true"
-    ) {
-      const cleaner = new BatchDataRetentionCleaner(table);
-      batchDataRetentionCleaners.push(cleaner);
-      cleaner.start();
-    }
+    const cleaner = new BatchDataRetentionCleaner(table);
+    batchDataRetentionCleaners.push(cleaner);
+    cleaner.start();
   }
 }
 

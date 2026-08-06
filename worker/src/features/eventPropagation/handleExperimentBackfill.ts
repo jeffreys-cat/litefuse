@@ -6,16 +6,13 @@
 //
 // Trigger: eventPropagationProcessor runs runExperimentBackfill on a
 // 5-minute cron behind a Redis lock. The procedure picks up
-// dataset_run_items rows created since the last cursor, looks up the
-// associated trace's spans in events_full, enriches them with the 12
-// experiment_* fields from the DRI, and replays the enriched rows
-// through IngestionService.writeEventRecord. Doris UNIQUE KEY MoW makes
-// the replay idempotent — re-insert with the same span_id overwrites
-// the prior row with the enriched version.
+// dataset_run_items rows created since the last cursor, routes each candidate
+// project's events_full read, enriches the spans, then stream-loads each
+// project target with a deterministic content label.
 //
 // SQL sources (post-OTel-only migration):
-//   * getDatasetRunItemsSinceLastRun: dataset_run_items_rmt + LEFT ANTI
-//     JOIN events_full (was `events` placeholder, now real).
+//   * getDatasetRunItemsSinceLastRun: dataset_run_items_rmt candidates, then a
+//     routed application-side anti-join against experiment-tagged spans.
 //   * getRelevantTraces: events_full root spans (is_root = 1).
 //   * getRelevantObservations: events_full non-root spans
 //     (is_root = 0).
@@ -27,17 +24,21 @@
 // context.
 
 import {
+  executeDorisProjectFanout,
+  formatRecordForDoris,
   logger,
+  labelForGroupTable,
   queryDoris,
   redis,
   convertDateToAnalyticsDateTime,
   dorisClient,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
-import { DorisWriter } from "../../services/DorisWriter";
 import { IngestionService } from "../../services/IngestionService";
+import { toTraceScalarRecord } from "../../services/IngestionService";
 import { prisma } from "@langfuse/shared/src/db";
 import { chunk } from "lodash";
+import { createHash } from "crypto";
 
 const EXPERIMENT_BACKFILL_TIMESTAMP_KEY =
   "langfuse:event-propagation:experiment-backfill:last-run";
@@ -138,26 +139,6 @@ export async function getDatasetRunItemsSinceLastRun(
   upperBound: Date,
 ): Promise<DatasetRunItem[]> {
   const query = `
-    WITH prefiltered_events as (
-      -- Find trace_ids that ALREADY have experiment fields set in events_full
-      -- (either via SDK experiment.run() ingestion or a prior backfill pass).
-      -- LEFT ANTI JOIN below excludes these so backfill only enriches DRIs
-      -- whose target trace is not yet experiment-tagged.
-      select distinct project_id, trace_id
-      -- CROSS-PROJECT (no project_id filter — scans all projects for
-      -- experiment-tagged traces) — deliberately NOT routed through tableFor.
-      -- Under table split this must fan out over every split project's
-      -- events_full_<pid> UNION the shared table (design §五). Do not "fix" it.
-      from events_full
-      where start_time > {lastRun: DateTime64(3)} - interval 1 day
-        and experiment_id != ''
-        and project_id in (
-          select distinct project_id
-          from dataset_run_items_rmt
-          where created_at > {lastRun: DateTime64(3)}
-        )
-    )
-
     SELECT
       id,
       project_id,
@@ -196,9 +177,6 @@ export async function getDatasetRunItemsSinceLastRun(
           ORDER BY dri.created_at DESC
         ) AS rn
       FROM dataset_run_items_rmt AS dri
-      LEFT ANTI JOIN prefiltered_events AS pe
-        ON dri.project_id = pe.project_id
-        AND dri.trace_id = pe.trace_id
       WHERE dri.created_at > {lastRun: DateTime64(3)}
         AND dri.created_at <= {upperBound: DateTime64(3)}
     ) ranked
@@ -218,11 +196,47 @@ export async function getDatasetRunItemsSinceLastRun(
     },
   });
 
-  logger.info(
-    `[EXPERIMENT BACKFILL] Found ${rows.length} dataset run items between ${lastRun.toISOString()} and ${upperBound.toISOString()}`,
+  const projectIds = [...new Set(rows.map((row) => row.project_id))];
+  const traceIds = [...new Set(rows.map((row) => row.trace_id))];
+  const alreadyTagged = await executeDorisProjectFanout<{
+    project_id: string;
+    trace_id: string;
+  }>({
+    logicalTable: "events_full",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: `
+          SELECT DISTINCT project_id, trace_id
+          FROM \`${target.physicalTable}\`
+          WHERE project_id IN ({projectIds: Array(String)})
+            AND trace_id IN ({traceIds: Array(String)})
+            AND start_time > {lastRun: DateTime64(3)} - interval 1 day
+            AND experiment_id != ''
+        `,
+        params: {
+          projectIds: target.projectIds,
+          traceIds,
+          lastRun: convertDateToAnalyticsDateTime(lastRun),
+        },
+        tags: {
+          feature: "experiment-backfill",
+          operation_name: "getAlreadyTaggedTraces",
+        },
+      }),
+  });
+  const taggedKeys = new Set(
+    alreadyTagged.map((row) => `${row.project_id}\0${row.trace_id}`),
+  );
+  const candidates = rows.filter(
+    (row) => !taggedKeys.has(`${row.project_id}\0${row.trace_id}`),
   );
 
-  return rows;
+  logger.info(
+    `[EXPERIMENT BACKFILL] Found ${candidates.length} dataset run items between ${lastRun.toISOString()} and ${upperBound.toISOString()}`,
+  );
+
+  return candidates;
 }
 
 /**
@@ -290,11 +304,9 @@ export async function getRelevantObservations(
           PARTITION BY o.project_id, o.span_id
           ORDER BY o.created_at DESC
         ) AS rn
-      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
-      -- NOT routed through tableFor; it has no single projectId. Under table
-      -- split this must fan out over each split project's events_full_<pid>
-      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
-      FROM events_full o
+      -- CROSS-PROJECT fan-out: the caller substitutes one split physical table
+      -- per target project batch.
+      FROM __EVENTS_TABLE__ o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
         AND o.is_root = 0
@@ -306,17 +318,22 @@ export async function getRelevantObservations(
   type RawObsRow = Omit<SpanRecord, "metadata"> & {
     metadata: unknown;
   };
-  const rows = await queryDoris<RawObsRow>({
-    query,
-    params: {
-      projectIds,
-      traceIds,
-      minTime: convertDateToAnalyticsDateTime(minTime),
-    },
-    tags: {
-      feature: "experiment-backfill",
-      operation_name: "getRelevantObservations",
-    },
+  const rows = await executeDorisProjectFanout<RawObsRow>({
+    logicalTable: "events_full",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: query.replace("__EVENTS_TABLE__", `\`${target.physicalTable}\``),
+        params: {
+          projectIds: target.projectIds,
+          traceIds,
+          minTime: convertDateToAnalyticsDateTime(minTime),
+        },
+        tags: {
+          feature: "experiment-backfill",
+          operation_name: "getRelevantObservations",
+        },
+      }),
   });
   return rows.map((row) => {
     const { metadata, ...rest } = row;
@@ -390,11 +407,9 @@ export async function getRelevantTraces(
           PARTITION BY o.project_id, o.trace_id
           ORDER BY o.created_at DESC
         ) AS rn
-      -- CROSS-PROJECT (project_id IN over a multi-project batch) — deliberately
-      -- NOT routed through tableFor; it has no single projectId. Under table
-      -- split this must fan out over each split project's events_full_<pid>
-      -- UNION the shared table (design §五). Do not "fix" this to tableFor.
-      FROM events_full o
+      -- CROSS-PROJECT fan-out: the caller substitutes one split physical table
+      -- per target project batch.
+      FROM __EVENTS_TABLE__ o
       WHERE o.project_id IN ({projectIds: Array(String)})
         AND o.trace_id IN ({traceIds: Array(String)})
         AND o.is_root = 1
@@ -406,17 +421,22 @@ export async function getRelevantTraces(
   type RawTraceRow = Omit<SpanRecord, "metadata"> & {
     metadata: unknown;
   };
-  const rows = await queryDoris<RawTraceRow>({
-    query,
-    params: {
-      projectIds,
-      traceIds,
-      minTime: convertDateToAnalyticsDateTime(minTime),
-    },
-    tags: {
-      feature: "experiment-backfill",
-      operation_name: "getRelevantTraces",
-    },
+  const rows = await executeDorisProjectFanout<RawTraceRow>({
+    logicalTable: "events_full",
+    projectIds,
+    queryTarget: (target) =>
+      queryDoris({
+        query: query.replace("__EVENTS_TABLE__", `\`${target.physicalTable}\``),
+        params: {
+          projectIds: target.projectIds,
+          traceIds,
+          minTime: convertDateToAnalyticsDateTime(minTime),
+        },
+        tags: {
+          feature: "experiment-backfill",
+          operation_name: "getRelevantTraces",
+        },
+      }),
   });
   return rows.map((row) => {
     const { metadata, ...rest } = row;
@@ -574,8 +594,8 @@ export function enrichSpansWithExperiment(
 }
 
 /**
- * Write enriched spans to the events table using IngestionService.writeEventRecord().
- * Converts EnrichedSpan to EventInput format.
+ * Write enriched spans to routed tables with deterministic stream-load labels.
+ * IngestionService is used only for the canonical record conversion.
  */
 export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
   if (spans.length === 0) {
@@ -586,12 +606,11 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
   if (!redis) throw new Error("Redis not available");
   if (!prisma) throw new Error("Prisma not available");
 
-  const ingestionService = new IngestionService(
-    redis,
-    prisma,
-    DorisWriter.getInstance(),
-    dorisClient(),
-  );
+  const ingestionService = new IngestionService(redis, prisma, null, null);
+  const recordsByProject = new Map<
+    string,
+    Awaited<ReturnType<typeof ingestionService.createEventRecord>>[]
+  >();
 
   for (const span of spans) {
     // Convert EnrichedSpan to EventInput format
@@ -675,7 +694,51 @@ export async function writeEnrichedSpans(spans: EnrichedSpan[]): Promise<void> {
       eventInput,
       "",
     ); // Empty fileKey since we're not storing raw events
-    await ingestionService.writeEventRecord(eventRecord);
+    const projectRecords = recordsByProject.get(span.project_id) ?? [];
+    projectRecords.push(eventRecord);
+    recordsByProject.set(span.project_id, projectRecords);
+  }
+
+  const client = dorisClient();
+  for (const [projectId, eventRecords] of recordsByProject) {
+    const eventTargets = await executeDorisProjectFanout({
+      logicalTable: "events_full",
+      projectIds: [projectId],
+      queryTarget: async (target) => [target.physicalTable],
+    });
+    const scalarTargets = await executeDorisProjectFanout({
+      logicalTable: "traces_scalar",
+      projectIds: [projectId],
+      queryTarget: async (target) => [target.physicalTable],
+    });
+    const stableEventContent = eventRecords
+      .map((record) => {
+        const { created_at: _generatedAt, ...stableRecord } = record;
+        return stableRecord;
+      })
+      .sort((left, right) => left.span_id.localeCompare(right.span_id));
+    const contentHash = createHash("sha1")
+      .update(JSON.stringify(stableEventContent))
+      .digest("hex");
+    const labelSeed = `experiment_${projectId}_${contentHash}`;
+    const eventsTable = eventTargets[0];
+    const scalarTable = scalarTargets[0];
+    if (!eventsTable || !scalarTable) continue;
+
+    await client.streamLoad(
+      eventsTable,
+      eventRecords.map((record) => formatRecordForDoris(record, eventsTable)),
+      { label: labelForGroupTable(labelSeed, "events_full") },
+    );
+    const scalarRecords = eventRecords
+      .map(toTraceScalarRecord)
+      .filter((record): record is NonNullable<typeof record> => record !== null)
+      .map((record) => formatRecordForDoris(record, scalarTable));
+    if (scalarRecords.length > 0) {
+      await client.streamLoad(scalarTable, scalarRecords, {
+        label: labelForGroupTable(labelSeed, "traces_scalar"),
+      });
+    }
   }
 
   logger.info(

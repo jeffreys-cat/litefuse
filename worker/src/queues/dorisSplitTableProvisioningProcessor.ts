@@ -62,9 +62,8 @@ export const dorisSplitTableProvisioningProcessor: Processor = async (
   // tables (empty until data), registration goes to the lane, and the grouper's
   // own readiness gate (getSplitTablesReadiness → MV FINISHED) holds cutting
   // until the MV is ready, so no data is written before the rollup is live.
-  // Flipping here (not at designation) keeps the not-split window to the few
-  // seconds of CREATE TABLE, avoiding both read-errors on a missing table and
-  // stranding a new project's first rows in the shared table.
+  // Flipping here (not at designation) keeps the pending window to the few
+  // seconds of CREATE TABLE; project-lane files wait until readiness completes.
   if (!readiness.eventsFullExists || !readiness.tracesScalarExists) {
     // Should not happen — CREATE TABLE is synchronous. Retry.
     throw new Error(

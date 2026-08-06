@@ -1286,16 +1286,20 @@ export const deleteDatasetRunItemsByDatasetRunIds = async ({
 export const getDatasetRunItemCountsByProjectInCreationInterval = async ({
   start,
   end,
+  projectIds,
 }: {
   start: Date;
   end: Date;
+  projectIds: string[];
 }) => {
+  if (projectIds.length === 0) return [];
   const query = `
   SELECT
     project_id,
     count(*) as count
   FROM dataset_run_items_rmt
-  WHERE created_at >= {start: DateTime64(3)}
+  WHERE project_id IN ({projectIds: Array(String)})
+  AND created_at >= {start: DateTime64(3)}
   AND created_at < {end: DateTime64(3)}
   GROUP BY project_id
 `;
@@ -1305,6 +1309,7 @@ export const getDatasetRunItemCountsByProjectInCreationInterval = async ({
     params: {
       start: convertDateToAnalyticsDateTime(start),
       end: convertDateToAnalyticsDateTime(end),
+      projectIds,
     },
     tags: {
       feature: "datasets",

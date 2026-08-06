@@ -114,7 +114,6 @@ export class OtelGrouper {
   private stopped = true;
   private tickInFlight: Promise<void> | null = null;
   private tickCount = 0;
-  private healthLineCounter = 0;
   /** shard/domain → we believe we currently hold its lease (renew before re-acquire). */
   private held = new Set<string>();
   /** Lanes whose MV build has FINISHED (monotonic — checked once, then cached).
@@ -297,19 +296,7 @@ export class OtelGrouper {
         groupJobLoadLimiter.pendingCount,
       );
     }
-    for (const shard of this.shardNames) {
-      if (this.stopped) return;
-      try {
-        if (emitGauges) await this.emitShardGauges(shard);
-        await this.tickShard(shard);
-      } catch (e) {
-        logger.error(
-          `[OtelGrouper] shard ${shard} tick failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
-
-    // ── B. project-lane domain (Stage 1.4) ──
+    // ── project-lane domain ──
     if (this.stopped) return;
     // Lane backlog gauges are leadership-INDEPENDENT (like shards — #10): EVERY
     // worker emits them, so a dead domain leader surfaces as a RISING gauge, not
@@ -476,14 +463,8 @@ export class OtelGrouper {
     }
   }
 
-  /**
-   * Candidate lanes = (PG split list ∪ lane-index) still split. lane-index is
-   * the PG-outage fallback; filtering by isSplitProject drops un-split /
-   * tombstoned projects (design F6 — never cut into a table about to be
-   * dropped; their residual keys are cleaned by the deletion flow §4.4).
-   */
-  /** Per-lane backlog gauges (the lane counterpart of emitShardGauges). Tagged
-   * with the lane as `shard` so dashboards read both pools on one metric. */
+  /** Per-lane backlog gauges. Tagged with the lane as `shard` so existing
+   * dashboards keep working while the pending model is all lane-based. */
   private async emitLaneGauges(lane: string): Promise<void> {
     const redis = this.redis!;
     const [depth, quarantine, oldestAge, staged] = await Promise.all([
@@ -559,66 +540,6 @@ export class OtelGrouper {
       `[OtelGrouper] cut lane=${lane} group=${cut.groupId.slice(0, 12)} files=${cut.entries.length} bytes=${(bytes / (1024 * 1024)).toFixed(1)}MB spans=${spans} waited=${waitedMs}ms`,
     );
     await this.publish(lane, cut);
-  }
-
-  private async tickShard(shard: string): Promise<void> {
-    const redis = this.redis!;
-    if (!(await this.acquireOrRenew(shard))) return; // not the leader
-
-    // Recovery must COMPLETE before the next cut: a leftover manifest whose
-    // members still sit in pending (mid-script residue) would otherwise be
-    // re-cut into a second group under a second label. A transient failure
-    // on any single group's recovery therefore skips cutting for this tick —
-    // better one 200ms-late cut than a double-grouped file.
-    if (!(await this.recoverStaged(shard))) return;
-
-    const cut = await cutOtelGroup({
-      redis,
-      groupingKey: shard,
-      token: this.token,
-      targetBytes: this.cfg.targetBytes,
-      targetRows: this.cfg.targetRows,
-      maxFiles: this.cfg.maxFiles,
-      flushMs: this.cfg.flushMs,
-    }).catch(async (e) => {
-      // Lua is isolation-without-rollback: an error may have left a manifest
-      // whose members still sit in the list. Reconcile-before-recut via the
-      // standard recovery path (it LREMs manifest members), then stop this
-      // tick — the next tick republishes and cuts fresh.
-      logger.error(
-        `[OtelGrouper] cut failed on ${shard} (reconciling): ${e instanceof Error ? e.message : String(e)}`,
-      );
-      await this.recoverStaged(shard);
-      return null;
-    });
-    if (!cut) return;
-
-    recordIncrement("langfuse.otel_grouper.groups_cut", 1, { shard });
-    recordIncrement("langfuse.otel_grouper.files_grouped", cut.entries.length, {
-      shard,
-    });
-
-    // Cut decision line — reads together with the [OtelGroupJob] line:
-    // waited = oldest member's registration → cut (the grouping latency
-    // component of e2e_lag); reason = which dispatch-gate condition fired
-    // (undersized "timeout" groups at high traffic ⇒ raise flush/tick;
-    // constant "bytes" at low traffic ⇒ target too small).
-    const bytes = cut.entries.reduce((a, e) => a + e.size, 0);
-    const spans = cut.entries.reduce((a, e) => a + e.spanCount, 0);
-    const waitedMs = Date.now() - Math.min(...cut.entries.map((e) => e.ts));
-    const reason =
-      bytes >= this.cfg.targetBytes
-        ? "bytes"
-        : spans >= this.cfg.targetRows
-          ? "rows"
-          : cut.entries.length >= this.cfg.maxFiles
-            ? "files"
-            : "timeout";
-    logger.info(
-      `[OtelGrouper] cut shard=${shard} group=${cut.groupId.slice(0, 12)} files=${cut.entries.length} bytes=${(bytes / (1024 * 1024)).toFixed(1)}MB spans=${spans} waited=${waitedMs}ms reason=${reason}`,
-    );
-
-    await this.publish(shard, cut);
   }
 
   /**
@@ -727,78 +648,6 @@ export class OtelGrouper {
     });
     if (acquired) this.held.add(groupingKey);
     return acquired;
-  }
-
-  private async emitShardGauges(shard: string): Promise<void> {
-    const redis = this.redis!;
-    const [depth, quarantine, oldestAge, staged] = await Promise.all([
-      otelPendingDepth({ redis, groupingKey: shard }),
-      otelQuarantineDepth({ redis, groupingKey: shard }),
-      otelPendingOldestAgeMs({ redis, groupingKey: shard }),
-      scanStagedOtelGroups({ redis, groupingKey: shard }),
-    ]);
-    recordGauge("langfuse.otel_grouper.pending_depth", depth, { shard });
-    recordGauge("langfuse.otel_grouper.quarantine_depth", quarantine, {
-      shard,
-    });
-    recordGauge("langfuse.otel_grouper.staging_count", staged.length, {
-      shard,
-    });
-    recordGauge("langfuse.otel_grouper.pending_oldest_age_ms", oldestAge ?? 0, {
-      shard,
-    });
-
-    // Queue-side health (design §6.3): wait depth = consumption keeping up;
-    // failed depth + oldest failed age = the DLQ/age-guard chain's SLA input
-    // (failed_oldest_age alert must fire well before the label retention
-    // window closes the redrive path). Only for REAL configured shards — the
-    // tests' throwaway shard names must not summon queue connections.
-    let wait: number | null = null;
-    let failed: number | null = null;
-    let failedOldestMs = 0;
-    if (OtelIngestionQueue.getShardNames().includes(shard)) {
-      try {
-        const queue = OtelIngestionQueue.getInstance({ shardName: shard });
-        if (queue) {
-          const counts = await queue.getJobCounts("wait", "failed");
-          wait = counts.wait ?? 0;
-          failed = counts.failed ?? 0;
-          recordGauge("langfuse.otel_queue.wait_depth", wait, { shard });
-          recordGauge("langfuse.otel_queue.failed_depth", failed, { shard });
-          const oldestFailed = await queue.getJobs(["failed"], 0, 0, true);
-          failedOldestMs = oldestFailed[0]?.timestamp
-            ? Date.now() - oldestFailed[0].timestamp
-            : 0;
-          recordGauge(
-            "langfuse.otel_queue.failed_oldest_age_ms",
-            failedOldestMs,
-            { shard },
-          );
-        }
-      } catch (e) {
-        logger.debug(
-          `[OtelGrouper] queue gauge emit failed for ${shard}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
-
-    // Human-readable health line every ~60s (gauges fire every ~5s → every
-    // 12th emission). All-zero = healthy steady state; the interesting
-    // fields for troubleshooting: pending(oldest) rising = grouper stalled /
-    // undersized; wait rising = consumption behind; failed>0 = jobs riding
-    // the DLQ ladder (check failed_oldest vs the 3d label window); anything
-    // in staging/quarantine persisting = recovery/poison-entry problems.
-    this.healthLineCounter = (this.healthLineCounter + 1) % 12;
-    if (this.healthLineCounter === 0) {
-      const oldestSec = oldestAge != null ? (oldestAge / 1000).toFixed(1) : "-";
-      const queuePart =
-        wait != null
-          ? ` wait=${wait} failed=${failed}${(failed ?? 0) > 0 ? `(oldest ${(failedOldestMs / 3600_000).toFixed(1)}h)` : ""}`
-          : "";
-      logger.info(
-        `[OtelGrouper.health] shard=${shard} leader=${this.held.has(shard)} pending=${depth}(oldest ${oldestSec}s) staging=${staged.length} quarantine=${quarantine}${queuePart} loads=${groupJobLoadLimiter.activeCount}/${env.LITEFUSE_OTEL_LOAD_CONCURRENCY}${groupJobLoadLimiter.pendingCount > 0 ? `(+${groupJobLoadLimiter.pendingCount} queued)` : ""}`,
-      );
-    }
   }
 
   private async publishToQueue(

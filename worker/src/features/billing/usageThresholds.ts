@@ -84,6 +84,9 @@ export async function processUsageThresholds(referenceDate = new Date()) {
   const rows = await getBillingUnitCountsByProjectAndDay({
     start: earliestStart,
     end: new Date(referenceDate.getTime() + 1),
+    projectIds: organizations.flatMap(
+      (organization) => organization.projectIds,
+    ),
   });
   const projectToOrg = new Map<string, string>();
   for (const org of organizations) {

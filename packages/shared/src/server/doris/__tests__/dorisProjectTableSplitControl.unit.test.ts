@@ -1,17 +1,28 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { findUniqueMock, upsertMock, enqueueMock, publishMock } = vi.hoisted(
-  () => ({
-    findUniqueMock: vi.fn(),
-    upsertMock: vi.fn(),
-    enqueueMock: vi.fn(),
-    publishMock: vi.fn(),
-  }),
-);
+const {
+  projectFindUniqueMock,
+  splitFindUniqueMock,
+  splitCreateMock,
+  upsertMock,
+  enqueueMock,
+  publishMock,
+} = vi.hoisted(() => ({
+  projectFindUniqueMock: vi.fn(),
+  splitFindUniqueMock: vi.fn(),
+  splitCreateMock: vi.fn(),
+  upsertMock: vi.fn(),
+  enqueueMock: vi.fn(),
+  publishMock: vi.fn(),
+}));
 vi.mock("../../../db", () => ({
   prisma: {
-    project: { findUnique: findUniqueMock },
-    dorisProjectTableSplit: { upsert: upsertMock },
+    project: { findUnique: projectFindUniqueMock },
+    dorisProjectTableSplit: {
+      create: splitCreateMock,
+      findUnique: splitFindUniqueMock,
+      upsert: upsertMock,
+    },
   },
 }));
 vi.mock("../../logger", () => ({
@@ -26,6 +37,7 @@ vi.mock("../tableSplitCache", () => ({
 
 import {
   classifyMissingSplitTable,
+  ensureProjectSplitDesignated,
   handleMissingSplitTable,
   upsertDorisProjectTableSplit,
 } from "../dorisProjectTableSplitControl";
@@ -33,7 +45,9 @@ import {
 const PID = "cmqiwxsca0006pj070fdkn0vd";
 
 beforeEach(() => {
-  findUniqueMock.mockReset();
+  projectFindUniqueMock.mockReset();
+  splitFindUniqueMock.mockReset();
+  splitCreateMock.mockReset();
   upsertMock.mockReset();
   enqueueMock.mockReset();
   publishMock.mockReset();
@@ -54,43 +68,71 @@ describe("upsertDorisProjectTableSplit", () => {
   });
 });
 
+describe("ensureProjectSplitDesignated", () => {
+  it("does nothing when the split control row already exists", async () => {
+    splitFindUniqueMock.mockResolvedValue({ projectId: PID });
+
+    await ensureProjectSplitDesignated(PID);
+
+    expect(splitCreateMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
+  it("creates a pending row and enqueues provisioning when missing", async () => {
+    splitFindUniqueMock.mockResolvedValue(null);
+
+    await ensureProjectSplitDesignated(PID);
+
+    expect(splitCreateMock).toHaveBeenCalledWith({
+      data: {
+        projectId: PID,
+        split: false,
+        note: "auto-designated by all-split ingestion",
+      },
+    });
+    expect(enqueueMock).toHaveBeenCalledWith(PID);
+    expect(publishMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("classifyMissingSplitTable (write-path 3-way)", () => {
   it("live project → reprovision", async () => {
-    findUniqueMock.mockResolvedValue({ id: PID, deletedAt: null });
+    projectFindUniqueMock.mockResolvedValue({ id: PID, deletedAt: null });
     expect(await classifyMissingSplitTable(PID)).toBe("reprovision");
   });
 
   it("deleted project → skip-tombstoned", async () => {
-    findUniqueMock.mockResolvedValue({ id: PID, deletedAt: new Date() });
+    projectFindUniqueMock.mockResolvedValue({ id: PID, deletedAt: new Date() });
     expect(await classifyMissingSplitTable(PID)).toBe("skip-tombstoned");
   });
 
   it("missing project row → skip-tombstoned", async () => {
-    findUniqueMock.mockResolvedValue(null);
+    projectFindUniqueMock.mockResolvedValue(null);
     expect(await classifyMissingSplitTable(PID)).toBe("skip-tombstoned");
   });
 
   it("PG error → pg-error (never guesses)", async () => {
-    findUniqueMock.mockRejectedValue(new Error("connection refused"));
+    projectFindUniqueMock.mockRejectedValue(new Error("connection refused"));
     expect(await classifyMissingSplitTable(PID)).toBe("pg-error");
   });
 });
 
 describe("handleMissingSplitTable", () => {
   it("reprovision → re-enqueues provisioning and retries", async () => {
-    findUniqueMock.mockResolvedValue({ id: PID, deletedAt: null });
+    projectFindUniqueMock.mockResolvedValue({ id: PID, deletedAt: null });
     expect(await handleMissingSplitTable(PID)).toBe("retry");
     expect(enqueueMock).toHaveBeenCalledWith(PID);
   });
 
   it("pg-error → retry, does NOT re-enqueue (can't decide)", async () => {
-    findUniqueMock.mockRejectedValue(new Error("pg down"));
+    projectFindUniqueMock.mockRejectedValue(new Error("pg down"));
     expect(await handleMissingSplitTable(PID)).toBe("retry");
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("tombstoned → skip, does NOT resurrect tables", async () => {
-    findUniqueMock.mockResolvedValue({ id: PID, deletedAt: new Date() });
+    projectFindUniqueMock.mockResolvedValue({ id: PID, deletedAt: new Date() });
     expect(await handleMissingSplitTable(PID)).toBe("skip");
     expect(enqueueMock).not.toHaveBeenCalled();
   });

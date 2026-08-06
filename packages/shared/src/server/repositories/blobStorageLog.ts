@@ -112,12 +112,12 @@ export const getBlobStorageByProjectIdAndTraceIds = (
   traceIds: string[],
 ): AsyncGenerator<BlobStorageFileRefRecordReadType> => {
   const query = `
-      -- Trace/observation entity ids come from the events_full family: the
+      -- Trace/observation entity ids come from the per-project event table family: the
       -- legacy v3 \`traces\`/\`observations\` tables receive NO writes under the
       -- OTel-only contract, so reading them here returned empty sets and blob
       -- cleanup silently skipped every trace/observation file. Trace entities
-      -- are the traces_scalar rows (one per trace); observation entities are
-      -- the trace's span ids from events_full (the root span id doubles as an
+      -- are the scalar rows (one per trace); observation entities are the
+      -- trace's span ids from the event rows (the root span id doubles as an
       -- entity id superset — non-matching ids simply find no log rows in the
       -- EXISTS semi-join).
       with filtered_traces as (

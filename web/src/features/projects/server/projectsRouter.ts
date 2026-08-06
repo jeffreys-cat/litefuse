@@ -63,12 +63,12 @@ export const projectsRouter = createTRPCRouter({
       // Universal Doris table split: EVERY new project gets its own tables
       // (billing-independent; retention TTL stays paid-differentiated, derived
       // at provisioning). The client gets the project id only after this
-      // returns, so designating it BEFORE then guarantees its first rows can
-      // never leak to the shared table (the write path resolves the designation
-      // with a PG fallback). RELIABLE + compensating: if designation fails
+      // returns, so designating it BEFORE then guarantees its first rows wait
+      // on the project lane while tables are provisioned. RELIABLE +
+      // compensating: if designation fails
       // (a rare PG blip on the control-row write), delete the just-created
       // project so the mutation fails cleanly instead of leaving an undesignated
-      // project that could ingest to the shared table. The provisioning
+      // project. The provisioning
       // enqueue/propagation inside upsert are best-effort.
       try {
         await provisionSplitForNewProject(project.id);
@@ -180,7 +180,7 @@ export const projectsRouter = createTRPCRouter({
       // Retention is single-sourced on Project.retentionDays. If this project is
       // split, its dynamic_partition TTL must follow — re-enqueue provisioning,
       // which idempotently ALTERs the split tables' TTL to the new value (and
-      // no-ops for a non-split project). Best-effort — never fail the setting.
+      // no-ops until the control row exists). Best-effort — never fail the setting.
       await enqueueDorisSplitTableProvisioning(input.projectId).catch((e) =>
         logger.error(
           `[table-split] TTL re-provision enqueue for ${input.projectId} failed`,

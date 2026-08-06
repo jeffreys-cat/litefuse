@@ -41,6 +41,7 @@ export * from "./doris/schema";
 export * from "./doris/schemaUtils";
 export * from "./doris/tableRouting";
 export * from "./doris/tableSplitCache";
+export * from "./doris/crossProjectTableRouting";
 export * from "./doris/splitTableTemplates";
 export * from "./doris/measureAndReturn";
 export * from "./repositories/definitions";

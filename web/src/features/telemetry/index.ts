@@ -154,16 +154,20 @@ async function posthogTelemetry({
   try {
     const posthog = new ServerPosthog();
     // Count projects
-    const totalProjects = await prisma.project.count({
+    const projects = await prisma.project.findMany({
       where: {
         deletedAt: null,
       },
+      select: { id: true },
     });
+    const projectIds = projects.map((project) => project.id);
+    const totalProjects = projectIds.length;
 
     // Count traces
     const countTracesDoris = await getTraceCountsByProjectInCreationInterval({
       start: startTimeframe ?? new Date(0),
       end: endTimeframe,
+      projectIds,
     });
     const countTraces = countTracesDoris.reduce(
       (acc, curr) => acc + curr.count,
@@ -174,6 +178,7 @@ async function posthogTelemetry({
     const countScoresDoris = await getScoreCountsByProjectInCreationInterval({
       start: startTimeframe ?? new Date(0),
       end: endTimeframe,
+      projectIds,
     });
     const countScores = countScoresDoris.reduce(
       (acc, curr) => acc + curr.count,
@@ -185,6 +190,7 @@ async function posthogTelemetry({
       await getObservationCountsByProjectInCreationInterval({
         start: startTimeframe ?? new Date(0),
         end: endTimeframe,
+        projectIds,
       });
     const countObservations = countObservationsDoris.reduce(
       (acc, curr) => acc + curr.count,
@@ -225,6 +231,7 @@ async function posthogTelemetry({
       await getDatasetRunItemCountsByProjectInCreationInterval({
         start: startTimeframe ?? new Date(0),
         end: endTimeframe,
+        projectIds,
       });
     const countDatasetRunItems = countDatasetRunItemsDoris.reduce(
       (acc, curr) => acc + curr.count,

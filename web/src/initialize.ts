@@ -6,6 +6,7 @@ import { hasEntitlementBasedOnPlan } from "@/src/features/entitlements/server/ha
 import { getOrganizationPlanServerSide } from "@/src/features/entitlements/server/getPlan";
 import { CloudConfigSchema } from "@langfuse/shared";
 import {
+  initializeSplitCache,
   logger,
   startSplitCacheRefresh,
 } from "@langfuse/shared/src/server";
@@ -14,6 +15,7 @@ import {
 // warm so the synchronous isSplitProject can answer from memory. Loads the PG
 // control table; an empty table just means every project reads the shared
 // tables until it is designated + provisioned.
+await initializeSplitCache();
 startSplitCacheRefresh();
 
 // Warn if LITEFUSE_INIT_* variables are set but LITEFUSE_INIT_ORG_ID is missing

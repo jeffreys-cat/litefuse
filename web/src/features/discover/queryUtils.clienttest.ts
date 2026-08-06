@@ -1,6 +1,7 @@
 import {
   isForeignSplitTable,
   findForeignSplitTables,
+  findForbiddenTelemetryTables,
   filterVisibleTables,
 } from "@/src/features/discover/server/queryUtils";
 
@@ -38,23 +39,43 @@ describe("Discover split-table access control (Stage 1.7)", () => {
       expect(found).toContain(`traces_scalar_${OTHER}`);
       expect(found).toContain(`events_full_${OTHER}`);
     });
-    it("allows own split tables and shared tables", () => {
+    it("allows own split tables and shared non-telemetry tables", () => {
       expect(
         findForeignSplitTables(
           `SELECT * FROM events_full_${OWN} JOIN scores s ON s.trace_id = id`,
           OWN,
         ),
       ).toEqual([]);
-      expect(findForeignSplitTables(`SELECT * FROM events_full`, OWN)).toEqual(
-        [],
-      );
+      expect(findForeignSplitTables(`SELECT * FROM scores`, OWN)).toEqual([]);
+    });
+  });
+
+  describe("findForbiddenTelemetryTables", () => {
+    it("rejects shared telemetry table names", () => {
+      expect(
+        findForbiddenTelemetryTables(
+          `SELECT * FROM events_full JOIN traces_scalar t ON t.id = id`,
+          OWN,
+        ),
+      ).toEqual(["events_full", "traces_scalar"]);
+    });
+
+    it("rejects foreign split tables but allows own split tables", () => {
+      expect(
+        findForbiddenTelemetryTables(
+          `SELECT * FROM events_full_${OWN} JOIN traces_scalar_${OTHER} t ON t.id = id`,
+          OWN,
+        ),
+      ).toEqual([`traces_scalar_${OTHER}`]);
     });
   });
 
   describe("filterVisibleTables", () => {
-    it("hides other projects' split tables from SHOW TABLES", () => {
+    it("hides shared telemetry and other projects' split tables from SHOW TABLES", () => {
       const rows = [
         { Tables_in_litefuse: "events_full" },
+        { Tables_in_litefuse: "traces_scalar" },
+        { Tables_in_litefuse: "trace_metrics_agg" },
         { Tables_in_litefuse: `events_full_${OWN}` },
         { Tables_in_litefuse: `events_full_${OTHER}` },
         { Tables_in_litefuse: `traces_scalar_${OTHER}` },
@@ -63,11 +84,7 @@ describe("Discover split-table access control (Stage 1.7)", () => {
       const visible = filterVisibleTables(rows, OWN).map(
         (r) => r.Tables_in_litefuse,
       );
-      expect(visible).toEqual([
-        "events_full",
-        `events_full_${OWN}`,
-        "scores",
-      ]);
+      expect(visible).toEqual([`events_full_${OWN}`, "scores"]);
     });
   });
 });

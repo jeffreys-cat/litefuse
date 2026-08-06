@@ -15,7 +15,6 @@ import {
   recordIncrement,
   traceException,
   getS3EventStorageClient,
-  QueueJobs,
   instrumentSync,
   recordDistribution,
   UsageDetails,
@@ -27,7 +26,6 @@ import {
 import { LangfuseOtelSpanAttributes } from "./attributes";
 import { ObservationTypeMapperRegistry } from "./ObservationTypeMapper";
 import { env } from "../../env";
-import { OtelIngestionQueue } from "../redis/otelIngestionQueue";
 import { registerOtelFile, addLaneToIndex } from "../redis/otelPendingGroups";
 import { laneForIngestion } from "../doris/tableRouting";
 import { isSplitCacheReady } from "../doris/tableSplitCache";
@@ -181,17 +179,10 @@ export class OtelIngestionProcessor {
   }
 
   /**
-   * Persists a batch of resourceSpans to blob storage, then hands it to the
-   * ingestion pipeline. Two modes (exactly-once design §3.1):
-   *
-   *   - LITEFUSE_OTEL_GROUPING_ENABLED=false (legacy): one BullMQ job per
-   *     file, enqueued directly.
-   *   - =true: idempotent registration into a per-shard pending list — the
-   *     worker-side grouper packs registered files into group jobs. The
-   *     registration Lua admits a fileKey at most once per TTL window, so a
-   *     client-level command resend cannot double-register. Any failure
-   *     throws → the route answers 5xx → the SDK re-sends (declared EO
-   *     boundary; a re-send is a NEW fileKey).
+   * Persists a batch of resourceSpans to blob storage, then registers the file
+   * into the project's dedicated pending lane. The worker-side grouper cuts a
+   * lane only after that project's split tables are ready, so telemetry never
+   * falls back to shared Doris tables.
    *
    * The S3 upload always happens first — data durability precedes every
    * pointer, in both modes.
@@ -206,98 +197,42 @@ export class OtelIngestionProcessor {
       env.LITEFUSE_S3_EVENT_UPLOAD_BUCKET!,
     ).uploadJsonString(fileKey, body);
 
-    if (env.LITEFUSE_OTEL_GROUPING_ENABLED === "true") {
-      // Pipeline keys are FULL key strings (otelPendingGroups shard tag) —
-      // they must be written through a connection WITHOUT the ioredis
-      // keyPrefix that the shared singleton carries, or the grouper (which
-      // reads prefix-free) would never see them.
-      const groupingRedis = getUnprefixedRedis();
-      if (!groupingRedis) {
-        throw new Error(
-          "Redis not available — cannot register otel file for grouping",
-        );
-      }
-      // fail-and-retry gate (Stage 1.3): in project_id_with_rule mode a cold
-      // split-cache cannot be trusted — laneFor would misroute a split project
-      // to the shared shard (stranding its rows). Never guess: throw so the
-      // route answers 5xx and the SDK re-sends once the cache is warm (the same
-      // EO re-send contract as any registration failure; a re-send is a new
-      // fileKey, the orphan S3 object is reconciled).
-      if (!isSplitCacheReady()) {
-        throw new Error(
-          "otel registration deferred: split-cache not ready (retry to avoid misrouting a split project)",
-        );
-      }
-
-      // Split project (LIVE or PENDING) → its dedicated lane (a group cut from
-      // it is naturally single-project); otherwise a random shard from the
-      // shared pool. laneForIngestion resolves PENDING (designated but not yet
-      // provisioned) to the lane too — with a PG fallback on a cache miss — so a
-      // just-designated project's first rows are held on its lane, never leaked
-      // to the shared pool. Random shard spread is deliberately independent of
-      // REDIS_CLUSTER_ENABLED (the pending lists must spread wherever more than
-      // one shard is configured).
-      const lane = await laneForIngestion(this.projectId);
-      const shardNames = OtelIngestionQueue.getShardNames();
-      const groupingKey =
-        lane ??
-        (shardNames[Math.floor(Math.random() * shardNames.length)] as string);
-      // Register the lane in the discovery index so the grouper full-scan finds
-      // it (idempotent SADD; only for split projects).
-      if (lane) {
-        await addLaneToIndex(groupingRedis, lane);
-      }
-      await registerOtelFile({
-        redis: groupingRedis,
-        groupingKey,
-        ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
-        entry: {
-          v: 1,
-          fileKey,
-          size: Buffer.byteLength(body, "utf8"),
-          spanCount: this.getTotalSpanCount(resourceSpans),
-          ts: Date.now(),
-          projectId: this.projectId,
-          publicKey: this.publicKey,
-          orgId: this.orgId,
-          sdkName: this.sdkName,
-          sdkVersion: this.sdkVersion,
-          ingestionVersion: this.ingestionVersion,
-          propagatedHeaders: this.propagatedHeaders,
-        },
-      });
-      // true (newly registered) and false (already registered inside the TTL
-      // window) are BOTH success for the caller — that's the idempotency.
-      return;
+    if (!isSplitCacheReady()) {
+      throw new Error(
+        "otel registration deferred: split-cache not ready (retry to avoid misrouting a split project)",
+      );
     }
-
-    // Legacy path: one BullMQ job per file.
-    const queue = OtelIngestionQueue.getInstance({});
-    return queue
-      ? queue.add(QueueJobs.OtelIngestionJob, {
-          id: randomUUID(),
-          timestamp: new Date(),
-          name: QueueJobs.OtelIngestionJob as const,
-          payload: {
-            data: {
-              fileKey,
-              publicKey: this.publicKey,
-            },
-            authCheck: {
-              validKey: true,
-              scope: {
-                projectId: this.projectId,
-                accessLevel: "project" as const,
-                orgId: this.orgId,
-              },
-            },
-            propagatedHeaders: this.propagatedHeaders,
-            sdkName: this.sdkName,
-            sdkVersion: this.sdkVersion,
-            ingestionVersion: this.ingestionVersion,
-          },
-        })
-      : Promise.reject("Failed to instantiate otel ingestion queue");
+    const lane = await laneForIngestion(this.projectId);
+    // Pipeline keys are FULL key strings (otelPendingGroups shard tag) — they
+    // must be written through a connection WITHOUT the ioredis keyPrefix that
+    // the shared singleton carries, or the grouper (which reads prefix-free)
+    // would never see them.
+    const groupingRedis = getUnprefixedRedis();
+    if (!groupingRedis) {
+      throw new Error("Redis not available — cannot register otel file");
+    }
+    await addLaneToIndex(groupingRedis, lane);
+    await registerOtelFile({
+      redis: groupingRedis,
+      groupingKey: lane,
+      ttlMs: env.LITEFUSE_OTEL_REGISTERED_TTL_MS,
+      entry: {
+        v: 1,
+        fileKey,
+        size: Buffer.byteLength(body, "utf8"),
+        spanCount: this.getTotalSpanCount(resourceSpans),
+        ts: Date.now(),
+        projectId: this.projectId,
+        publicKey: this.publicKey,
+        orgId: this.orgId,
+        sdkName: this.sdkName,
+        sdkVersion: this.sdkVersion,
+        ingestionVersion: this.ingestionVersion,
+        propagatedHeaders: this.propagatedHeaders,
+      },
+    });
+    // true (newly registered) and false (already registered inside the TTL
+    // window) are BOTH success for the caller — that's the idempotency.
   }
 
   /**

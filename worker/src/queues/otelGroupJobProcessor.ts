@@ -12,7 +12,6 @@ import {
   recordIncrement,
   traceException,
   OtelIngestionProcessor,
-  isSplitProject,
   isSplitCacheReady,
   tableFor,
   getSplitRetentionDays,
@@ -200,14 +199,10 @@ export const processOtelGroupJob = async (
     );
   }
 
-  // Target tables (Stage 1.6). A group is homogeneous: a project lane holds one
-  // split project (→ events_full_<pid>); a shared shard holds only non-split
-  // projects (→ shared events_full). So the target derives from any entry's
-  // projectId — tableFor returns the shared name for a non-split project and the
-  // per-project name for a split one. Registration's fail-and-retry gate (1.3)
-  // guarantees a split project's files never land in a shared shard group.
+  // Target tables. A group is homogeneous because ingestion registers every
+  // file into its project lane; the target derives from any entry's projectId.
   const targetProjectId = entries[0]?.projectId;
-  const split = targetProjectId ? isSplitProject(targetProjectId) : false;
+  const split = Boolean(targetProjectId);
   const eventsTable = targetProjectId
     ? tableFor(targetProjectId, "events_full")
     : "events_full";
@@ -215,12 +210,9 @@ export const processOtelGroupJob = async (
     ? tableFor(targetProjectId, "traces_scalar")
     : "traces_scalar";
 
-  // Retention filter (SPLIT targets only, design §4.3): a split table is
-  // dynamic_partition — a row older than the project's retention would be
-  // committed then silently TTL-dropped (tablet-version churn, the E-235
-  // incident). Drop such rows before the load (row-level dead letter). Shared
-  // targets skip: no dynamic_partition, deletion is the batch cleaner's job, and
-  // filtering here would wrongly kill a shared project's historical replay.
+  // Retention filter: a split table is dynamic_partition — a row older than
+  // the project's retention would be
+  // committed then silently TTL-dropped. Drop such rows before the load.
   // The cutoff is anchored to the group's newest registration ts (deterministic
   // across replays — I5), not Date.now().
   const retentionDays = split

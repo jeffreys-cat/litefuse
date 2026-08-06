@@ -17,7 +17,6 @@ import {
   metricsAggTableFor,
   laneFor,
   toLogicalTable,
-  sharedTableFor,
 } from "../tableRouting";
 
 const PID = "cmqiwxsca0006pj070fdkn0vd";
@@ -27,19 +26,19 @@ beforeEach(() => {
 });
 
 describe("tableRouting", () => {
-  describe("project NOT live in the split cache (pre-provision / pre-backfill)", () => {
-    it("isSplitProject is false → shared tables", () => {
+  describe("project NOT live in the split cache (pre-provision / old project)", () => {
+    it("isSplitProject is still cache-backed, but tableFor returns split tables", () => {
       expect(isSplitProject(PID)).toBe(false);
-      expect(tableFor(PID, "events_full")).toBe("events_full");
-      expect(tableFor(PID, "traces_scalar")).toBe("traces_scalar");
+      expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
+      expect(tableFor(PID, "traces_scalar")).toBe(`traces_scalar_${PID}`);
     });
 
-    it("metricsAggTableFor returns the shared MV name", () => {
-      expect(metricsAggTableFor(PID)).toBe("trace_metrics_agg");
+    it("metricsAggTableFor returns the project MV name", () => {
+      expect(metricsAggTableFor(PID)).toBe(`trace_metrics_agg_${PID}`);
     });
 
-    it("laneFor returns null (shared shard pool)", () => {
-      expect(laneFor(PID)).toBeNull();
+    it("laneFor returns the dedicated project lane", () => {
+      expect(laneFor(PID)).toBe(`lane-${PID}`);
     });
   });
 
@@ -65,10 +64,10 @@ describe("tableRouting", () => {
       expect(laneFor(PID)).toBe(`lane-${PID}`);
     });
 
-    it("only live projects split — a different project stays shared", () => {
+    it("a different project still routes to its own split tables", () => {
       splitCacheMock.members = new Set(["other-project"]);
       expect(isSplitProject(PID)).toBe(false);
-      expect(tableFor(PID, "events_full")).toBe("events_full");
+      expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
     });
   });
 
@@ -88,23 +87,13 @@ describe("tableRouting", () => {
       expect(toLogicalTable("trace_metrics_agg")).toBe("trace_metrics_agg");
     });
 
-    it("round-trips tableFor whether live or not", () => {
+    it("round-trips tableFor regardless of cache state", () => {
       expect(toLogicalTable(tableFor(PID, "events_full"))).toBe("events_full");
       splitCacheMock.members = new Set([PID]);
       expect(toLogicalTable(tableFor(PID, "events_full"))).toBe("events_full");
       expect(toLogicalTable(tableFor(PID, "traces_scalar"))).toBe(
         "traces_scalar",
       );
-    });
-  });
-
-  describe("sharedTableFor (cross-project escape hatch)", () => {
-    it("returns the logical name whether or not the project is split", () => {
-      for (const members of [new Set<string>(), new Set([PID])]) {
-        splitCacheMock.members = members;
-        expect(sharedTableFor("events_full")).toBe("events_full");
-        expect(sharedTableFor("traces_scalar")).toBe("traces_scalar");
-      }
     });
   });
 

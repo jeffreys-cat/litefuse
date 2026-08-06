@@ -7,7 +7,7 @@ import "eslint-plugin-only-warn";
 
 // Table-split guard (docs/project-per-table-*.md, Stage 0.7): inside the
 // query-building layer the two per-project logical tables must never appear as
-// a bare `FROM events_full` / `JOIN traces_scalar` clause — they have to be
+// a bare telemetry table in any read/write SQL clause — it has to be
 // routed through tableFor(projectId, "...") so a split project reads its own
 // physical table, or through the named sharedTableFor("...") escape hatch for a
 // deliberate cross-project shared read. An interpolated `${tableFor(...)}`
@@ -21,9 +21,9 @@ import "eslint-plugin-only-warn";
 // lower-case their SQL). `\b` after the name means physical `events_full_<pid>`
 // names never match.
 const TABLE_CLAUSE_RE =
-  "(?:\\n|^)\\s*(?:(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL)\\s+)*(?:FROM|JOIN)\\s+(?:events_full|traces_scalar)\\b";
+  "(?:\\n|^)\\s*(?!--)[^\\n]*?\\b(?:(?:LEFT|RIGHT|INNER|OUTER|CROSS|FULL)\\s+)*(?:FROM|JOIN|DELETE\\s+FROM|UPDATE|INSERT\\s+INTO)\\s+(?:events_full|traces_scalar|observations)\\b";
 const TABLE_ROUTING_MESSAGE =
-  'Bare events_full/traces_scalar in SQL is not per-project-safe. Route it through tableFor(projectId, "...") — or, for a deliberate cross-project shared read, sharedTableFor("...").';
+  "Bare events_full/traces_scalar/observations in SQL is not split-safe. Use tableFor for one project or the authoritative cross-project target executor.";
 const tableRoutingSelectors = [
   {
     selector: `TemplateElement[value.raw=/${TABLE_CLAUSE_RE}/i]`,
@@ -45,6 +45,7 @@ const tableRoutingSelectors = [
 export const tableRoutingRule = (files) => ({
   name: "langfuse/doris-table-routing",
   files,
+  ignores: ["**/*test*.*"],
   rules: {
     "no-restricted-syntax": ["error", ...tableRoutingSelectors],
   },
