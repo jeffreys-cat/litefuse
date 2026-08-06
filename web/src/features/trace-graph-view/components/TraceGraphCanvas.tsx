@@ -170,9 +170,9 @@ export const TraceGraphCanvas: React.FC<TraceGraphCanvasProps> = (props) => {
         hierarchical: {
           enabled: true,
           direction: "UD", // Up-Down (top to bottom)
-          levelSeparation: 80,
-          nodeSpacing: 200,
-          sortMethod: "directed",
+          levelSeparation: 60,
+          nodeSpacing: 175,
+          sortMethod: "hubsize",
           shakeTowards: "roots",
         },
         randomSeed: 1,
