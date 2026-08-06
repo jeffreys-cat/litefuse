@@ -194,9 +194,12 @@ const EnvSchema = z.object({
   LITEFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
 
+  // Off by default: the S3 ingestion-file ledger is a per-file write on the
+  // ingestion hot path (used only for S3 retention/deletion reconciliation).
+  // When enabled it now writes PG (blob_storage_file_log), not Doris.
   LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG: z
     .enum(["true", "false"])
-    .default("true"),
+    .default("false"),
 
   LITEFUSE_S3_LIST_MAX_KEYS: z.coerce.number().positive().default(200),
   LITEFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED: z
