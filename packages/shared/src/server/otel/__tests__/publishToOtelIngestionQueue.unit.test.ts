@@ -78,13 +78,12 @@ beforeEach(() => {
   Object.assign(envMock, {
     LITEFUSE_S3_EVENT_UPLOAD_BUCKET: "test-bucket",
     LITEFUSE_S3_EVENT_UPLOAD_PREFIX: "events/",
-    LITEFUSE_OTEL_GROUPING_ENABLED: "false",
     LITEFUSE_OTEL_REGISTERED_TTL_MS: 345_600_000,
   });
 });
 
 describe("publishToOtelIngestionQueue", () => {
-  it("grouping OFF: uploads then registers the project lane, no legacy queue job", async () => {
+  it("registers the project lane, no legacy queue job", async () => {
     await makeProcessor().publishToOtelIngestionQueue(resourceSpans);
 
     expect(uploadJsonString).toHaveBeenCalledTimes(1);
@@ -98,8 +97,7 @@ describe("publishToOtelIngestionQueue", () => {
     );
   });
 
-  it("grouping ON: uploads the SAME serialized string it measures, registers, no queue.add", async () => {
-    envMock.LITEFUSE_OTEL_GROUPING_ENABLED = "true";
+  it("uploads the SAME serialized string it measures, registers, no queue.add", async () => {
     await makeProcessor().publishToOtelIngestionQueue(resourceSpans);
 
     expect(queueAdd).not.toHaveBeenCalled();
@@ -127,23 +125,21 @@ describe("publishToOtelIngestionQueue", () => {
     expect(uploadedBody).toBe(JSON.stringify(resourceSpans));
   });
 
-  it("grouping ON: an already-registered file (idempotent 0) is still success", async () => {
-    envMock.LITEFUSE_OTEL_GROUPING_ENABLED = "true";
+  it("an already-registered file (idempotent 0) is still success", async () => {
     registerOtelFile.mockResolvedValueOnce(false);
     await expect(
       makeProcessor().publishToOtelIngestionQueue(resourceSpans),
     ).resolves.toBeUndefined();
   });
 
-  it("grouping ON: registration failure propagates (route → 5xx → SDK re-send)", async () => {
-    envMock.LITEFUSE_OTEL_GROUPING_ENABLED = "true";
+  it("registration failure propagates (route → 5xx → SDK re-send)", async () => {
     registerOtelFile.mockRejectedValueOnce(new Error("redis down"));
     await expect(
       makeProcessor().publishToOtelIngestionQueue(resourceSpans),
     ).rejects.toThrow("redis down");
   });
 
-  it("upload precedes the pointer in BOTH modes (durability first)", async () => {
+  it("upload precedes the pointer (durability first)", async () => {
     const order: string[] = [];
     uploadJsonString.mockImplementationOnce(async () => {
       order.push("upload");
@@ -155,7 +151,6 @@ describe("publishToOtelIngestionQueue", () => {
     await makeProcessor().publishToOtelIngestionQueue(resourceSpans);
     expect(order).toEqual(["upload", "register"]);
 
-    envMock.LITEFUSE_OTEL_GROUPING_ENABLED = "true";
     const order2: string[] = [];
     uploadJsonString.mockImplementationOnce(async () => {
       order2.push("upload");

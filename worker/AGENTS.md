@@ -60,9 +60,9 @@ Use root [AGENTS.md](../AGENTS.md) for monorepo-level rules.
   the `CronJobs` checkpoint only after the complete interval succeeds.
 - `src/index.ts` must complete `initializeSplitCache()` before importing
   `src/app.ts`; importing the app registers queue consumers.
-- All projects must use their dedicated OTel lane even when
-  `LITEFUSE_OTEL_GROUPING_ENABLED=false`; telemetry no longer writes to shared
-  pending shards or shared Doris tables.
+- All projects must use their dedicated OTel lane; grouping is unconditional
+  (the LITEFUSE_OTEL_GROUPING_ENABLED switch was removed). Telemetry no longer
+  writes to shared pending shards or shared Doris tables.
 - Project deletion and the batch recovery cleaner share
   `features/doris-project-cleanup`; do not add per-table project cleaners.
 

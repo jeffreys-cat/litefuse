@@ -343,10 +343,9 @@ if (env.QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED === "true") {
   });
 
   // Otel grouper (exactly-once pipeline): resident candidate loop, elects a
-  // per-shard leader via Redis lease. Deliberately tied to the CONSUMER gate,
-  // NOT to LITEFUSE_OTEL_GROUPING_ENABLED (web registration switch) — after
-  // a rollback flips registration off, the resident grouper still drains the
-  // pending backlog instead of stranding it (design §3.2 / review B2).
+  // per-shard leader via Redis lease. Tied to the CONSUMER gate — it runs
+  // whenever this worker consumes the otel queue, draining the pending backlog
+  // independently of the web-side registration (design §3.2 / review B2).
   otelGrouper = new OtelGrouper();
   void otelGrouper.start();
 }

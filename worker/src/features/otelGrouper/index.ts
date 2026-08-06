@@ -95,10 +95,8 @@ type Deps = {
  * (pending depth/age, quarantine, staged count) so a dead leader shows up as
  * an alarming metric, never as silent metric absence.
  *
- * Lifecycle: runs whenever the otel queue consumer is enabled — deliberately
- * NOT gated on LITEFUSE_OTEL_GROUPING_ENABLED (web-side registration switch):
- * after a rollback flips registration off, the resident grouper drains the
- * pending backlog instead of stranding it.
+ * Lifecycle: runs whenever the otel queue consumer is enabled — independent of
+ * the web-side registration path, so it always drains the pending backlog.
  */
 export class OtelGrouper {
   private readonly token = randomUUID();
