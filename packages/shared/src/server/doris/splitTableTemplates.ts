@@ -5,28 +5,23 @@ import { join } from "path";
  * Per-project Doris table DDL generation (docs/project-per-table-*.md, Stage 1.2).
  *
  * A split project gets its own `events_full_<pid>` / `traces_scalar_<pid>` base
- * tables + a `trace_metrics_agg_<pid>` sync MV. These mirror the shared tables'
- * COLUMNS exactly, but differ deliberately in the sort key: a split table holds
- * ONE project, so project_id is constant and dropped from the KEY (events_full
- * KEY = (trace_id, span_id); traces_scalar KEY = (id, start_time)). They also
- * use dynamic_partition instead of AUTO PARTITION so old day-partitions are
- * auto-dropped at the project's retention (the whole point of the split).
+ * tables + a `trace_metrics_agg_<pid>` sync MV. There is no shared telemetry
+ * table (all-split model): a split table holds ONE project, so project_id is
+ * constant and dropped from the KEY (events_full KEY = (trace_id, span_id);
+ * traces_scalar KEY = (id, start_time)). They use dynamic_partition instead of
+ * AUTO PARTITION so old day-partitions are auto-dropped at the project's
+ * retention (the whole point of the split).
  *
- * SOURCE OF TRUTH = OUR version-controlled DDL. Because the split key/column
- * order diverges from the shared table, the split column+index+KEY body is a
- * dedicated template file (`doris/split-templates/<table>.sql`) with a __TABLE__
- * placeholder, NOT spliced out of the shared .up.sql. A drift unit test
- * (splitTableTemplates.drift) asserts the split template and the shared
- * `doris/migrations/*_create_*.up.sql` declare the SAME columns + indexes (only
- * order/KEY/tail differ), so the two files can never silently diverge. Only the
- * partition/dist/PROPERTIES tail, which we own, is appended at build time. A
- * separate test asserts no post-CREATE ALTER migration exists for these tables,
- * so the single CREATE file stays the whole schema
- * (splitTableTemplates.migrations.unit.test).
- *
- * The MV shape is embedded here because it is inherently coupled to the
- * read-side rewrite (dataModelDoris.traceMetricsAggRelationSql) and migration
- * 0040; keep all three in sync.
+ * SOURCE OF TRUTH = the template files under `doris/migrations` WITHOUT a
+ * .up.sql suffix (scripts/up.sh globs *.up.sql, so it never applies them):
+ *   - `0037_events_full.sql` / `0039_traces_scalar.sql` — column+index+KEY body
+ *     with a __TABLE__ placeholder; the partition/dist/PROPERTIES tail is
+ *     appended at build time (buildDynamicPartitionTail).
+ *   - `0040_trace_metrics_agg.sql` — the sync MV, __TABLE__ (name) + __BASE_TABLE__
+ *     (aggregated base). Keep in sync with the read-side rewrite
+ *     (dataModelDoris.traceMetricsAggRelationSql).
+ * These are the ONLY schema source — there is no separate shared CREATE
+ * migration to drift from.
  */
 
 /** Bump when the generated tail/MV shape changes; recorded in the schema-version gate. */
@@ -54,22 +49,23 @@ export const NO_TTL_START_DAYS = 3650;
  */
 export const LATE_DATA_HISTORY_DAYS = 7;
 
-/** Canonical CREATE migration per shared logical table (drift-guard source). */
-const SHARED_TABLE_MIGRATION: Record<string, string> = {
-  events_full: "0037_create_events_full.up.sql",
-  traces_scalar: "0039_create_traces_scalar.up.sql",
-};
-
 /** Split-table DDL template (column+index+KEY body with a __TABLE__ placeholder,
- * split key/order) per shared logical table. This is the source the per-project
- * CREATE is built from; SHARED_TABLE_MIGRATION only feeds the drift guard. */
+ * split key/order) per logical table — the SINGLE source the per-project CREATE
+ * is built from. Lives in doris/migrations WITHOUT a .up.sql suffix, so
+ * scripts/up.sh never applies it (it globs *.up.sql): there is no shared table. */
 const SPLIT_TEMPLATE_FILE: Record<string, string> = {
-  events_full: "events_full.sql",
-  traces_scalar: "traces_scalar.sql",
+  events_full: "0037_events_full.sql",
+  traces_scalar: "0039_traces_scalar.sql",
 };
 
-/** Placeholder in the split templates, replaced with the per-project table name. */
+/** The trace_metrics_agg sync-MV template (same migrations dir, no .up.sql). */
+const MV_TEMPLATE_FILE = "0040_trace_metrics_agg.sql";
+
+/** Placeholder in the templates, replaced with the per-project table name. */
 const SPLIT_TABLE_PLACEHOLDER = "__TABLE__";
+
+/** MV-only placeholder for the aggregated base table (events_full_<pid>). */
+const MV_BASE_TABLE_PLACEHOLDER = "__BASE_TABLE__";
 
 /** Distribution column + storage model per shared logical table (stable). */
 export const SPLIT_BASE_TABLE_SHAPES = {
@@ -197,38 +193,33 @@ export const buildSplitTableFromTemplate = (params: {
 };
 
 /**
- * The per-project trace_metrics_agg sync MV, embedded (coupled to migration
- * 0040 + dataModelDoris.traceMetricsAggRelationSql — all three must match for
- * the transparent rewrite to fire). Only the MV name and base table are
- * per-project; the aggregate shape is identical.
+ * The per-project trace_metrics_agg sync MV, built from the 0040 template file
+ * (coupled to dataModelDoris.traceMetricsAggRelationSql — the read-side rewrite
+ * shape must match for the transparent rewrite to fire). Only the MV name and
+ * base table are per-project; the aggregate shape is identical.
  */
 export const buildTraceMetricsAggMV = (params: {
   mvName: string;
   baseTable: string;
-}): string =>
-  `CREATE MATERIALIZED VIEW ${params.mvName} AS
-SELECT
-    project_id AS tm_project_id,
-    trace_id AS tm_trace_id,
-    date_trunc(start_time, 'day') AS tm_start_day,
-    SUM(input_tokens_calculated) AS tm_input_tokens,
-    SUM(output_tokens_calculated) AS tm_output_tokens,
-    SUM(total_tokens_calculated) AS tm_total_tokens,
-    SUM(input_cost_calculated) AS tm_input_cost,
-    SUM(output_cost_calculated) AS tm_output_cost,
-    SUM(total_cost) AS tm_total_cost,
-    SUM(CASE WHEN level = 'ERROR'   THEN 1 ELSE 0 END) AS tm_error_count,
-    SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS tm_warning_count,
-    SUM(CASE WHEN level = 'DEFAULT' THEN 1 ELSE 0 END) AS tm_default_count,
-    SUM(CASE WHEN level = 'DEBUG'   THEN 1 ELSE 0 END) AS tm_debug_count,
-    SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS tm_observation_count,
-    MIN(start_time) AS tm_min_start_time,
-    MAX(start_time) AS tm_max_start_time,
-    MIN(end_time) AS tm_min_end_time,
-    MAX(end_time) AS tm_max_end_time,
-    MAX(created_at) AS tm_max_created_at
-FROM ${params.baseTable}
-GROUP BY project_id, trace_id, date_trunc(start_time, 'day')`;
+}): string => {
+  const template = readFileSync(
+    join(resolveMigrationsDir(), MV_TEMPLATE_FILE),
+    "utf8",
+  );
+  const start = template.search(/CREATE MATERIALIZED VIEW/i);
+  if (start < 0) {
+    throw new Error(
+      `buildTraceMetricsAggMV: no CREATE MATERIALIZED VIEW in ${MV_TEMPLATE_FILE}`,
+    );
+  }
+  return template
+    .slice(start)
+    .split(SPLIT_TABLE_PLACEHOLDER)
+    .join(params.mvName)
+    .split(MV_BASE_TABLE_PLACEHOLDER)
+    .join(params.baseTable)
+    .trim();
+};
 
 /**
  * Locate the shared package's doris/migrations dir. Resolved relative to this
@@ -242,76 +233,22 @@ export const resolveMigrationsDir = (): string => {
     join(__dirname, "../../../doris/migrations"), // src/server/doris → shared/doris
   ];
   for (const dir of candidates) {
-    if (existsSync(join(dir, "0037_create_events_full.up.sql"))) return dir;
+    if (existsSync(join(dir, "0037_events_full.sql"))) return dir;
   }
   throw new Error(
     `resolveMigrationsDir: doris/migrations not found near ${__dirname} (candidates: ${candidates.join(", ")})`,
   );
 };
 
-/** Extract the `CREATE TABLE … ;` statement from a migration file (strip the
- * leading comment banner and any trailing commentary after the statement). The
- * terminating `;` is found ignoring `;` inside `--` line comments — the column
- * comments contain prose semicolons (e.g. "trace_id is nullish); a key …"). */
-export const extractCreateStatement = (migrationSql: string): string => {
-  const start = migrationSql.search(/CREATE TABLE/i);
-  if (start < 0)
-    throw new Error("extractCreateStatement: no CREATE TABLE found");
-  const lines = migrationSql.slice(start).split("\n");
-  const out: string[] = [];
-  for (const line of lines) {
-    // Strip a trailing `--` line comment; a `;` in the remaining code is the
-    // real statement terminator (code is a prefix of line, so indices align).
-    const code = line.replace(/--.*$/, "");
-    const semi = code.indexOf(";");
-    if (semi >= 0) {
-      out.push(line.slice(0, semi + 1));
-      return out.join("\n").trimEnd();
-    }
-    out.push(line);
-  }
-  return out.join("\n").trimEnd();
-};
-
-/** Read the canonical CREATE statement for a shared table from its migration.
- * Used by the drift guard (compares columns against the split template). */
-export const readSharedCreateStatement = (sharedTable: string): string => {
-  const file = SHARED_TABLE_MIGRATION[sharedTable];
-  if (!file) {
-    throw new Error(
-      `readSharedCreateStatement: unknown shared table ${sharedTable}`,
-    );
-  }
-  const sql = readFileSync(join(resolveMigrationsDir(), file), "utf8");
-  return extractCreateStatement(sql);
-};
-
-/**
- * Locate the shared package's doris/split-templates dir. Resolved relative to
- * this module (src via vitest, dist at runtime), same probe strategy as
- * resolveMigrationsDir. The dir ships in the web/worker images alongside
- * doris/migrations (packages/shared/doris).
- */
-export const resolveSplitTemplatesDir = (): string => {
-  const candidates = [
-    join(__dirname, "../../../../doris/split-templates"), // dist/src/server/doris → shared/doris
-    join(__dirname, "../../../doris/split-templates"), // src/server/doris → shared/doris
-  ];
-  for (const dir of candidates) {
-    if (existsSync(join(dir, "events_full.sql"))) return dir;
-  }
-  throw new Error(
-    `resolveSplitTemplatesDir: doris/split-templates not found near ${__dirname} (candidates: ${candidates.join(", ")})`,
-  );
-};
-
-/** Read the split-table DDL template (with __TABLE__ placeholder) for a table. */
+/** Read a split-table DDL template (with __TABLE__ placeholder) for a table.
+ * Templates live in doris/migrations without a .up.sql suffix (up.sh ignores
+ * them); they are the single source — there is no shared table to drift from. */
 export const readSplitTemplate = (sharedTable: string): string => {
   const file = SPLIT_TEMPLATE_FILE[sharedTable];
   if (!file) {
     throw new Error(`readSplitTemplate: unknown shared table ${sharedTable}`);
   }
-  return readFileSync(join(resolveSplitTemplatesDir(), file), "utf8");
+  return readFileSync(join(resolveMigrationsDir(), file), "utf8");
 };
 
 /**
