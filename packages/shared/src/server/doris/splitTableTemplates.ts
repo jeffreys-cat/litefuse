@@ -14,9 +14,10 @@ import { join } from "path";
  *
  * SOURCE OF TRUTH = the template files under `doris/migrations` WITHOUT a
  * .up.sql suffix (scripts/up.sh globs *.up.sql, so it never applies them):
- *   - `0037_events_full.sql` / `0039_traces_scalar.sql` — column+index+KEY body
- *     with a __TABLE__ placeholder; the partition/dist/PROPERTIES tail is
- *     appended at build time (buildDynamicPartitionTail).
+ *   - `0037_events_full.sql` / `0039_traces_scalar.sql` /
+ *     `0041_content_dict.sql` — column+index+KEY body with a __TABLE__
+ *     placeholder; the partition/dist/PROPERTIES tail is appended at build
+ *     time (buildDynamicPartitionTail).
  *   - `0040_trace_metrics_agg.sql` — the sync MV, __TABLE__ (name) + __BASE_TABLE__
  *     (aggregated base). Keep in sync with the read-side rewrite
  *     (dataModelDoris.traceMetricsAggRelationSql).
@@ -25,7 +26,7 @@ import { join } from "path";
  */
 
 /** Bump when the generated tail/MV shape changes; recorded in the schema-version gate. */
-export const SPLIT_SCHEMA_VERSION = 2;
+export const SPLIT_SCHEMA_VERSION = 3;
 
 /** Future day-partitions dynamic_partition pre-creates (clock-skew buffer). */
 const DYNAMIC_PARTITION_END = 3;
@@ -56,6 +57,7 @@ export const LATE_DATA_HISTORY_DAYS = 7;
 const SPLIT_TEMPLATE_FILE: Record<string, string> = {
   events_full: "0037_events_full.sql",
   traces_scalar: "0039_traces_scalar.sql",
+  content_dict: "0041_content_dict.sql",
 };
 
 /** The trace_metrics_agg sync-MV template (same migrations dir, no .up.sql). */
@@ -71,6 +73,7 @@ const MV_BASE_TABLE_PLACEHOLDER = "__BASE_TABLE__";
 export const SPLIT_BASE_TABLE_SHAPES = {
   events_full: { distributionColumn: "trace_id", mergeOnWrite: false },
   traces_scalar: { distributionColumn: "id", mergeOnWrite: true },
+  content_dict: { distributionColumn: "content_hash", mergeOnWrite: true },
 } as const;
 
 export type SplitTailOpts = {
@@ -253,7 +256,8 @@ export const readSplitTemplate = (sharedTable: string): string => {
 
 /**
  * All DDL statements to provision a split project, in apply order:
- * events_full_<pid>, traces_scalar_<pid>, then the MV on events_full_<pid>.
+ * events_full_<pid>, traces_scalar_<pid>, content_dict_<pid>, then the MV on
+ * events_full_<pid>.
  * Base-table DDL is our split template (split key/order) with a
  * dynamic_partition tail.
  */
@@ -262,7 +266,12 @@ export const buildSplitTableStatements = (params: {
   /** null/undefined = provision with no TTL; set later via buildAlterTtlStatement. */
   retentionDays?: number | null;
   replication: number;
-}): { eventsFull: string; tracesScalar: string; mv: string } => {
+}): {
+  eventsFull: string;
+  tracesScalar: string;
+  contentDict: string;
+  mv: string;
+} => {
   const { projectId, retentionDays, replication } = params;
   const tailBase = { retentionDays, replication };
   const eventsFull = buildSplitTableFromTemplate({
@@ -277,9 +286,15 @@ export const buildSplitTableStatements = (params: {
     physicalTable: `traces_scalar_${projectId}`,
     tail: { ...SPLIT_BASE_TABLE_SHAPES.traces_scalar, ...tailBase },
   });
+  const contentDict = buildSplitTableFromTemplate({
+    templateSql: readSplitTemplate("content_dict"),
+    sharedTable: "content_dict",
+    physicalTable: `content_dict_${projectId}`,
+    tail: { ...SPLIT_BASE_TABLE_SHAPES.content_dict, ...tailBase },
+  });
   const mv = buildTraceMetricsAggMV({
     mvName: `trace_metrics_agg_${projectId}`,
     baseTable: `events_full_${projectId}`,
   });
-  return { eventsFull, tracesScalar, mv };
+  return { eventsFull, tracesScalar, contentDict, mv };
 };

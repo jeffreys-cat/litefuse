@@ -17,6 +17,7 @@ import {
 } from "../repositories/analyticsDateTime";
 import { queryDoris } from "../repositories/doris";
 import { parseDorisUTCDateTimeFormat } from "../repositories/doris";
+import { findContentDictInputMatches } from "../repositories/contentDict";
 import {
   createDorisFilterFromFilterState,
   getDorisProjectIdDefaultFilter,
@@ -1500,9 +1501,15 @@ async function getTracesTableGeneric(props: FetchTracesTableProps) {
   const hasObsLevelFilter =
     tracesFilter.find((f) => f.table === "observations") !== undefined;
 
-  const search = dorisSearchCondition(searchQuery, searchType, {
-    type: "traces",
-  });
+  const inputContentMatches = searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    searchQuery,
+    searchType,
+    { type: "traces" },
+    inputContentMatches,
+  );
 
   const defaultOrder = orderBy?.order && orderBy?.column === "timestamp";
   const orderByCols = [

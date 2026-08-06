@@ -24,6 +24,11 @@ import {
   applyInputOutputRendering,
 } from "../utils/rendering";
 import { ObservationRecordReadType, TraceRecordReadType } from "./definitions";
+import {
+  findContentDictInputMatches,
+  resolveContentDictInputs,
+  resolveContentDictInputStream,
+} from "./contentDict";
 import type { AnalyticsObservationEvent } from "../analytics-integrations/types";
 import {
   ObservationsTableQueryResult,
@@ -45,6 +50,7 @@ import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
 import { convertDateToAnalyticsDateTime, dq } from "./analyticsDateTime";
 import {
   dorisSearchCondition,
+  type ContentDictInputSearchMatch,
   DorisSearchContext,
 } from "../queries/doris-sql/search";
 import {
@@ -408,9 +414,15 @@ async function getObservationsFromEventsTableInternal<T>(
   const appliedFilter = observationsFilter.apply();
 
   // Check if we need trace join for search
-  const search = dorisSearchCondition(opts.searchQuery, opts.searchType, {
-    type: "observations",
-  });
+  const inputContentMatches = opts.searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, opts.searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    opts.searchQuery,
+    opts.searchType,
+    { type: "observations" },
+    inputContentMatches,
+  );
 
   const hasScoresFilter = filter.some((f) =>
     f.column.toLowerCase().includes("score"),
@@ -527,7 +539,11 @@ async function getObservationsFromEventsTableInternal<T>(
   });
 
   if (selectIOAndMetadata && opts.select === "rows") {
-    return res.map((r) => {
+    const resolved = await resolveContentDictInputs(
+      res as Array<Record<string, unknown>>,
+      projectId,
+    );
+    return resolved.map((r) => {
       const row = r as Record<string, unknown>;
       row.metadata =
         typeof row.metadata === "string"
@@ -673,7 +689,7 @@ async function getObservationByIdFromEventsTableInternal({
     },
   });
 
-  return rawRecords;
+  return resolveContentDictInputs(rawRecords, projectId);
 }
 
 /**
@@ -868,7 +884,10 @@ export type PublicApiObservationsQuery = {
  * Exported so unit tests can inspect the generated SQL + params directly
  * without standing up a Doris cluster. Not part of the public API surface.
  */
-export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
+export function buildObservationsQueryDoris(
+  opts: PublicApiObservationsQuery,
+  inputContentMatches: ContentDictInputSearchMatch[] = [],
+): {
   baseQuery: string;
   params: Record<string, unknown>;
 } {
@@ -895,9 +914,12 @@ export function buildObservationsQueryDoris(opts: PublicApiObservationsQuery): {
   const appliedFilter = observationsFilter.apply();
 
   // Build search condition
-  const search = dorisSearchCondition(opts.searchQuery, opts.searchType, {
-    type: "observations",
-  });
+  const search = dorisSearchCondition(
+    opts.searchQuery,
+    opts.searchType,
+    { type: "observations" },
+    inputContentMatches,
+  );
 
   const baseQuery = `
     SELECT
@@ -1029,7 +1051,11 @@ async function getObservationsRowsFromDoris<T>(
       projectId,
     },
   });
-  return res.map((r) => {
+  const resolved = await resolveContentDictInputs(
+    res as Array<Record<string, unknown>>,
+    projectId,
+  );
+  return resolved.map((r) => {
     const row = r as Record<string, unknown>;
     if ("metadata" in row) {
       row.metadata =
@@ -1063,9 +1089,15 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
   const appliedFilter = observationsFilter.apply();
 
   // Build search condition
-  const search = dorisSearchCondition(opts.searchQuery, opts.searchType, {
-    type: "observations",
-  });
+  const inputContentMatches = opts.searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, opts.searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    opts.searchQuery,
+    opts.searchType,
+    { type: "observations" },
+    inputContentMatches,
+  );
 
   const query = `
     SELECT count(*) as count
@@ -1099,7 +1131,13 @@ async function getObservationsCountFromEventsTableForPublicApiInternal(
 export const getObservationsFromEventsTableForPublicApi = async (
   opts: Omit<PublicApiObservationsQuery, "fields">,
 ): Promise<Array<Observation & ObservationPriceFields>> => {
-  const { baseQuery, params } = buildObservationsQueryDoris(opts);
+  const inputContentMatches = opts.searchType?.includes("content")
+    ? await findContentDictInputMatches(opts.projectId, opts.searchQuery ?? "")
+    : [];
+  const { baseQuery, params } = buildObservationsQueryDoris(
+    opts,
+    inputContentMatches,
+  );
   const { query } = applyOffsetPagination(opts, baseQuery, params);
 
   const observationRecords =
@@ -1124,7 +1162,13 @@ export const getObservationsFromEventsTableForPublicApi = async (
 export const getObservationsV2FromEventsTableForPublicApi = async (
   opts: PublicApiObservationsQuery & { fields: ObservationFieldGroup[] },
 ): Promise<Array<EventsObservationPublic>> => {
-  const { baseQuery, params: baseParams } = buildObservationsQueryDoris(opts);
+  const inputContentMatches = opts.searchType?.includes("content")
+    ? await findContentDictInputMatches(opts.projectId, opts.searchQuery ?? "")
+    : [];
+  const { baseQuery, params: baseParams } = buildObservationsQueryDoris(
+    opts,
+    inputContentMatches,
+  );
   // applyCursorPagination adds lastStartTime / lastTraceId / lastId to the
   // returned params map — must use *those* params, not baseParams, otherwise
   // the {lastStartTime: String} placeholders go to Doris unsubstituted.
@@ -2465,11 +2509,9 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
   const minTimestamp = new Date(opts.minStartTime.getTime() - 1000); // -1 second buffer
   const maxTimestamp = new Date(opts.maxStartTime.getTime() + 1000); // +1 second buffer
 
-  // In Doris, we use the observations table for both truncated and full I/O
-  // Use SUBSTRING instead of leftUTF8 for truncation
-  const inputSelect = truncated
-    ? `SUBSTRING(e.input, 1, ${env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as input`
-    : `e.input as input`;
+  // input is a space-separated text list of content hashes. Resolve dictionary entries
+  // before applying the existing response truncation in Litefuse.
+  const inputSelect = "e.input as input";
   const outputSelect = truncated
     ? `SUBSTRING(e.output, 1, ${env.LITEFUSE_SERVER_SIDE_IO_CHAR_LIMIT}) as output`
     : `e.output as output`;
@@ -2479,6 +2521,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
       e.span_id AS id,
       ${inputSelect},
       ${outputSelect},
+      e.start_time,
       json_object_flatten(e.metadata) AS metadata
     FROM ${tableFor(opts.projectId, "events_full")} e
     WHERE e.project_id = {projectId: String}
@@ -2492,6 +2535,7 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
     id: string;
     input: string | null;
     output: string | null;
+    start_time: string;
     metadata: unknown;
   }>({
     query,
@@ -2510,15 +2554,20 @@ export const getObservationsBatchIOFromEventsTable = async (opts: {
     },
   });
 
-  return results.map((r) => ({
+  const resolvedResults = await resolveContentDictInputs(
+    results,
+    opts.projectId,
+  );
+  const renderingProps = { ...DEFAULT_RENDERING_PROPS, truncated };
+  return resolvedResults.map((r) => ({
     id: r.id,
     input:
       r.input !== undefined
-        ? applyInputOutputRendering(r.input, DEFAULT_RENDERING_PROPS)
+        ? applyInputOutputRendering(r.input, renderingProps)
         : null,
     output:
       r.output !== undefined
-        ? applyInputOutputRendering(r.output, DEFAULT_RENDERING_PROPS)
+        ? applyInputOutputRendering(r.output, renderingProps)
         : null,
     metadata: parseMetadataCHRecordToDomain(
       typeof r.metadata === "string"
@@ -2890,20 +2939,23 @@ export const getEventsForBlobStorageExport = function (
     ORDER BY o.start_time
   `;
 
-  return queryDorisStream<Record<string, unknown>>({
-    query,
-    params: {
-      projectId,
-      minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
-      maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
-    },
-    tags: {
-      feature: "blobstorage",
-      type: "event",
-      kind: "analytic",
-      projectId,
-    },
-  });
+  return resolveContentDictInputStream(
+    queryDorisStream<Record<string, unknown>>({
+      query,
+      params: {
+        projectId,
+        minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
+        maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
+      },
+      tags: {
+        feature: "blobstorage",
+        type: "event",
+        kind: "analytic",
+        projectId,
+      },
+    }),
+    projectId,
+  );
 };
 
 /**

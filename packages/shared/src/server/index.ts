@@ -45,6 +45,7 @@ export * from "./doris/crossProjectTableRouting";
 export * from "./doris/splitTableTemplates";
 export * from "./doris/measureAndReturn";
 export * from "./repositories/definitions";
+export * from "./repositories/contentDict";
 export * from "../utils/IORepresentation/chatML/types";
 export * from "../server/ingestion/types";
 export * from "../server/ingestion/modelMatch";

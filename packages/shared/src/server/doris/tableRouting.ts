@@ -34,6 +34,7 @@ export const isSplitProject = (projectId: string): boolean =>
 const SPLITTABLE_TABLES: ReadonlySet<string> = new Set<DorisTableName>([
   "events_full",
   "traces_scalar",
+  "content_dict",
 ]);
 
 const DORIS_PROJECT_ID_RE = /^[A-Za-z0-9_]+$/;
@@ -53,7 +54,7 @@ export const assertValidDorisProjectId = (projectId: string): void => {
 
 export const splitTableNameForProject = (
   projectId: string,
-  logical: "events_full" | "traces_scalar",
+  logical: "events_full" | "traces_scalar" | "content_dict",
 ): string => {
   assertValidDorisProjectId(projectId);
   return `${logical}_${projectId}`;
@@ -66,7 +67,7 @@ export const tableFor = (
   if (!SPLITTABLE_TABLES.has(logical)) return logical;
   return splitTableNameForProject(
     projectId,
-    logical as "events_full" | "traces_scalar",
+    logical as "events_full" | "traces_scalar" | "content_dict",
   );
 };
 
@@ -92,6 +93,7 @@ export const metricsAggTableFor = (projectId: string): string => {
 const SPLITTABLE_LOGICALS = [
   "events_full",
   "traces_scalar",
+  "content_dict",
   "trace_metrics_agg",
 ] as const;
 

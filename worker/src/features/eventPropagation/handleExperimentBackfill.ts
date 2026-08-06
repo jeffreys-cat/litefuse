@@ -32,6 +32,7 @@ import {
   redis,
   convertDateToAnalyticsDateTime,
   dorisClient,
+  resolveContentDictInputs,
 } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { IngestionService } from "../../services/IngestionService";
@@ -253,7 +254,7 @@ export async function getRelevantObservations(
 
   // events_full layout: each observation span is a row with parent_span_id
   // != '' (root spans are the trace itself, handled by getRelevantTraces).
-  // metadata is read via to_json(metadata) (raw MAP text does not escape inner quotes); we
+  // metadata is a Doris VARIANT; cast it to JSON text before parsing it in TS.
   // parse it in TS after the read and synthesize the Map shape that
   // SpanRecord exposes. Dedup-per-span via ROW_NUMBER (Doris has no
   // LIMIT N BY).
@@ -292,7 +293,7 @@ export async function getRelevantObservations(
         o.tool_call_names,
         o.usage_pricing_tier_id,
         o.usage_pricing_tier_name,
-        to_json(o.metadata) AS metadata,
+        json_object_flatten(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -335,7 +336,8 @@ export async function getRelevantObservations(
         },
       }),
   });
-  return rows.map((row) => {
+  const resolvedRows = await resolveContentDictInputs(rows);
+  return resolvedRows.map((row) => {
     const { metadata, ...rest } = row;
     return {
       ...rest,
@@ -395,7 +397,7 @@ export async function getRelevantTraces(
         map() AS tool_definitions,
         [] AS tool_calls,
         [] AS tool_call_names,
-        to_json(o.metadata) AS metadata,
+        json_object_flatten(o.metadata) AS metadata,
         coalesce(o.source, 'experiment-backfill') AS source,
         o.tags AS tags,
         o.bookmarked AS bookmarked,
@@ -438,7 +440,8 @@ export async function getRelevantTraces(
         },
       }),
   });
-  return rows.map((row) => {
+  const resolvedRows = await resolveContentDictInputs(rows);
+  return resolvedRows.map((row) => {
     const { metadata, ...rest } = row;
     return {
       ...rest,

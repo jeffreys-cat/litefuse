@@ -64,7 +64,11 @@ export const dorisSplitTableProvisioningProcessor: Processor = async (
   // until the MV is ready, so no data is written before the rollup is live.
   // Flipping here (not at designation) keeps the pending window to the few
   // seconds of CREATE TABLE; project-lane files wait until readiness completes.
-  if (!readiness.eventsFullExists || !readiness.tracesScalarExists) {
+  if (
+    !readiness.eventsFullExists ||
+    !readiness.tracesScalarExists ||
+    !readiness.contentDictExists
+  ) {
     // Should not happen — CREATE TABLE is synchronous. Retry.
     throw new Error(
       `[table-split] base tables missing after provisioning ${projectId} (${JSON.stringify(readiness)})`,

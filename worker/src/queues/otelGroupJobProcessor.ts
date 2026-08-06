@@ -16,6 +16,9 @@ import {
   tableFor,
   getSplitRetentionDays,
   handleMissingSplitTable,
+  contentDictStartTimeForEventStartTime,
+  deduplicateEventInput,
+  type ContentRecordInsertType,
   type EventRecordInsertType,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
@@ -126,6 +129,7 @@ export type TransformedFile = {
   entry: OtelPendingEntryType;
   eventRecords: EventRecordInsertType[];
   scalarRecords: TraceScalarRecordInsertType[];
+  contentRecords: ContentRecordInsertType[];
   /** distinct sessionId → environment, for the PG trace_sessions upsert */
   sessions: Map<string, string>;
 };
@@ -138,6 +142,7 @@ export type GroupJobDeps = {
   ) => Promise<{
     eventRecords: EventRecordInsertType[];
     scalarRecords: TraceScalarRecordInsertType[];
+    contentRecords: ContentRecordInsertType[];
     sessions: Map<string, string>;
   }>;
   streamLoadBody: (
@@ -185,39 +190,28 @@ export const processOtelGroupJob = async (
     return true;
   });
 
-  // Cache-readiness gate — SYMMETRIC to the web registration gate
-  // (OtelIngestionProcessor). The routing below reads isSplitProject from the
-  // in-memory snapshot; a COLD/failed cache answers "not split" and would
-  // silently load a split project's rows into the SHARED table. Unlike a missing
-  // table (which retries via handleMissingSplitTable), the shared table EXISTS —
-  // the load succeeds, the label + ledger commit, and a replay dedups → the
-  // misroute is permanent (rows invisible to the project's own-table reads).
-  // Defer (BullMQ retry) until the snapshot is loaded rather than route blind.
+  // Cache-readiness gate — symmetric to the web registration gate. A group can
+  // only be processed after the first provisioning/readiness snapshot.
   if (!isSplitCacheReady()) {
-    throw new Error(
-      "otel group job deferred: split-cache not ready (retry to avoid misrouting a split project to the shared table)",
-    );
+    throw new Error("otel group job deferred: split-cache not ready");
   }
 
   // Target tables. A group is homogeneous because ingestion registers every
   // file into its project lane; the target derives from any entry's projectId.
   const targetProjectId = entries[0]?.projectId;
-  const split = Boolean(targetProjectId);
-  const eventsTable = targetProjectId
-    ? tableFor(targetProjectId, "events_full")
-    : "events_full";
-  const scalarTable = targetProjectId
-    ? tableFor(targetProjectId, "traces_scalar")
-    : "traces_scalar";
+  if (!targetProjectId) {
+    throw new Error(`otel group ${groupId} has no project entries`);
+  }
+  const eventsTable = tableFor(targetProjectId, "events_full");
+  const scalarTable = tableFor(targetProjectId, "traces_scalar");
+  const contentDictTable = tableFor(targetProjectId, "content_dict");
 
   // Retention filter: a split table is dynamic_partition — a row older than
   // the project's retention would be
   // committed then silently TTL-dropped. Drop such rows before the load.
   // The cutoff is anchored to the group's newest registration ts (deterministic
   // across replays — I5), not Date.now().
-  const retentionDays = split
-    ? await getSplitRetentionDays(targetProjectId!)
-    : null;
+  const retentionDays = await getSplitRetentionDays(targetProjectId);
   const nowRef =
     entries.length > 0 ? Math.max(...entries.map((e) => e.ts)) : Date.now();
   const retentionCutoffMs =
@@ -274,10 +268,38 @@ export const processOtelGroupJob = async (
   // released (nulled) the moment their load returns, so the GC can reclaim
   // them during the remaining (slow, up-to-600s) loads instead of holding
   // ~5-6x the source size until the function exits.
-  let eventRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.eventRecords
-      .filter((r) => withinRetention(r.start_time))
-      .map((r) => formatRecordForDoris(r, eventsTable)),
+  const retainedContentReferences = new Set<string>();
+  const retainedEventRecords: EventRecordInsertType[] = [];
+  for (const transformedFile of transformed) {
+    for (const record of transformedFile.eventRecords) {
+      if (!withinRetention(record.start_time)) continue;
+
+      if (typeof record.input === "string") {
+        const contentStartTime = contentDictStartTimeForEventStartTime(
+          record.start_time,
+        );
+        for (const contentHash of record.input.split(/\s+/)) {
+          if (contentHash) {
+            retainedContentReferences.add(
+              `${contentStartTime}\u0000${contentHash}`,
+            );
+          }
+        }
+      }
+
+      retainedEventRecords.push(record);
+    }
+  }
+  const contentRecords = new Map<string, ContentRecordInsertType>();
+  for (const transformedFile of transformed) {
+    for (const contentRecord of transformedFile.contentRecords) {
+      const contentReference = `${contentRecord.start_time}\u0000${contentRecord.content_hash}`;
+      if (!retainedContentReferences.has(contentReference)) continue;
+      contentRecords.set(contentReference, contentRecord);
+    }
+  }
+  let eventRows: Record<string, unknown>[] | null = retainedEventRecords.map(
+    (record) => formatRecordForDoris(record, eventsTable),
   );
   let scalarRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
     t.scalarRecords
@@ -308,7 +330,35 @@ export const processOtelGroupJob = async (
     return;
   }
 
-  // ③ events_full: the ONE deterministic-label load of this group.
+  // ③ content_dict must commit before events_full. A replay can safely write
+  // the same (start_time, hash) keys again because content_dict uses unique-key
+  // MoW. Project scope is carried by contentDictTable, not a row column.
+  const contentRows = Array.from(contentRecords.values());
+  if (contentRows.length > 0) {
+    try {
+      await deps.streamLoadBody(
+        contentDictTable,
+        ndjsonBody(contentRows),
+        contentRows.length,
+        LOAD_OPTS,
+      );
+    } catch (e) {
+      if (isMissingTableError(e)) {
+        const action = await handleMissingSplitTable(targetProjectId);
+        if (action === "skip") {
+          deadLetterRow({
+            fileKey: `group:${groupId}`,
+            reason: `content dictionary table missing for tombstoned project ${targetProjectId}`,
+          });
+          await writeLedger(payload, deps);
+          return;
+        }
+      }
+      throw e;
+    }
+  }
+
+  // ④ events_full: the ONE deterministic-label load of this group.
   const label = eventsFullLabelForGroup(groupId);
   let eventsBody = eventRowCount > 0 ? ndjsonBody(eventRows) : null;
   eventRows = null; // Buffers built — the formatted objects are dead weight
@@ -329,8 +379,8 @@ export const processOtelGroupJob = async (
     // reprovision+retry (live project), pg-error→retry (never guess), or
     // skip (tombstoned project → dead-letter the group so it doesn't retry
     // forever recreating a table the deletion flow is dropping).
-    if (split && isMissingTableError(e)) {
-      const action = await handleMissingSplitTable(targetProjectId!);
+    if (isMissingTableError(e)) {
+      const action = await handleMissingSplitTable(targetProjectId);
       if (action === "skip") {
         deadLetterRow({
           fileKey: `group:${groupId}`,
@@ -345,7 +395,7 @@ export const processOtelGroupJob = async (
   eventsBody = null; // release the group-sized Buffers before the scalar load
   const eventsMs = Date.now() - tEvents;
 
-  // ④ traces_scalar (MoW, no label). Delete-protection gate — DUAL condition
+  // ⑤ traces_scalar (MoW, no label). Delete-protection gate — DUAL condition
   // (design §3.3-3 / review B1): skip ONLY when the label deduped AND the
   // ledger already exists. events_full commits are VISIBLE immediately, so a
   // C6 replay (events_full committed, scalar never written, crash) ALSO sees
@@ -379,16 +429,16 @@ export const processOtelGroupJob = async (
     } catch (e) {
       // Same "table doesn't exist" three-way as the events load (③). Reachable
       // only when traces_scalar_<pid> is lost AFTER go-live (ops DROP, rebuild
-      // window, replica loss) — the flip gate keeps split=true from ever being
-      // set with a base table missing, so this is never a provisioning race.
+      // window, replica loss) — the readiness gate prevents a provisioning
+      // race.
       // events_full is ALREADY committed here, so on reprovision+retry the
       // replay label-dedups events and the scalar gate (ledger still absent)
       // re-attempts THIS load once the table is back. A tombstoned project →
       // dead-letter + ledger (events already in; the deletion flow drops the
       // rest), so the job doesn't retry forever recreating a table being torn
       // down.
-      if (split && isMissingTableError(e)) {
-        const action = await handleMissingSplitTable(targetProjectId!);
+      if (isMissingTableError(e)) {
+        const action = await handleMissingSplitTable(targetProjectId);
         if (action === "skip") {
           deadLetterRow({
             fileKey: `group:${groupId}`,
@@ -404,7 +454,7 @@ export const processOtelGroupJob = async (
   scalarRows = null;
   const scalarMs = Date.now() - tScalar;
 
-  // ⑤ Side effects BEFORE ack. Eval scheduling is best-effort (impl swallows
+  // ⑥ Side effects BEFORE ack. Eval scheduling is best-effort (impl swallows
   // errors — replays may re-schedule, declared boundary); trace_sessions
   // failures FAIL the job
   // (createMany skipDuplicates is idempotent — replay is free; swallowing
@@ -421,7 +471,7 @@ export const processOtelGroupJob = async (
   >();
   for (const t of transformed) {
     for (const [sessionId, environment] of t.sessions) {
-      sessions.set(`${t.entry.projectId} ${sessionId}`, {
+      sessions.set(`${t.entry.projectId}\u0000${sessionId}`, {
         id: sessionId,
         projectId: t.entry.projectId,
         environment,
@@ -432,7 +482,7 @@ export const processOtelGroupJob = async (
     await deps.upsertSessions(Array.from(sessions.values()));
   }
 
-  // ⑥ Ledger LAST (after both loads): its existence certifies "this group
+  // ⑦ Ledger LAST (after both loads): its existence certifies "this group
   // completed once end-to-end" — which is exactly what the scalar gate and
   // the reconciliation tool key on.
   const tLedger = Date.now();
@@ -579,6 +629,7 @@ export const buildTransformFile = (params: {
 
     const eventRecords: EventRecordInsertType[] = [];
     const scalarRecords: TraceScalarRecordInsertType[] = [];
+    const contentRecords = new Map<string, ContentRecordInsertType>();
     const sessions = new Map<string, string>();
     for (const input of eventInputs) {
       let record: EventRecordInsertType;
@@ -595,14 +646,33 @@ export const buildTransformFile = (params: {
         }
         throw e; // I/O (PG/Redis) — fail the job
       }
-      eventRecords.push(record);
-      const scalar = toTraceScalarRecord(record);
+      const deduplicated = deduplicateEventInput(
+        record.input,
+        record.start_time,
+      );
+      for (const contentRecord of deduplicated.contentEntries) {
+        contentRecords.set(
+          `${contentRecord.start_time}\u0000${contentRecord.content_hash}`,
+          contentRecord,
+        );
+      }
+      const eventRecord = { ...record, input: deduplicated.input };
+      eventRecords.push(eventRecord);
+      const scalar = toTraceScalarRecord(eventRecord);
       if (scalar) scalarRecords.push(scalar);
-      if (record.session_id) {
-        sessions.set(record.session_id, record.environment ?? "default");
+      if (eventRecord.session_id) {
+        sessions.set(
+          eventRecord.session_id,
+          eventRecord.environment ?? "default",
+        );
       }
     }
-    return { eventRecords, scalarRecords, sessions };
+    return {
+      eventRecords,
+      scalarRecords,
+      contentRecords: Array.from(contentRecords.values()),
+      sessions,
+    };
   };
 };
 

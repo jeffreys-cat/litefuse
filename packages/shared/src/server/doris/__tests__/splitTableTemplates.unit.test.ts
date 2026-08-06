@@ -28,8 +28,12 @@ describe("buildDynamicPartitionTail", () => {
     expect(tail).toContain('"dynamic_partition.enable" = "true"');
     expect(tail).toContain('"dynamic_partition.start" = "-30"');
     expect(tail).toContain('"dynamic_partition.time_zone" = "Etc/UTC"');
-    expect(tail).toContain('"dynamic_partition.create_history_partition" = "true"');
-    expect(tail).toContain('"replication_allocation" = "tag.location.default: 3"');
+    expect(tail).toContain(
+      '"dynamic_partition.create_history_partition" = "true"',
+    );
+    expect(tail).toContain(
+      '"replication_allocation" = "tag.location.default: 3"',
+    );
     // DUPLICATE table → no MoW property
     expect(tail).not.toContain("enable_unique_key_merge_on_write");
   });
@@ -79,7 +83,10 @@ describe("buildDynamicPartitionTail", () => {
 describe("buildAlterTtlStatement (set/change TTL later)", () => {
   it("sets dynamic_partition.start to the new retention", () => {
     expect(
-      buildAlterTtlStatement({ physicalTable: "events_full_pid", retentionDays: 14 }),
+      buildAlterTtlStatement({
+        physicalTable: "events_full_pid",
+        retentionDays: 14,
+      }),
     ).toBe(
       'ALTER TABLE `events_full_pid` SET ("dynamic_partition.start" = "-14", "dynamic_partition.history_partition_num" = "7")',
     );
@@ -90,7 +97,9 @@ describe("buildAlterTtlStatement (set/change TTL later)", () => {
       physicalTable: "events_full_pid",
       retentionDays: null,
     });
-    expect(sql).toContain(`"dynamic_partition.start" = "-${NO_TTL_START_DAYS}"`);
+    expect(sql).toContain(
+      `"dynamic_partition.start" = "-${NO_TTL_START_DAYS}"`,
+    );
   });
 });
 
@@ -100,7 +109,11 @@ describe("buildSplitTableFromTemplate", () => {
       templateSql: readSplitTemplate("events_full"),
       sharedTable: "events_full",
       physicalTable: "events_full_cmqpid",
-      tail: { ...SPLIT_BASE_TABLE_SHAPES.events_full, retentionDays: 14, replication: 1 },
+      tail: {
+        ...SPLIT_BASE_TABLE_SHAPES.events_full,
+        retentionDays: 14,
+        replication: 1,
+      },
     });
     // placeholder replaced everywhere; renamed with IF NOT EXISTS
     expect(ddl).toMatch(/^CREATE TABLE IF NOT EXISTS `events_full_cmqpid`/);
@@ -120,7 +133,11 @@ describe("buildSplitTableFromTemplate", () => {
         templateSql: "CREATE TABLE `events_full` (`x` int) ENGINE=OLAP",
         sharedTable: "events_full",
         physicalTable: "events_full_x",
-        tail: { ...SPLIT_BASE_TABLE_SHAPES.events_full, retentionDays: 1, replication: 1 },
+        tail: {
+          ...SPLIT_BASE_TABLE_SHAPES.events_full,
+          retentionDays: 1,
+          replication: 1,
+        },
       }),
     ).toThrow(/no __TABLE__ placeholder/);
   });
@@ -129,12 +146,20 @@ describe("buildSplitTableFromTemplate", () => {
 describe("buildSplitTableStatements (reads OUR split templates)", () => {
   const PID = "cmqiwxsca0006pj070fdkn0vd";
 
-  it("produces the 3 per-project statements with dynamic_partition + MV", () => {
-    const { eventsFull, tracesScalar, mv } = buildSplitTableStatements({
-      projectId: PID,
-      retentionDays: 30,
-      replication: 1,
-    });
+  it("keeps content_dict as a numbered split template, not a shared migration", () => {
+    const files = readdirSync(resolveMigrationsDir());
+    expect(files).toContain("0041_content_dict.sql");
+    expect(files).not.toContain("0041_create_content_dict.up.sql");
+    expect(files).not.toContain("0041_create_content_dict.down.sql");
+  });
+
+  it("produces the per-project tables with dynamic_partition + MV", () => {
+    const { eventsFull, tracesScalar, contentDict, mv } =
+      buildSplitTableStatements({
+        projectId: PID,
+        retentionDays: 30,
+        replication: 1,
+      });
     expect(eventsFull).toMatch(
       new RegExp("^CREATE TABLE IF NOT EXISTS `events_full_" + PID + "`"),
     );
@@ -152,11 +177,23 @@ describe("buildSplitTableStatements (reads OUR split templates)", () => {
       new RegExp("^CREATE TABLE IF NOT EXISTS `traces_scalar_" + PID + "`"),
     );
     expect(tracesScalar).toContain("UNIQUE KEY(`id`, `start_time`)");
-    expect(tracesScalar).toContain('"enable_unique_key_merge_on_write" = "true"');
+    expect(tracesScalar).toContain(
+      '"enable_unique_key_merge_on_write" = "true"',
+    );
     expect(tracesScalar).not.toContain("`start_time_date`");
     expect(tracesScalar).not.toContain("`event_ts`");
     // traces_scalar is MoW-mutated (bookmark/public/tags) → keeps real updated_at
     expect(tracesScalar).toContain("`updated_at`");
+
+    expect(contentDict).toMatch(
+      new RegExp("^CREATE TABLE IF NOT EXISTS `content_dict_" + PID + "`"),
+    );
+    expect(contentDict).toContain("UNIQUE KEY (`start_time`, `content_hash`)");
+    expect(contentDict).not.toContain("`project_id`");
+    expect(contentDict).toContain(
+      "DISTRIBUTED BY HASH(`content_hash`) BUCKETS AUTO",
+    );
+    expect(contentDict).toContain('"dynamic_partition.start" = "-30"');
 
     expect(mv).toContain(`FROM events_full_${PID}`);
     expect(mv).toContain("MAX(created_at) AS tm_max_created_at");
@@ -164,24 +201,25 @@ describe("buildSplitTableStatements (reads OUR split templates)", () => {
   });
 });
 
-// Drift guard: the split path reads ONLY the CREATE migration / split template.
-// If a later migration ALTERs these tables, the single CREATE file would no
-// longer be the whole schema and the split tables would silently miss columns.
+// Drift guard: templates are the only split-table schema source. A migration
+// must never ALTER one of the logical split tables.
 describe("split-table schema drift guard", () => {
-  it("no migration ALTERs events_full/traces_scalar after CREATE", () => {
+  it("no migration ALTERs a split telemetry table", () => {
     const dir = resolveMigrationsDir();
     const offenders: string[] = [];
     for (const f of readdirSync(dir)) {
       if (!f.endsWith(".up.sql")) continue;
-      if (f.includes("create_events_full") || f.includes("create_traces_scalar"))
-        continue;
       const sql = readFileSync(`${dir}/${f}`, "utf8");
       // strip line comments so the ALTER example inside a comment doesn't trip it
       const code = sql
         .split("\n")
         .filter((l) => !l.trimStart().startsWith("--"))
         .join("\n");
-      if (/ALTER\s+TABLE\s+`?(events_full|traces_scalar)`?\b/i.test(code)) {
+      if (
+        /ALTER\s+TABLE\s+`?(events_full|traces_scalar|content_dict)`?\b/i.test(
+          code,
+        )
+      ) {
         offenders.push(f);
       }
     }
@@ -202,6 +240,8 @@ describe("buildTraceMetricsAggMV", () => {
       "SUM(CASE WHEN is_root = 0       THEN 1 ELSE 0 END) AS tm_observation_count",
     );
     expect(mv).toContain("MAX(created_at) AS tm_max_created_at");
-    expect(mv).toContain("GROUP BY project_id, trace_id, date_trunc(start_time, 'day')");
+    expect(mv).toContain(
+      "GROUP BY project_id, trace_id, date_trunc(start_time, 'day')",
+    );
   });
 });

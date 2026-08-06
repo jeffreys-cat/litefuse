@@ -4,7 +4,7 @@ import {
   checkSdkVersionRequirements,
   getSdkInfoFromResourceSpans,
   type SdkInfo,
-} from "../otelIngestionQueue";
+} from "@langfuse/shared/src/server";
 
 describe("checkHeaderBasedDirectWrite", () => {
   it.each<{

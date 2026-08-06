@@ -8,6 +8,7 @@ export const DorisTableNames = {
   // per-project alongside events_full — see tableRouting).
   traces_scalar: "traces_scalar",
   trace_metrics_agg: "trace_metrics_agg",
+  content_dict: "content_dict",
 
   // Virtual tables for dashboards
   // TODO: Check if we can do this more elegantly

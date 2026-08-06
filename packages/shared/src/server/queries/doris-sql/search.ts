@@ -12,6 +12,34 @@ export interface DorisSearchContext {
   hasTracesJoin?: boolean;
 }
 
+export interface ContentDictInputSearchMatch {
+  start_time: string;
+  contentHashes: string[];
+}
+
+export const CONTENT_DICT_HASH_BATCH_SIZE = 100;
+
+export const batchContentDictInputSearchMatches = (
+  matches: ContentDictInputSearchMatch[],
+): ContentDictInputSearchMatch[] =>
+  matches.flatMap(({ start_time, contentHashes }) => {
+    const batches: ContentDictInputSearchMatch[] = [];
+    for (
+      let offset = 0;
+      offset < contentHashes.length;
+      offset += CONTENT_DICT_HASH_BATCH_SIZE
+    ) {
+      batches.push({
+        start_time,
+        contentHashes: contentHashes.slice(
+          offset,
+          offset + CONTENT_DICT_HASH_BATCH_SIZE,
+        ),
+      });
+    }
+    return batches;
+  });
+
 /**
  * Generate Doris-compatible search conditions
  * Adapted for Doris syntax
@@ -23,6 +51,7 @@ export const dorisSearchCondition = (
   query?: string,
   searchType?: TracingSearchType[],
   context?: DorisSearchContext,
+  inputContentMatches: ContentDictInputSearchMatch[] = [],
 ): DorisSearchResult => {
   if (!query) {
     return {
@@ -33,6 +62,9 @@ export const dorisSearchCondition = (
 
   // ID search uses a parameterized LIKE (substring match)
   const searchParam = `%${query}%`;
+  const params: Record<string, unknown> = {
+    searchQuery: searchParam,
+  };
 
   const conditions = [];
 
@@ -55,27 +87,40 @@ export const dorisSearchCondition = (
     }
   }
 
-  // Content search: input/output use the unicode inverted index + MATCH_PHRASE
-  // (phrase / substring semantics, see migration 0037). An empty or
-  // punctuation-only query does not error, it just matches nothing, so no extra
-  // guard is needed.
+  // Output remains inline and uses its inverted index. Input payloads live in
+  // content_dict, so callers first find matches there. The second query
+  // searches each matching events_full day with its own MATCH_ANY hash list.
   if (searchType && searchType.includes("content")) {
+    const inputColumn = context?.type === "observations" ? "o.input" : "input";
+    const inputStartTimeColumn =
+      context?.type === "observations" ? "o.start_time" : "start_time";
+    const inputConditions = batchContentDictInputSearchMatches(
+      inputContentMatches,
+    ).flatMap(({ start_time, contentHashes }, index) => {
+      if (contentHashes.length === 0) return [];
+      params[`contentStartTime${index}`] = start_time;
+      params[`contentHashQuery${index}`] = contentHashes.join(" ");
+      return [
+        `(DATE(${inputStartTimeColumn}) = {contentStartTime${index}: Date} AND ${inputColumn} MATCH_ANY {contentHashQuery${index}: String})`,
+      ];
+    });
+    const inputCondition =
+      inputConditions.length > 0
+        ? `(${inputConditions.join(" OR ")})`
+        : "FALSE";
     if (context?.type === "observations") {
       conditions.push(
-        `o.input MATCH_PHRASE {searchPhrase: String} OR o.output MATCH_PHRASE {searchPhrase: String}`,
+        `${inputCondition} OR o.output MATCH_PHRASE {searchPhrase: String}`,
       );
     } else {
       // traces queries usually don't search input/output, but it's supported
       // here if the query joins the observations rows.
       conditions.push(
-        `input MATCH_PHRASE {searchPhrase: String} OR output MATCH_PHRASE {searchPhrase: String}`,
+        `${inputCondition} OR output MATCH_PHRASE {searchPhrase: String}`,
       );
     }
   }
 
-  const params: Record<string, unknown> = {
-    searchQuery: searchParam,
-  };
   // MATCH_PHRASE takes the bare term (no % wildcards).
   if (searchType?.includes("content")) {
     params.searchPhrase = query;

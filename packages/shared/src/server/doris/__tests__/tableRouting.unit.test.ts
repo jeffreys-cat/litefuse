@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// Table split is universal: isSplitProject reads ONLY the split cache (a project
-// is split once it is LIVE in the control-table snapshot). Mock the cache so the
-// live/not-live decision can be driven without PG.
+// Split-table readiness remains cache-backed, but table routing is always
+// project-specific. Mock the cache to exercise the readiness signal.
 const { splitCacheMock } = vi.hoisted(() => ({
   splitCacheMock: { members: new Set<string>() },
 }));
@@ -31,6 +30,7 @@ describe("tableRouting", () => {
       expect(isSplitProject(PID)).toBe(false);
       expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
       expect(tableFor(PID, "traces_scalar")).toBe(`traces_scalar_${PID}`);
+      expect(tableFor(PID, "content_dict")).toBe(`content_dict_${PID}`);
     });
 
     it("metricsAggTableFor returns the project MV name", () => {
@@ -54,6 +54,7 @@ describe("tableRouting", () => {
     it("tableFor suffixes splittable tables with the projectId", () => {
       expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
       expect(tableFor(PID, "traces_scalar")).toBe(`traces_scalar_${PID}`);
+      expect(tableFor(PID, "content_dict")).toBe(`content_dict_${PID}`);
     });
 
     it("metricsAggTableFor suffixes the MV", () => {
@@ -69,12 +70,14 @@ describe("tableRouting", () => {
       expect(isSplitProject(PID)).toBe(false);
       expect(tableFor(PID, "events_full")).toBe(`events_full_${PID}`);
     });
+
   });
 
   describe("toLogicalTable (reverse of tableFor)", () => {
     it("strips the projectId suffix from split physical names", () => {
       expect(toLogicalTable(`events_full_${PID}`)).toBe("events_full");
       expect(toLogicalTable(`traces_scalar_${PID}`)).toBe("traces_scalar");
+      expect(toLogicalTable(`content_dict_${PID}`)).toBe("content_dict");
       expect(toLogicalTable(`trace_metrics_agg_${PID}`)).toBe(
         "trace_metrics_agg",
       );
@@ -83,6 +86,7 @@ describe("tableRouting", () => {
     it("returns shared/unknown names unchanged (identity)", () => {
       expect(toLogicalTable("events_full")).toBe("events_full");
       expect(toLogicalTable("traces_scalar")).toBe("traces_scalar");
+      expect(toLogicalTable("content_dict")).toBe("content_dict");
       expect(toLogicalTable("scores")).toBe("scores");
       expect(toLogicalTable("trace_metrics_agg")).toBe("trace_metrics_agg");
     });
@@ -93,6 +97,9 @@ describe("tableRouting", () => {
       expect(toLogicalTable(tableFor(PID, "events_full"))).toBe("events_full");
       expect(toLogicalTable(tableFor(PID, "traces_scalar"))).toBe(
         "traces_scalar",
+      );
+      expect(toLogicalTable(tableFor(PID, "content_dict"))).toBe(
+        "content_dict",
       );
     });
   });

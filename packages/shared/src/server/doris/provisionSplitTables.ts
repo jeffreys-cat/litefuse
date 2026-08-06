@@ -14,7 +14,7 @@ import {
 /**
  * Provisioning + readiness for a split project's Doris objects (Stage 1.2b/1.2c).
  *
- * events_full_<pid> / traces_scalar_<pid> are `CREATE TABLE IF NOT EXISTS`
+ * events_full_<pid> / traces_scalar_<pid> / content_dict_<pid> are `CREATE TABLE IF NOT EXISTS`
  * (idempotent). The trace_metrics_agg_<pid> sync MV is NOT `IF NOT EXISTS` and
  * its build is ASYNC — re-issuing CREATE while it builds errors with
  * "state(ROLLUP) is not NORMAL", so we check MV status first and only CREATE
@@ -27,6 +27,7 @@ const physical = (projectId: string) => {
   return {
     eventsFull: splitTableNameForProject(projectId, "events_full"),
     tracesScalar: splitTableNameForProject(projectId, "traces_scalar"),
+    contentDict: splitTableNameForProject(projectId, "content_dict"),
     mv: `trace_metrics_agg_${projectId}`,
   };
 };
@@ -43,7 +44,11 @@ export const dropSplitTablesForProject = async (
   projectId: string,
 ): Promise<void> => {
   const names = physical(projectId);
-  for (const table of [names.eventsFull, names.tracesScalar]) {
+  for (const table of [
+    names.contentDict,
+    names.eventsFull,
+    names.tracesScalar,
+  ]) {
     await commandDoris({
       query: `DROP TABLE IF EXISTS \`${table}\``,
       tags: { feature: "table-split", kind: "drop", projectId },
@@ -115,7 +120,7 @@ export const provisionSplitTablesForProject = async (params: {
   const { projectId } = params;
   const replication = params.replication ?? env.DORIS_REPLICATION_NUM;
   const names = physical(projectId);
-  const { eventsFull, tracesScalar } = buildSplitTableStatements({
+  const { eventsFull, tracesScalar, contentDict } = buildSplitTableStatements({
     projectId,
     retentionDays: params.retentionDays ?? null,
     replication,
@@ -129,14 +134,22 @@ export const provisionSplitTablesForProject = async (params: {
     query: tracesScalar,
     tags: { feature: "table-split", kind: "create-traces-scalar", projectId },
   });
+  await commandDoris({
+    query: contentDict,
+    tags: { feature: "table-split", kind: "create-content-dict", projectId },
+  });
 
-  // Reconcile TTL to the CURRENT retention on both base tables. CREATE IF NOT
+  // Reconcile TTL to the CURRENT retention on every base table. CREATE IF NOT
   // EXISTS is a no-op for an already-existing table, so its dynamic_partition
   // keeps the OLD retention — the ALTER makes a Project.retentionDays change
   // (setRetention / billing) take effect. Harmless right after a fresh CREATE
   // (re-sets the same value). This is why re-enqueuing provisioning is the
   // retention-change propagation path.
-  for (const table of [names.eventsFull, names.tracesScalar]) {
+  for (const table of [
+    names.eventsFull,
+    names.tracesScalar,
+    names.contentDict,
+  ]) {
     await commandDoris({
       query: buildAlterTtlStatement({
         physicalTable: table,
@@ -167,6 +180,7 @@ export type SplitTablesReadiness = {
   ready: boolean;
   eventsFullExists: boolean;
   tracesScalarExists: boolean;
+  contentDictExists: boolean;
   mvStatus: SplitMvStatus;
 };
 
@@ -181,17 +195,24 @@ export const getSplitTablesReadiness = async (
   projectId: string,
 ): Promise<SplitTablesReadiness> => {
   const names = physical(projectId);
-  const [eventsFullExists, tracesScalarExists] = await Promise.all([
-    dorisTableExists(names.eventsFull),
-    dorisTableExists(names.tracesScalar),
-  ]);
+  const [eventsFullExists, tracesScalarExists, contentDictExists] =
+    await Promise.all([
+      dorisTableExists(names.eventsFull),
+      dorisTableExists(names.tracesScalar),
+      dorisTableExists(names.contentDict),
+    ]);
   const mvStatus = eventsFullExists
     ? await getSplitMvStatus(names.eventsFull, names.mv)
     : ("absent" as SplitMvStatus);
   return {
-    ready: eventsFullExists && tracesScalarExists && mvStatus === "finished",
+    ready:
+      eventsFullExists &&
+      tracesScalarExists &&
+      contentDictExists &&
+      mvStatus === "finished",
     eventsFullExists,
     tracesScalarExists,
+    contentDictExists,
     mvStatus,
   };
 };

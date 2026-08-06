@@ -27,6 +27,7 @@ const PID = "cmqiwxsca0006pj070fdkn0vd";
 beforeEach(() => {
   queryMock.mockReset();
   commandMock.mockReset();
+  queryMock.mockResolvedValue([]);
 });
 
 describe("getSplitMvStatus", () => {
@@ -46,10 +47,12 @@ describe("getSplitMvStatus", () => {
   it("falls back to DESC … ALL when no alter job is retained", async () => {
     const mv = `trace_metrics_agg_${PID}`;
     // no alter row → then DESC shows the index → finished
-    queryMock.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      { IndexName: `events_full_${PID}` },
-      { IndexName: mv },
-    ]);
+    queryMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { IndexName: `events_full_${PID}` },
+        { IndexName: mv },
+      ]);
     expect(await getSplitMvStatus(`events_full_${PID}`, mv)).toBe("finished");
 
     // no alter row, DESC lacks the index → absent
@@ -61,19 +64,28 @@ describe("getSplitMvStatus", () => {
 });
 
 describe("provisionSplitTablesForProject (idempotent MV)", () => {
-  it("creates both base tables then the MV when absent", async () => {
+  it("creates all base tables then the MV when absent", async () => {
     queryMock.mockResolvedValueOnce([]).mockResolvedValueOnce([]); // MV status: absent
-    await provisionSplitTablesForProject({ projectId: PID, retentionDays: null });
+    await provisionSplitTablesForProject({
+      projectId: PID,
+      retentionDays: null,
+    });
     const issued = commandMock.mock.calls.map((c) => c[0].query);
-    expect(issued[0]).toContain(`CREATE TABLE IF NOT EXISTS \`events_full_${PID}\``);
+    expect(issued[0]).toContain(
+      `CREATE TABLE IF NOT EXISTS \`events_full_${PID}\``,
+    );
     expect(issued[1]).toContain(
       `CREATE TABLE IF NOT EXISTS \`traces_scalar_${PID}\``,
     );
-    // TTL reconcile: ALTER both base tables to the current retention (Option A —
+    expect(issued[2]).toContain(
+      `CREATE TABLE IF NOT EXISTS \`content_dict_${PID}\``,
+    );
+    // TTL reconcile: ALTER every base table to the current retention (Option A —
     // so a Project.retentionDays change takes effect on existing tables).
-    expect(issued[2]).toContain(`ALTER TABLE \`events_full_${PID}\``);
-    expect(issued[3]).toContain(`ALTER TABLE \`traces_scalar_${PID}\``);
-    expect(issued[4]).toContain(
+    expect(issued[3]).toContain(`ALTER TABLE \`events_full_${PID}\``);
+    expect(issued[4]).toContain(`ALTER TABLE \`traces_scalar_${PID}\``);
+    expect(issued[5]).toContain(`ALTER TABLE \`content_dict_${PID}\``);
+    expect(issued[6]).toContain(
       `CREATE MATERIALIZED VIEW trace_metrics_agg_${PID}`,
     );
   });
@@ -82,33 +94,41 @@ describe("provisionSplitTablesForProject (idempotent MV)", () => {
     queryMock.mockResolvedValueOnce([
       { RollupIndexName: `trace_metrics_agg_${PID}`, State: "RUNNING" },
     ]);
-    await provisionSplitTablesForProject({ projectId: PID, retentionDays: null });
+    await provisionSplitTablesForProject({
+      projectId: PID,
+      retentionDays: null,
+    });
     const issued = commandMock.mock.calls.map((c) => c[0].query);
     expect(issued.some((q) => q.includes("CREATE MATERIALIZED VIEW"))).toBe(
       false,
     );
-    // base tables (CREATE ×2) + TTL reconcile (ALTER ×2) still issued
-    expect(issued).toHaveLength(4);
+    // base tables (CREATE ×3) + TTL reconcile (ALTER ×3) still issued
+    expect(issued).toHaveLength(6);
   });
 
   it("re-creates the MV when a prior build was CANCELLED", async () => {
     queryMock.mockResolvedValueOnce([
       { RollupIndexName: `trace_metrics_agg_${PID}`, State: "CANCELLED" },
     ]);
-    await provisionSplitTablesForProject({ projectId: PID, retentionDays: null });
+    await provisionSplitTablesForProject({
+      projectId: PID,
+      retentionDays: null,
+    });
     const issued = commandMock.mock.calls.map((c) => c[0].query);
     expect(issued.some((q) => q.includes("CREATE MATERIALIZED VIEW"))).toBe(
       true,
     );
   });
+
 });
 
 describe("getSplitTablesReadiness", () => {
   it("ready only when both tables exist and the MV is finished", async () => {
-    // dorisTableExists ef → [row], ts → [row]; then MV status FINISHED
+    // dorisTableExists ef → [row], ts → [row], content → [row]; then MV status FINISHED
     queryMock
       .mockResolvedValueOnce([{ x: 1 }]) // SHOW TABLES ef
       .mockResolvedValueOnce([{ x: 1 }]) // SHOW TABLES ts
+      .mockResolvedValueOnce([{ x: 1 }]) // SHOW TABLES content
       .mockResolvedValueOnce([
         { RollupIndexName: `trace_metrics_agg_${PID}`, State: "FINISHED" },
       ]);
@@ -117,12 +137,14 @@ describe("getSplitTablesReadiness", () => {
       ready: true,
       eventsFullExists: true,
       tracesScalarExists: true,
+      contentDictExists: true,
       mvStatus: "finished",
     });
   });
 
   it("not ready while the MV is still building", async () => {
     queryMock
+      .mockResolvedValueOnce([{ x: 1 }])
       .mockResolvedValueOnce([{ x: 1 }])
       .mockResolvedValueOnce([{ x: 1 }])
       .mockResolvedValueOnce([

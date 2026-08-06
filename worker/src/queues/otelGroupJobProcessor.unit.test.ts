@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { ZodError } from "zod/v4";
 
+vi.mock("../env", () => ({
+  env: {
+    LITEFUSE_OTEL_LOAD_CONCURRENCY: 1,
+    LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: 1,
+  },
+}));
+
 import {
   processOtelGroupJob,
   isDeterministicIngestError,
@@ -63,9 +70,7 @@ const eventRecord = (spanId: string, opts: Record<string, unknown> = {}) =>
     ...opts,
   }) as never;
 
-const payloadFor = (
-  fileKeys: string[],
-): OtelGroupIngestionEventType => ({
+const payloadFor = (fileKeys: string[]): OtelGroupIngestionEventType => ({
   shape: "group-v1",
   groupId: computeGroupId(fileKeys),
   entries: fileKeys.map(entry),
@@ -101,8 +106,14 @@ const makeDeps = (
         eventRecord(`${e.fileKey}-child`),
       ],
       scalarRecords: [
-        { project_id: "p1", id: "t1", start_time: Date.now(), event_ts: Date.now() } as never,
+        {
+          project_id: "p1",
+          id: "t1",
+          start_time: Date.now(),
+          event_ts: Date.now(),
+        } as never,
       ],
+      contentRecords: [],
       sessions: new Map([["s1", "default"]]),
     })),
     streamLoadBody: vi.fn(async (table, body, count, options) => {
@@ -177,6 +188,89 @@ describe("processOtelGroupJob (core EO semantics)", () => {
     expect(deps.upsertSessions).toHaveBeenCalledTimes(1);
   });
 
+  it("loads content records produced by the transform before events_full", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    const systemHash = "a".repeat(64);
+    const userHash = "b".repeat(64);
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [
+        eventRecord("first", {
+          start_time: Date.UTC(2026, 6, 28, 12),
+          input: `${systemHash} ${userHash}`,
+        }),
+        eventRecord("second", {
+          start_time: Date.UTC(2026, 6, 28, 13),
+          input: userHash,
+        }),
+      ],
+      scalarRecords: [],
+      contentRecords: [
+        {
+          start_time: "2026-07-28",
+          content_hash: systemHash,
+          content: '{"role":"system","content":"You are concise."}',
+        },
+        {
+          start_time: "2026-07-28",
+          content_hash: userHash,
+          content: '{"role":"user","content":"Hello"}',
+        },
+      ],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    expect(loads.map((load) => load.table)).toEqual([
+      "content_dict_p1",
+      "events_full_p1",
+      "pg:otel_file_ledger",
+    ]);
+
+    const content = loads[0].rows as Array<Record<string, unknown>>;
+    expect(content).toHaveLength(2);
+    expect(content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          start_time: "2026-07-28",
+          content: '{"role":"system","content":"You are concise."}',
+        }),
+        expect.objectContaining({
+          start_time: "2026-07-28",
+          content: '{"role":"user","content":"Hello"}',
+        }),
+      ]),
+    );
+    expect(content.every((row) => !("project_id" in row))).toBe(true);
+    expect(
+      content.every((entry) => typeof entry.content_hash === "string"),
+    ).toBe(true);
+
+    const events = loads[1].rows as Array<Record<string, unknown>>;
+    expect(events[0].input).toBe(`${systemHash} ${userHash}`);
+    expect(events[1].input).toBe(userHash);
+  });
+
+  it("keeps an empty input list as an empty events_full text hash list", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [eventRecord("empty-input", { input: "" })],
+      scalarRecords: [],
+      contentRecords: [],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    expect(loads.map((load) => load.table)).toEqual([
+      "events_full_p1",
+      "pg:otel_file_ledger",
+    ]);
+    expect((loads[0].rows[0] as Record<string, unknown>).input).toBe("");
+  });
+
   it("dedups a fileKey duplicated in the payload", async () => {
     const payload = payloadFor(["f1.json"]);
     payload.entries.push(entry("f1.json")); // defense-in-depth path
@@ -195,6 +289,7 @@ describe("processOtelGroupJob (core EO semantics)", () => {
         return {
           eventRecords: [eventRecord("ok")],
           scalarRecords: [],
+          contentRecords: [],
           sessions: new Map(),
         };
       },
@@ -320,13 +415,27 @@ describe("processOtelGroupJob (split targets)", () => {
     const payload = payloadFor(["f1.json"]);
     const oldTs = Date.now() - 30 * 86_400_000; // 30d old, retention 7d
     const nowTs = Date.now();
+    const recentHash = "a".repeat(64);
+    const oldHash = "b".repeat(64);
     const { deps, loads } = makeDeps({
       transformFile: vi.fn(async () => ({
         eventRecords: [
-          eventRecord("recent", { start_time: nowTs }),
-          eventRecord("old", { start_time: oldTs }),
+          eventRecord("recent", { start_time: nowTs, input: recentHash }),
+          eventRecord("old", { start_time: oldTs, input: oldHash }),
         ],
         scalarRecords: [],
+        contentRecords: [
+          {
+            start_time: new Date(nowTs).toISOString().slice(0, 10),
+            content_hash: recentHash,
+            content: '"recent"',
+          },
+          {
+            start_time: new Date(oldTs).toISOString().slice(0, 10),
+            content_hash: oldHash,
+            content: '"old"',
+          },
+        ],
         sessions: new Map(),
       })),
     });
@@ -336,6 +445,11 @@ describe("processOtelGroupJob (split targets)", () => {
     // only the in-window row survived
     expect(eventsLoad!.count).toBe(1);
     expect(eventsLoad!.rows).toHaveLength(1);
+    const contentLoad = loads.find((l) => l.table === "content_dict_p1");
+    expect(contentLoad?.rows).toEqual([
+      expect.objectContaining({ content_hash: recentHash }),
+    ]);
+    expect(contentLoad?.rows[0]).not.toHaveProperty("project_id");
   });
 
   it("a project not live in cache still targets its split tables", async () => {
@@ -367,7 +481,9 @@ describe("processOtelGroupJob (Stage 1 #4: scalar missing-table three-way)", () 
     (deps.streamLoadBody as ReturnType<typeof vi.fn>).mockImplementation(
       async (table, body, count, options) => {
         if (table === "traces_scalar_p1") {
-          throw new Error("errCode = 2, Table [traces_scalar_p1] does not exist");
+          throw new Error(
+            "errCode = 2, Table [traces_scalar_p1] does not exist",
+          );
         }
         loads.push({ table, rows: decodeBody(body), count, options });
         return { dedupedByLabel: false };
