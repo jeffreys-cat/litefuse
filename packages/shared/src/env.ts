@@ -115,12 +115,6 @@ const EnvSchema = z.object({
     .positive()
     .default(1),
   // Exactly-once otel pipeline (docs/ingestion-exactly-once-design.md).
-  // GROUPING_ENABLED controls ONLY whether web registers files into the
-  // per-shard pending list (grouper picks them up) instead of enqueuing one
-  // BullMQ job per file. The worker-side grouper runs whenever the otel queue
-  // consumer is enabled — independent of this flag — so flipping it needs no
-  // worker restart and rollback drains the pending backlog.
-  LITEFUSE_OTEL_GROUPING_ENABLED: z.enum(["true", "false"]).default("false"),
   // Idempotent-registration window: a fileKey is admitted into the pending
   // list at most once per TTL. MUST be >= the full retry window (BullMQ
   // attempts + DLQ redrives), i.e. >= FE label_keep_max_second — the
@@ -200,9 +194,12 @@ const EnvSchema = z.object({
   LITEFUSE_GOOGLE_CLOUD_STORAGE_CREDENTIALS: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
 
+  // Off by default: the S3 ingestion-file ledger is a per-file write on the
+  // ingestion hot path (used only for S3 retention/deletion reconciliation).
+  // When enabled it now writes PG (blob_storage_file_log), not Doris.
   LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG: z
     .enum(["true", "false"])
-    .default("true"),
+    .default("false"),
 
   LITEFUSE_S3_LIST_MAX_KEYS: z.coerce.number().positive().default(200),
   LITEFUSE_S3_RATE_ERROR_SLOWDOWN_ENABLED: z

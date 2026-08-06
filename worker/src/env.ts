@@ -260,9 +260,11 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false"),
 
+  // Off by default: per-file write on the ingestion hot path, only needed for
+  // S3 retention/deletion reconciliation. When enabled it writes PG, not Doris.
   LITEFUSE_ENABLE_BLOB_STORAGE_FILE_LOG: z
     .enum(["true", "false"])
-    .default("true"),
+    .default("false"),
 
   // Comma-separated list of project IDs that should only export traces table (skip observations and scores)
   LITEFUSE_BLOB_STORAGE_EXPORT_TRACE_ONLY_PROJECT_IDS: z

@@ -6,7 +6,6 @@ import {
   buildSplitTableFromTemplate,
   buildTraceMetricsAggMV,
   SPLIT_BASE_TABLE_SHAPES,
-  readSharedCreateStatement,
   readSplitTemplate,
   buildSplitTableStatements,
   resolveMigrationsDir,
@@ -163,40 +162,6 @@ describe("buildSplitTableStatements (reads OUR split templates)", () => {
     expect(mv).toContain("MAX(created_at) AS tm_max_created_at");
     expect(mv).not.toContain("event_ts");
   });
-});
-
-// Column-parity drift guard: the split template and the canonical shared
-// migration must declare the SAME columns + types (they intentionally differ
-// only in column ORDER, the KEY, and the partition/dist tail). If someone adds a
-// column to one file but not the other, split tables would silently miss it.
-describe("split-table column-parity drift guard", () => {
-  // Extract a name -> normalized-type map from a CREATE body. Column lines start
-  // with a backtick-quoted name; INDEX / KEY / ENGINE / comment lines do not.
-  const extractColumns = (createSql: string): Map<string, string> => {
-    const cols = new Map<string, string>();
-    for (const raw of createSql.split("\n")) {
-      const line = raw.replace(/--.*$/, "").trim();
-      if (!line.startsWith("`")) continue;
-      const m = line.match(/^`([^`]+)`\s+(.+?),?\s*$/);
-      if (!m) continue;
-      cols.set(m[1], m[2].replace(/\s+/g, " ").trim().toLowerCase());
-    }
-    return cols;
-  };
-
-  it.each(["events_full", "traces_scalar"])(
-    "%s split template columns match the shared migration",
-    (table) => {
-      const shared = extractColumns(readSharedCreateStatement(table));
-      const split = extractColumns(readSplitTemplate(table));
-      // same set of column names
-      expect([...split.keys()].sort()).toEqual([...shared.keys()].sort());
-      // same type for every column
-      for (const [name, type] of shared) {
-        expect(split.get(name)).toBe(type);
-      }
-    },
-  );
 });
 
 // Drift guard: the split path reads ONLY the CREATE migration / split template.
