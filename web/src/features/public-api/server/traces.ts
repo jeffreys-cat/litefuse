@@ -134,7 +134,7 @@ export const generateTracesForPublicApi = async ({
         t.input as input,
         t.output as output,
         t.session_id as session_id,
-        to_json(t.metadata) as metadata,
+        json_object_flatten(t.metadata) as metadata,
         t.user_id as user_id,
         t.${dq("release")} as ${dq("release")},
         t.version as version,
