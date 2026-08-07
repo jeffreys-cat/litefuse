@@ -18,6 +18,11 @@ import { logger } from "../logger";
 import { InternalServerError, LangfuseNotFoundError } from "../../errors";
 import { prisma } from "../../db";
 import { ObservationRecordReadType } from "./definitions";
+import {
+  findContentDictInputMatches,
+  resolveContentDictInputs,
+  resolveContentDictInputStream,
+} from "./contentDict";
 import { FilterState } from "../../types";
 import { FullObservations } from "../queries";
 import {
@@ -205,7 +210,7 @@ export const getObservationsForTrace = async <IncludeIO extends boolean>(
   // Normalize Doris-returned string-encoded usage/cost details into the
   // object shape the downstream converter expects, and parse the
   // to_json(metadata) map projection into the metadata Record.
-  records = rawRecords.map((r) => {
+  records = (await resolveContentDictInputs(rawRecords, projectId)).map((r) => {
     const preprocessed = preprocessDorisUsageCostDetails(r);
     return {
       ...preprocessed,
@@ -334,13 +339,15 @@ export const getObservationForTraceIdByName = async ({
 
   // Preprocess + zip parallel metadata arrays into the Record shape
   // convertObservation expects.
-  const records = rawRecords.map((r) => {
-    const preprocessed = preprocessDorisUsageCostDetails(r);
-    return {
-      ...preprocessed,
-      metadata: r.metadata,
-    };
-  }) as ObservationRecordReadType[];
+  const records = (await resolveContentDictInputs(rawRecords, projectId)).map(
+    (r) => {
+      const preprocessed = preprocessDorisUsageCostDetails(r);
+      return {
+        ...preprocessed,
+        metadata: r.metadata,
+      };
+    },
+  ) as ObservationRecordReadType[];
 
   return records.map((r) => convertObservation(r));
 };
@@ -449,13 +456,15 @@ export const getObservationsById = async (
   });
 
   // Preprocess + zip parallel metadata arrays.
-  const records = rawRecords.map((r) => {
-    const preprocessed = preprocessDorisUsageCostDetails(r);
-    return {
-      ...preprocessed,
-      metadata: r.metadata,
-    };
-  }) as ObservationRecordReadType[];
+  const records = (await resolveContentDictInputs(rawRecords, projectId)).map(
+    (r) => {
+      const preprocessed = preprocessDorisUsageCostDetails(r);
+      return {
+        ...preprocessed,
+        metadata: r.metadata,
+      };
+    },
+  ) as ObservationRecordReadType[];
 
   return records.map((r) => convertObservation(r));
 };
@@ -542,13 +551,15 @@ const getObservationByIdInternal = async ({
 
   // Preprocess Doris JSON-string maps and zip the parallel metadata
   // arrays back into the Record<string, string> the converter expects.
-  const records = rawRecords.map((r) => {
-    const preprocessed = preprocessDorisUsageCostDetails(r);
-    return {
-      ...preprocessed,
-      metadata: r.metadata,
-    };
-  }) as ObservationRecordReadType[];
+  const records = (await resolveContentDictInputs(rawRecords, projectId)).map(
+    (r) => {
+      const preprocessed = preprocessDorisUsageCostDetails(r);
+      return {
+        ...preprocessed,
+        metadata: r.metadata,
+      };
+    },
+  ) as ObservationRecordReadType[];
 
   return records;
 };
@@ -817,9 +828,15 @@ const getObservationsTableInternal = async <T>(
   // of-order ingest, OTel child spans without `langfuse.trace.*`
   // attributes). The JOIN is a point-lookup on the inverted trace_id
   // index — millisecond cost on a 50-row page.
-  const search = dorisSearchCondition(opts.searchQuery, opts.searchType, {
-    type: "observations",
-  });
+  const inputContentMatches = opts.searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, opts.searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    opts.searchQuery,
+    opts.searchType,
+    { type: "observations" },
+    inputContentMatches,
+  );
 
   // Scores CTE for Doris.
   // scores_avg uses Array<Struct(name, avg_value)> to match CK's Array<Tuple>
@@ -937,7 +954,13 @@ const getObservationsTableInternal = async <T>(
   // For selectIOAndMetadata=true rows, zip the parallel metadata arrays
   // (events_full storage layout) back into the Record<string, string>
   // shape that convertObservation expects.
-  return res.map((r) => {
+  const resolved = selectIOAndMetadata
+    ? await resolveContentDictInputs(
+        res as Array<Record<string, unknown>>,
+        projectId,
+      )
+    : res;
+  return resolved.map((r) => {
     const preprocessed = preprocessDorisUsageCostDetails(r) as Record<
       string,
       unknown
@@ -1753,20 +1776,23 @@ export const getObservationsForBlobStorageExport = function (
       AND start_time <= {maxTimestamp: DateTime}
     `;
 
-  const records = queryDorisStream<Record<string, unknown>>({
-    query,
-    params: {
-      projectId,
-      minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
-      maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
-    },
-    tags: {
-      feature: "blobstorage",
-      type: "observation",
-      kind: "analytic",
-      projectId,
-    },
-  });
+  const records = resolveContentDictInputStream(
+    queryDorisStream<Record<string, unknown>>({
+      query,
+      params: {
+        projectId,
+        minTimestamp: convertDateToAnalyticsDateTime(minTimestamp),
+        maxTimestamp: convertDateToAnalyticsDateTime(maxTimestamp),
+      },
+      tags: {
+        feature: "blobstorage",
+        type: "observation",
+        kind: "analytic",
+        projectId,
+      },
+    }),
+    projectId,
+  );
 
   return records;
 };

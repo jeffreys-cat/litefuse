@@ -157,6 +157,7 @@ export class OtelGrouper {
       ready: false,
       eventsFullExists: false,
       tracesScalarExists: false,
+      contentDictExists: false,
       mvStatus: "absent" as const,
     }));
   }
@@ -376,7 +377,11 @@ export class OtelGrouper {
           continue;
         }
         this.laneReadinessNextCheck.set(lane, now + LANE_READINESS_BACKOFF_MS);
-        if (!readiness.eventsFullExists || !readiness.tracesScalarExists) {
+        if (
+          !readiness.eventsFullExists ||
+          !readiness.tracesScalarExists ||
+          !readiness.contentDictExists
+        ) {
           // INCONSISTENT: a candidate lane is split=true, so the flip-gate
           // invariant (split=true ⇒ base tables exist) says its tables should be
           // present — but they are not (dropped, or a control row flipped
@@ -387,7 +392,7 @@ export class OtelGrouper {
             shard: lane,
           });
           logger.warn(
-            `[OtelGrouper] lane ${lane} is split but base tables are missing (events=${readiness.eventsFullExists} scalar=${readiness.tracesScalarExists}) — re-enqueuing provisioning`,
+            `[OtelGrouper] lane ${lane} is split but base tables are missing (events=${readiness.eventsFullExists} scalar=${readiness.tracesScalarExists} contentDict=${readiness.contentDictExists}) — re-enqueuing provisioning`,
           );
           await enqueueDorisSplitTableProvisioning(laneToProjectId(lane));
         }

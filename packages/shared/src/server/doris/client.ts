@@ -1104,6 +1104,9 @@ const DATE_FIELD_MAPPINGS: Record<
   // traces_scalar also partitions directly on start_time (migration 0039) — no
   // start_time_date mirror column to derive.
   traces_scalar: null,
+  // content_dict partitions directly on start_time; physical split names are
+  // normalized by toLogicalTable before this lookup.
+  content_dict: null,
   // trace_metrics_agg is a sync MV on events_full (migration 0040) — never
   // stream-loaded directly, so no mapping entry.
 };
@@ -1147,8 +1150,10 @@ const normalizeValue = (key: string, value: unknown): unknown => {
   // Convert undefined to null
   if (value === undefined) return null;
 
-  // Handle arrays - empty arrays become null
-  if (Array.isArray(value)) return value.length > 0 ? value : null;
+  // Handle arrays - input's empty hash list is meaningful, while empty values
+  // for the legacy array columns retain their established null representation.
+  if (Array.isArray(value))
+    return value.length > 0 || key === "input" ? value : null;
 
   // Handle Date objects - convert to ISO string
   if (value instanceof Date) return value.toISOString();

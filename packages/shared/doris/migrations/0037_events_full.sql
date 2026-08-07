@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS __TABLE__ (
     `tool_calls` ARRAY<String>,
     `tool_call_names` ARRAY<String>,
 
-    `input` Variant,
-    `output` Variant,
+    `input` String,
+    `output` String,
     `input_trim` String,
     `output_trim` String,
 

@@ -9,6 +9,7 @@ import {
   convertDorisTracesListToDomain,
   orderByToDorisSQL,
   type DateTimeFilter,
+  resolveContentDictInputs,
 } from "@langfuse/shared/src/server";
 import {
   type OrderByState,
@@ -129,6 +130,7 @@ export const generateTracesForPublicApi = async ({
         CONCAT('/project/', t.project_id, '/traces/', t.trace_id) as htmlPath,
         t.project_id as project_id,
         t.start_time as timestamp,
+        t.start_time as start_time,
         t.name as name,
         t.environment as environment,
         t.input as input,
@@ -159,6 +161,7 @@ export const generateTracesForPublicApi = async ({
   const rawResult = await queryDoris<
     Omit<TraceRecordReadType, "metadata"> & {
       metadata: unknown;
+      start_time: string;
       observations: string[];
       scores: string[];
       totalCost: number;
@@ -183,11 +186,17 @@ export const generateTracesForPublicApi = async ({
     },
   });
 
-  const result = rawResult.map(({ metadata, ...trace }) => ({
-    ...trace,
-    metadata:
-      typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
-  }));
+  const resolvedResult = await resolveContentDictInputs(
+    rawResult,
+    props.projectId,
+  );
+  const result = resolvedResult.map(
+    ({ metadata, start_time: _startTime, ...trace }) => ({
+      ...trace,
+      metadata:
+        typeof metadata === "string" ? JSON.parse(metadata) : (metadata ?? {}),
+    }),
+  );
 
   return convertDorisTracesListToDomain(
     result as Array<

@@ -6,8 +6,7 @@ import {
   measureAndReturn,
   observationsTableUiColumnDefinitionsForDoris,
   convertObservation,
-  convertDateToAnalyticsDateTime,
-  dq,
+  resolveContentDictInputs,
 } from "@langfuse/shared/src/server";
 import { type FilterState, observationsTableCols } from "@langfuse/shared";
 import { tableFor } from "@langfuse/shared/src/server";
@@ -109,7 +108,11 @@ export const generateObservationsForPublicApi = async (props: QueryType) => {
         params: input.params,
         tags: input.tags,
       });
-      return result.map((r) => {
+      const resolvedResult = await resolveContentDictInputs(
+        result,
+        props.projectId,
+      );
+      return resolvedResult.map((r) => {
         const { metadata, ...rest } = r;
         return convertObservation({
           ...rest,

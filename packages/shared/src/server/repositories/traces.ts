@@ -29,6 +29,7 @@ import { prisma } from "../../db";
 import { dorisSearchCondition } from "../queries/doris-sql/search";
 import { TraceRecordReadType } from "./definitions";
 import { convertDorisToDomain } from "./traces_converters";
+import { resolveContentDictInputs } from "./contentDict";
 
 /**
  * Trace reads, post async-MV era. The traces_mv-shaped any_value aggregation
@@ -51,6 +52,7 @@ const TRACES_SCALAR_SELECT = `
       id,
       project_id,
       start_time AS \`timestamp\`,
+      start_time,
       name,
       user_id,
       session_id,
@@ -74,7 +76,8 @@ const TRACES_SCALAR_SELECT = `
 const traceRootIoQuery = (projectId: string) => `
     SELECT
       CAST(input AS STRING) AS input,
-      CAST(output AS STRING) AS output
+      CAST(output AS STRING) AS output,
+      start_time
     FROM ${tableFor(projectId, "events_full")}
     WHERE project_id = {projectId: String}
     AND trace_id = {traceId: String}
@@ -103,12 +106,14 @@ const attachRootIO = async (params: {
     id: string;
     input: string | null;
     output: string | null;
+    start_time: string;
   }>({
     query: `
       SELECT
         trace_id AS id,
         CAST(input AS STRING) AS input,
-        CAST(output AS STRING) AS output
+        CAST(output AS STRING) AS output,
+        start_time
       FROM ${tableFor(projectId, "events_full")}
       WHERE project_id = {projectId: String}
       AND trace_id IN ({ioTraceIds: Array(String)})
@@ -125,11 +130,12 @@ const attachRootIO = async (params: {
     },
     tags,
   });
+  const resolvedIoRows = await resolveContentDictInputs(ioRows, projectId);
   const ioById = new Map<
     string,
     { input: string | null; output: string | null }
   >();
-  for (const row of ioRows) {
+  for (const row of resolvedIoRows) {
     if (!ioById.has(row.id)) ioById.set(row.id, row);
   }
   return records.map((r) => ({
@@ -148,7 +154,7 @@ const attachRootIO = async (params: {
 const buildRootSpanTraceQuery = (params: {
   projectId: string;
   whereSql: string;
-  /** Skip the full input/output Variant; only input_trim/output_trim are
+  /** Skip full input/output; only input_trim/output_trim are
    * returned. Used for verbosity "compact". */
   excludeFullIO?: boolean;
 }): string => {
@@ -163,6 +169,7 @@ const buildRootSpanTraceQuery = (params: {
       trace_id AS id,
       project_id,
       start_time AS \`timestamp\`,
+      start_time,
       IF(trace_name <> '', trace_name, name) AS name,
       NULLIF(user_id, '') AS user_id,
       NULLIF(session_id, '') AS session_id,
@@ -698,6 +705,7 @@ export const getTraceById = async ({
       const ioRows = await queryDoris<{
         input: string | null;
         output: string | null;
+        start_time: string;
       }>({
         query: traceRootIoQuery(projectId),
         params: {
@@ -714,8 +722,9 @@ export const getTraceById = async ({
           projectId,
         },
       });
-      scalarRecord.input = ioRows[0]?.input ?? null;
-      scalarRecord.output = ioRows[0]?.output ?? null;
+      const resolvedIoRows = await resolveContentDictInputs(ioRows, projectId);
+      scalarRecord.input = resolvedIoRows[0]?.input ?? null;
+      scalarRecord.output = resolvedIoRows[0]?.output ?? null;
     }
     const trace = {
       ...convertDorisToDomain(scalarRecord),
@@ -760,8 +769,8 @@ export const getTraceById = async ({
     ${attempt.fromTs ? `AND start_time >= {fromTimestamp: DateTime}` : ""}
   `;
     // "compact" (the traces-list cell preview) only needs the trim preview, so
-    // skip the full input/output Variant; full/truncated read the Variants
-    // straight off the root row.
+    // skip full input/output; full/truncated reads resolve text hash lists from
+    // the root row.
     const query = buildRootSpanTraceQuery({
       projectId,
       whereSql,
@@ -789,6 +798,7 @@ export const getTraceById = async ({
         projectId,
       },
     });
+    records = await resolveContentDictInputs(records, projectId);
     if (records.length > 0) break;
   }
 

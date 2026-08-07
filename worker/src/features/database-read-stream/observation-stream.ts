@@ -2,7 +2,6 @@ import {
   BatchExportFileFormat,
   FilterCondition,
   ScoreDataTypeEnum,
-  type ScoreDataTypeType,
   TimeFilter,
   TracingSearchType,
 } from "@langfuse/shared";
@@ -18,6 +17,8 @@ import {
   enrichObservationWithModelData,
   dorisSearchCondition,
   convertObservation,
+  findContentDictInputMatches,
+  resolveContentDictInputStream,
 } from "@langfuse/shared/src/server";
 import { prisma } from "@langfuse/shared/src/db";
 import { Readable } from "stream";
@@ -156,10 +157,18 @@ export const getObservationStream = async (props: {
 
   const appliedObservationsFilter = observationsFilter.apply();
 
-  const search = dorisSearchCondition(searchQuery, searchType, {
-    type: "observations",
-    hasTracesJoin: true,
-  });
+  const inputContentMatches = searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    searchQuery,
+    searchType,
+    {
+      type: "observations",
+      hasTracesJoin: true,
+    },
+    inputContentMatches,
+  );
 
   // Doris doesn't have FINAL modifier or LIMIT 1 BY, so we use ROW_NUMBER() for deduplication
   const query = `
@@ -382,7 +391,10 @@ export const getObservationStream = async (props: {
       let rowBuffer: ObservationRow[] = [];
       let observationIds: string[] = [];
 
-      for await (const row of asyncGenerator) {
+      for await (const row of resolveContentDictInputStream(
+        asyncGenerator,
+        projectId,
+      )) {
         rowBuffer.push(row);
         observationIds.push(row.id);
 

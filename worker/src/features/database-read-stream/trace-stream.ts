@@ -1,7 +1,6 @@
 import {
   FilterCondition,
   ScoreDataTypeEnum,
-  type ScoreDataTypeType,
   TracingSearchType,
 } from "@langfuse/shared";
 import {
@@ -14,6 +13,8 @@ import {
   dorisSearchCondition,
   parseDorisUTCDateTimeFormat,
   StringFilter,
+  findContentDictInputMatches,
+  resolveContentDictInputStream,
 } from "@langfuse/shared/src/server";
 import { Readable } from "stream";
 import { env } from "../../env";
@@ -98,10 +99,18 @@ export const getTraceStream = async (props: {
 
   const appliedScoresFilter = scoresFilter.apply();
 
-  const search = dorisSearchCondition(searchQuery, searchType, {
-    type: "traces",
-    hasTracesJoin: false,
-  });
+  const inputContentMatches = searchType?.includes("content")
+    ? await findContentDictInputMatches(projectId, searchQuery ?? "")
+    : [];
+  const search = dorisSearchCondition(
+    searchQuery,
+    searchType,
+    {
+      type: "traces",
+      hasTracesJoin: false,
+    },
+    inputContentMatches,
+  );
 
   // Aggregate trace fields from events_full using the two-CTE pattern that
   // mirrors langfuse-main's eventsTracesAggregation:
@@ -170,6 +179,7 @@ export const getTraceStream = async (props: {
       SELECT
         trace_id,
         project_id,
+        start_time,
         tags,
         input,
         output,
@@ -178,6 +188,7 @@ export const getTraceStream = async (props: {
         SELECT
           trace_id,
           project_id,
+          start_time,
           tags,
           input,
           output,
@@ -196,6 +207,7 @@ export const getTraceStream = async (props: {
       s.trace_id AS id,
       s.project_id AS project_id,
       s.\`timestamp\` AS \`timestamp\`,
+      r.start_time AS start_time,
       s.name AS name,
       s.user_id AS user_id,
       s.session_id AS session_id,
@@ -223,6 +235,7 @@ export const getTraceStream = async (props: {
     id: string;
     project_id: string;
     timestamp: Date;
+    start_time: Date;
     name: string | null;
     user_id: string | null;
     session_id: string | null;
@@ -333,7 +346,10 @@ export const getTraceStream = async (props: {
       >["value"][] = [];
       let traceIds: string[] = [];
 
-      for await (const row of asyncGenerator) {
+      for await (const row of resolveContentDictInputStream(
+        asyncGenerator,
+        projectId,
+      )) {
         rowBuffer.push(row);
         traceIds.push(row.id);
 
