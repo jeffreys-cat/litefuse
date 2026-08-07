@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { projectNameSchema } from "@/src/features/auth/lib/projectNameSchema";
 import { auditLog } from "@/src/features/audit-logs/auditLog";
 import { throwIfNoOrganizationAccess } from "@/src/features/rbac/utils/checkOrganizationAccess";
+import { throwIfExceedsLimit } from "@/src/features/entitlements/server/hasEntitlementLimit";
 import { ApiAuthService } from "@/src/features/public-api/server/apiAuth";
 import {
   QueueJobs,
@@ -37,27 +38,50 @@ export const projectsRouter = createTRPCRouter({
         scope: "projects:create",
       });
 
-      const existingProject = await ctx.prisma.project.findFirst({
-        where: {
-          name: input.name,
-          orgId: input.orgId,
-          deletedAt: null,
-        },
-      });
+      const project = await ctx.prisma.$transaction(async (tx) => {
+        // Serialize project creation for an organization so concurrent requests
+        // cannot both pass the entitlement count before either creates a project.
+        await tx.$queryRaw`
+          SELECT id FROM organizations WHERE id = ${input.orgId} FOR UPDATE
+        `;
 
-      if (existingProject) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "A project with this name already exists in your organization",
+        const existingProject = await tx.project.findFirst({
+          where: {
+            name: input.name,
+            orgId: input.orgId,
+            deletedAt: null,
+          },
         });
-      }
 
-      const project = await ctx.prisma.project.create({
-        data: {
-          name: input.name,
+        if (existingProject) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "A project with this name already exists in your organization",
+          });
+        }
+
+        const activeProjectCount = await tx.project.count({
+          where: {
+            orgId: input.orgId,
+            deletedAt: null,
+          },
+        });
+
+        throwIfExceedsLimit({
+          entitlementLimit: "project-count",
+          sessionUser: ctx.session.user,
           orgId: input.orgId,
-        },
+          currentUsage: activeProjectCount,
+          message: "Free plan allows up to 3 projects per organization",
+        });
+
+        return tx.project.create({
+          data: {
+            name: input.name,
+            orgId: input.orgId,
+          },
+        });
       });
 
       // Universal Doris table split: EVERY new project gets its own tables

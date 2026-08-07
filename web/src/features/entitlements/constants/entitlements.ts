@@ -39,6 +39,7 @@ export const entitlementLimits = [
   "data-access-days",
   "model-based-evaluations-count-evaluators",
   "prompt-management-count-prompts",
+  "project-count",
 ] as const;
 export type EntitlementLimit = (typeof entitlementLimits)[number];
 
@@ -63,6 +64,7 @@ export const entitlementAccess: Record<
       "annotation-queue-count": 1,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": 3,
     },
   },
   "cloud:core": {
@@ -73,6 +75,7 @@ export const entitlementAccess: Record<
       "annotation-queue-count": 3,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   "cloud:pro": {
@@ -87,6 +90,7 @@ export const entitlementAccess: Record<
       "data-access-days": 1095,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   "cloud:team": {
@@ -107,6 +111,7 @@ export const entitlementAccess: Record<
       "data-access-days": 1095,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   "cloud:enterprise": {
@@ -127,6 +132,7 @@ export const entitlementAccess: Record<
       "data-access-days": false,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   oss: {
@@ -143,6 +149,7 @@ export const entitlementAccess: Record<
       "data-access-days": false,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   "self-hosted:pro": {
@@ -153,6 +160,7 @@ export const entitlementAccess: Record<
       "data-access-days": false,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
   "self-hosted:enterprise": {
@@ -172,6 +180,7 @@ export const entitlementAccess: Record<
       "data-access-days": false,
       "model-based-evaluations-count-evaluators": false,
       "prompt-management-count-prompts": false,
+      "project-count": false,
     },
   },
 };

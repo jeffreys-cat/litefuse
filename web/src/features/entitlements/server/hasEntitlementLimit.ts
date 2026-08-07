@@ -60,13 +60,15 @@ export const isWithinEntitlementLimit = (
  * Throws if usage exceeds the entitlement limit
  */
 export const throwIfExceedsLimit = (
-  p: HasEntitlementLimitParams & { currentUsage: number },
+  p: HasEntitlementLimitParams & { currentUsage: number; message?: string },
 ) => {
   if (!isWithinEntitlementLimit(p)) {
     const limit = hasEntitlementLimit(p);
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: `Usage (${p.currentUsage}) exceeds the limit (${limit}) for entitlement: ${p.entitlementLimit}`,
+      message:
+        p.message ??
+        `Usage (${p.currentUsage}) exceeds the limit (${limit}) for entitlement: ${p.entitlementLimit}`,
     });
   }
 };
