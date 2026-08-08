@@ -24,7 +24,6 @@ import {
   type OtelPendingEntryType,
   type StreamLoadBodySource,
   type StreamLoadOutcome,
-  type TraceScalarRecordInsertType,
 } from "@langfuse/shared/src/server";
 import { ForbiddenError } from "@langfuse/shared";
 import { prisma } from "@langfuse/shared/src/db";
@@ -115,6 +114,178 @@ const ndjsonBody = (rows: Record<string, unknown>[]): StreamLoadBodySource => {
   };
 };
 
+/**
+ * Content batches are consumed in manifest order, so their ordinal is stable
+ * on a group retry. A label derived from group id, target table, and ordinal
+ * avoids re-hashing the batch's JSON body or content keys.
+ */
+const contentDictLabelForBatch = (
+  groupId: string,
+  table: string,
+  batchIndex: number,
+): string => labelForGroupTable(groupId, `${table}:content:${batchIndex}`);
+
+/**
+ * Bounded, per-group content sink. Content dictionary rows are unique-key
+ * MoW, so each committed chunk is replay-safe even if a later chunk fails.
+ * Only the current chunk's serialized Buffers survive a Doris load.
+ */
+class ContentDictBatcher {
+  private buffers = new Map<string, Buffer>();
+  private bytes = 0;
+  private queue: Promise<void> = Promise.resolve();
+  private failure: unknown;
+  private nextEntryIndex = 0;
+  private nextBatchIndex = 0;
+  private entryTurns = new Map<
+    number,
+    {
+      promise: Promise<void>;
+      resolve: () => void;
+      reject: (reason?: unknown) => void;
+    }
+  >();
+
+  constructor(
+    private readonly maxBytes: number,
+    private readonly maxRows: number,
+    private readonly groupId: string,
+    private readonly table: string,
+    private readonly flushBody: (
+      body: StreamLoadBodySource,
+      recordCount: number,
+      label: string,
+    ) => Promise<void>,
+  ) {}
+
+  append(
+    entryIndex: number,
+    records: ContentRecordInsertType[],
+  ): Promise<void> {
+    return this.waitForEntryTurn(entryIndex).then(() =>
+      this.enqueue(async () => {
+        for (const record of records) {
+          const key = `${record.start_time}\u0000${record.content_hash}`;
+          if (this.buffers.has(key)) continue;
+
+          const buffer = Buffer.from(JSON.stringify(record) + "\n", "utf8");
+          if (buffer.length > this.maxBytes) {
+            recordIncrement("langfuse.otel_group.oversize_content_entry", 1);
+            recordHistogram(
+              "langfuse.otel_group.oversize_content_entry_bytes",
+              buffer.length,
+            );
+          }
+          if (
+            this.buffers.size > 0 &&
+            (this.bytes + buffer.length > this.maxBytes ||
+              this.buffers.size + 1 > this.maxRows)
+          ) {
+            await this.flush();
+          }
+
+          this.buffers.set(key, buffer);
+          this.bytes += buffer.length;
+          if (
+            this.bytes >= this.maxBytes ||
+            this.buffers.size >= this.maxRows
+          ) {
+            await this.flush();
+          }
+        }
+      }),
+    );
+  }
+
+  completeEntry(entryIndex: number): Promise<void> {
+    return this.waitForEntryTurn(entryIndex).then(() =>
+      this.enqueue(async () => {
+        if (entryIndex !== this.nextEntryIndex) {
+          throw new Error(
+            `content_dict entry completion out of order: expected ${this.nextEntryIndex}, got ${entryIndex}`,
+          );
+        }
+        this.nextEntryIndex++;
+        const nextTurn = this.entryTurns.get(this.nextEntryIndex);
+        nextTurn?.resolve();
+        this.entryTurns.delete(this.nextEntryIndex);
+      }),
+    );
+  }
+
+  drain(): Promise<void> {
+    return this.enqueue(() => this.flush());
+  }
+
+  abort(error: unknown): void {
+    if (this.failure) return;
+    this.failure = error;
+    for (const turn of this.entryTurns.values()) turn.reject(error);
+    this.entryTurns.clear();
+  }
+
+  private waitForEntryTurn(entryIndex: number): Promise<void> {
+    if (this.failure) return Promise.reject(this.failure);
+    if (entryIndex < this.nextEntryIndex) {
+      return Promise.reject(
+        new Error(
+          `content_dict entry already completed: ${entryIndex} < ${this.nextEntryIndex}`,
+        ),
+      );
+    }
+    if (entryIndex === this.nextEntryIndex) return Promise.resolve();
+
+    let turn = this.entryTurns.get(entryIndex);
+    if (!turn) {
+      let resolve!: () => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      turn = { promise, resolve, reject };
+      this.entryTurns.set(entryIndex, turn);
+    }
+    return turn.promise;
+  }
+
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.queue.then(async () => {
+      if (this.failure) throw this.failure;
+      try {
+        await task();
+      } catch (error) {
+        this.abort(error);
+        throw error;
+      }
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async flush(): Promise<void> {
+    if (this.buffers.size === 0) return;
+
+    const buffers = Array.from(this.buffers.values());
+    const body: StreamLoadBodySource = {
+      format: "ndjson",
+      byteLength: this.bytes,
+      chunks: () => buffers,
+    };
+    const recordCount = buffers.length;
+    const label = contentDictLabelForBatch(
+      this.groupId,
+      this.table,
+      this.nextBatchIndex++,
+    );
+    this.buffers.clear();
+    this.bytes = 0;
+    await this.flushBody(body, recordCount, label);
+  }
+}
+
+class TombstonedContentTableError extends Error {}
+
 // Deliberately minimal: format json + long timeout. NEVER add
 // max_filter_ratio here — silently dropping rows breaks exactly-once
 // (design §3.3 / plan review; repositories/doris.ts's option set with
@@ -128,23 +299,26 @@ const LOAD_OPTS = { format: "json" as const, timeout: 600 };
 export type TransformedFile = {
   entry: OtelPendingEntryType;
   eventRecords: EventRecordInsertType[];
-  scalarRecords: TraceScalarRecordInsertType[];
-  contentRecords: ContentRecordInsertType[];
   /** distinct sessionId → environment, for the PG trace_sessions upsert */
   sessions: Map<string, string>;
 };
+
+type FileTransformResult = Omit<TransformedFile, "entry"> & {
+  contentRecords: ContentRecordInsertType[];
+};
+
+type ContentRecordSink = (
+  records: ContentRecordInsertType[],
+  eventStartTime: number,
+) => Promise<void>;
 
 export type GroupJobDeps = {
   downloadFile: (fileKey: string) => Promise<string>;
   transformFile: (
     entry: OtelPendingEntryType,
     raw: string,
-  ) => Promise<{
-    eventRecords: EventRecordInsertType[];
-    scalarRecords: TraceScalarRecordInsertType[];
-    contentRecords: ContentRecordInsertType[];
-    sessions: Map<string, string>;
-  }>;
+    onContentRecords?: ContentRecordSink,
+  ) => Promise<FileTransformResult>;
   streamLoadBody: (
     table: string,
     body: StreamLoadBodySource,
@@ -217,33 +391,100 @@ export const processOtelGroupJob = async (
   const retentionCutoffMs =
     retentionDays != null ? nowRef - retentionDays * 86_400_000 : null;
   let overWindowRows = 0;
+  const isWithinRetention = (startTimeMs: number): boolean =>
+    retentionCutoffMs === null || startTimeMs >= retentionCutoffMs;
   const withinRetention = (startTimeMs: number): boolean => {
-    if (retentionCutoffMs === null || startTimeMs >= retentionCutoffMs)
-      return true;
-    overWindowRows++;
-    return false;
+    const retained = isWithinRetention(startTimeMs);
+    if (!retained) overWindowRows++;
+    return retained;
   };
+
+  const contentBatcher = new ContentDictBatcher(
+    env.LITEFUSE_OTEL_CONTENT_DICT_BATCH_BYTES,
+    env.LITEFUSE_OTEL_CONTENT_DICT_BATCH_ROWS,
+    groupId,
+    contentDictTable,
+    async (body, recordCount, label) => {
+      try {
+        await deps.streamLoadBody(contentDictTable, body, recordCount, {
+          ...LOAD_OPTS,
+          label,
+        });
+      } catch (e) {
+        if (isMissingTableError(e)) {
+          const action = await handleMissingSplitTable(targetProjectId);
+          if (action === "skip") {
+            throw new TombstonedContentTableError(
+              `content dictionary table missing for tombstoned project ${targetProjectId}`,
+            );
+          }
+        }
+        throw e;
+      }
+    },
+  );
 
   // ① Download + transform under the transform semaphore. Deterministic
   // errors dead-letter the FILE (its rows are skipped, the rest of the group
   // lives on); anything else fails the job → BullMQ replay.
   const limit = pLimit(deps.transformConcurrency);
   const transformed: TransformedFile[] = [];
-  await Promise.all(
-    entries.map((entry) =>
+  const transformResults = await Promise.allSettled(
+    entries.map((entry, entryIndex) =>
       limit(async () => {
-        let raw: string;
+        let raw: string | null = null;
         try {
-          raw = await deps.downloadFile(entry.fileKey);
-        } catch (e) {
-          // S3 errors are transient by presumption — fail the job.
-          throw new Error(
-            `otel group ${groupId}: download failed for ${entry.fileKey}: ${e instanceof Error ? e.message : String(e)}`,
+          try {
+            raw = await deps.downloadFile(entry.fileKey);
+          } catch (e) {
+            // S3 errors are transient by presumption — fail the job.
+            throw new Error(
+              `otel group ${groupId}: download failed for ${entry.fileKey}: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+          let usedContentSink = false;
+          const t = await deps.transformFile(
+            entry,
+            raw,
+            async (contentRecords, eventStartTime) => {
+              usedContentSink = true;
+              if (isWithinRetention(eventStartTime)) {
+                await contentBatcher.append(entryIndex, contentRecords);
+              }
+            },
           );
-        }
-        try {
-          const t = await deps.transformFile(entry, raw);
-          transformed.push({ entry, ...t });
+          raw = null;
+          const retainedContentReferences = new Set<string>();
+          if (!usedContentSink) {
+            for (const record of t.eventRecords) {
+              if (!isWithinRetention(record.start_time)) continue;
+              if (typeof record.input !== "string") continue;
+              const contentStartTime = contentDictStartTimeForEventStartTime(
+                record.start_time,
+              );
+              for (const contentHash of record.input.split(/\s+/)) {
+                if (contentHash) {
+                  retainedContentReferences.add(
+                    `${contentStartTime}\u0000${contentHash}`,
+                  );
+                }
+              }
+            }
+
+            const retainedContentRecords = t.contentRecords.filter(
+              (contentRecord) =>
+                retainedContentReferences.has(
+                  `${contentRecord.start_time}\u0000${contentRecord.content_hash}`,
+                ),
+            );
+            await contentBatcher.append(entryIndex, retainedContentRecords);
+          }
+          t.contentRecords.length = 0;
+          transformed.push({
+            entry,
+            eventRecords: t.eventRecords,
+            sessions: t.sessions,
+          });
         } catch (e) {
           if (isDeterministicIngestError(e)) {
             deadLetterRow({
@@ -253,61 +494,62 @@ export const processOtelGroupJob = async (
             });
             return; // file-level dead letter — group continues
           }
+          contentBatcher.abort(e);
           throw e; // transient → fail job → replay
+        } finally {
+          raw = null;
+          // Concurrent file transforms may finish in any order, but their
+          // content must enter batches in manifest order so retry labels and
+          // batch boundaries remain stable.
+          await contentBatcher.completeEntry(entryIndex);
         }
       }),
     ),
   );
 
+  const transformFailure = transformResults.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (transformFailure) {
+    if (transformFailure.reason instanceof TombstonedContentTableError) {
+      deadLetterRow({
+        fileKey: `group:${groupId}`,
+        reason: transformFailure.reason.message,
+      });
+      await writeLedger(payload, deps);
+      return;
+    }
+    throw transformFailure.reason;
+  }
+  try {
+    await contentBatcher.drain();
+  } catch (e) {
+    if (e instanceof TombstonedContentTableError) {
+      deadLetterRow({
+        fileKey: `group:${groupId}`,
+        reason: e.message,
+      });
+      await writeLedger(payload, deps);
+      return;
+    }
+    throw e;
+  }
+
   const transformMs = Date.now() - startedAt;
   const deadFiles = entries.length - transformed.length;
 
-  // Memory discipline: a group holds its data THREE ways while loading —
-  // record objects (kept for evals/sessions below), formatted Doris rows,
-  // and the NDJSON Buffers. The formatted rows and Buffers are each
-  // released (nulled) the moment their load returns, so the GC can reclaim
-  // them during the remaining (slow, up-to-600s) loads instead of holding
-  // ~5-6x the source size until the function exits.
-  const retainedContentReferences = new Set<string>();
-  const retainedEventRecords: EventRecordInsertType[] = [];
+  // Memory discipline: content is consumed above in bounded chunks. The
+  // group now retains only event records and sessions until events commit;
+  // scalar rows are derived after that commit instead of being precomputed.
+  let eventRows: Record<string, unknown>[] | null = [];
   for (const transformedFile of transformed) {
     for (const record of transformedFile.eventRecords) {
-      if (!withinRetention(record.start_time)) continue;
-
-      if (typeof record.input === "string") {
-        const contentStartTime = contentDictStartTimeForEventStartTime(
-          record.start_time,
-        );
-        for (const contentHash of record.input.split(/\s+/)) {
-          if (contentHash) {
-            retainedContentReferences.add(
-              `${contentStartTime}\u0000${contentHash}`,
-            );
-          }
-        }
+      if (withinRetention(record.start_time)) {
+        eventRows.push(formatRecordForDoris(record, eventsTable));
       }
-
-      retainedEventRecords.push(record);
     }
   }
-  const contentRecords = new Map<string, ContentRecordInsertType>();
-  for (const transformedFile of transformed) {
-    for (const contentRecord of transformedFile.contentRecords) {
-      const contentReference = `${contentRecord.start_time}\u0000${contentRecord.content_hash}`;
-      if (!retainedContentReferences.has(contentReference)) continue;
-      contentRecords.set(contentReference, contentRecord);
-    }
-  }
-  let eventRows: Record<string, unknown>[] | null = retainedEventRecords.map(
-    (record) => formatRecordForDoris(record, eventsTable),
-  );
-  let scalarRows: Record<string, unknown>[] | null = transformed.flatMap((t) =>
-    t.scalarRecords
-      .filter((r) => withinRetention(r.start_time))
-      .map((r) => formatRecordForDoris(r, scalarTable)),
-  );
   const eventRowCount = eventRows.length;
-  const scalarRowCount = scalarRows.length;
   if (overWindowRows > 0) {
     recordIncrement(
       "langfuse.otel_group.retention_filtered_rows",
@@ -322,7 +564,7 @@ export const processOtelGroupJob = async (
   // ledger so the files never resurface in reconciliation, and ack.
   // (streamLoadBody would early-return on an empty body; short-circuiting
   // here keeps the gate logic from ever touching that path.)
-  if (eventRowCount === 0 && scalarRowCount === 0) {
+  if (eventRowCount === 0) {
     await writeLedger(payload, deps);
     logger.warn(
       `[OtelGroupJob] group=${groupId.slice(0, 12)} EMPTY (all ${entries.length} file(s) dead-lettered) — ledger written, nothing loaded`,
@@ -330,35 +572,8 @@ export const processOtelGroupJob = async (
     return;
   }
 
-  // ③ content_dict must commit before events_full. A replay can safely write
-  // the same (start_time, hash) keys again because content_dict uses unique-key
-  // MoW. Project scope is carried by contentDictTable, not a row column.
-  const contentRows = Array.from(contentRecords.values());
-  if (contentRows.length > 0) {
-    try {
-      await deps.streamLoadBody(
-        contentDictTable,
-        ndjsonBody(contentRows),
-        contentRows.length,
-        LOAD_OPTS,
-      );
-    } catch (e) {
-      if (isMissingTableError(e)) {
-        const action = await handleMissingSplitTable(targetProjectId);
-        if (action === "skip") {
-          deadLetterRow({
-            fileKey: `group:${groupId}`,
-            reason: `content dictionary table missing for tombstoned project ${targetProjectId}`,
-          });
-          await writeLedger(payload, deps);
-          return;
-        }
-      }
-      throw e;
-    }
-  }
-
-  // ④ events_full: the ONE deterministic-label load of this group.
+  // ③ events_full: the ONE deterministic-label load of this group. The
+  // content batcher drained successfully before this point.
   const label = eventsFullLabelForGroup(groupId);
   let eventsBody = eventRowCount > 0 ? ndjsonBody(eventRows) : null;
   eventRows = null; // Buffers built — the formatted objects are dead weight
@@ -395,13 +610,8 @@ export const processOtelGroupJob = async (
   eventsBody = null; // release the group-sized Buffers before the scalar load
   const eventsMs = Date.now() - tEvents;
 
-  // ⑤ traces_scalar (MoW, no label). Delete-protection gate — DUAL condition
-  // (design §3.3-3 / review B1): skip ONLY when the label deduped AND the
-  // ledger already exists. events_full commits are VISIBLE immediately, so a
-  // C6 replay (events_full committed, scalar never written, crash) ALSO sees
-  // dedupedByLabel=true — the ledger (written after BOTH loads) is the only
-  // signal separating it from a fully-completed run's late replay (which
-  // must skip, or a user-deleted trace's scalar row would resurrect).
+  // traces_scalar delete-protection gate — skip only when both the events
+  // label was deduplicated and the completion ledger already exists.
   let skipScalar = false;
   if (outcome.dedupedByLabel) {
     skipScalar = await deps.ledgerExists(groupId);
@@ -409,10 +619,59 @@ export const processOtelGroupJob = async (
       recordIncrement("langfuse.otel_group.scalar_gate_skipped", 1);
     }
   }
+
+  // Eval scheduling must happen after events_full commits: the event record is
+  // the eval input, and a failed events load must not schedule side effects.
+  if (deps.scheduleEvals) await deps.scheduleEvals(transformed);
+
+  // Collect the small session metadata and release each file's map before the
+  // scalar phase. The rows are still upserted after scalar, before the ledger.
+  const sessions = new Map<
+    string,
+    { id: string; projectId: string; environment: string }
+  >();
+  for (const t of transformed) {
+    for (const [sessionId, environment] of t.sessions) {
+      sessions.set(`${t.entry.projectId}\u0000${sessionId}`, {
+        id: sessionId,
+        projectId: t.entry.projectId,
+        environment,
+      });
+    }
+    t.sessions.clear();
+  }
+
+  // Scalar rows are derived only after events commit. This removes the
+  // second long-lived object graph that used to be built during conversion.
+  let scalarRows: Record<string, unknown>[] | null = null;
+  let scalarRowCount = 0;
+  if (!skipScalar) {
+    scalarRows = [];
+    for (const transformedFile of transformed) {
+      for (const record of transformedFile.eventRecords) {
+        if (!isWithinRetention(record.start_time)) continue;
+        const scalar = toTraceScalarRecord(record);
+        if (scalar) {
+          scalarRows.push(formatRecordForDoris(scalar, scalarTable));
+        }
+      }
+    }
+    scalarRowCount = scalarRows.length;
+  }
+
+  // Evals and scalar derivation are complete; no later phase needs the event
+  // record objects. Keep only the formatted scalar rows until their body is
+  // built, then clear those rows as well.
+  for (const transformedFile of transformed) {
+    transformedFile.eventRecords.length = 0;
+  }
+
+  // ⑤ traces_scalar (MoW, no label). The delete-protection gate above is
+  // evaluated before deriving rows so a completed replay does no extra work.
   const tScalar = Date.now();
   let scalarDeduped = false;
   if (scalarRows && scalarRowCount > 0 && !skipScalar) {
-    const scalarBody = ndjsonBody(scalarRows);
+    let scalarBody: StreamLoadBodySource | null = ndjsonBody(scalarRows);
     scalarRows = null;
     // Deterministic label (see labelForGroupTable): dedup here is a
     // server-side no-op bonus on top of MoW folding — the DELETE-protection
@@ -450,37 +709,18 @@ export const processOtelGroupJob = async (
       }
       throw e; // transient / reprovision → BullMQ replay
     }
+    scalarBody = null;
   }
   scalarRows = null;
   const scalarMs = Date.now() - tScalar;
 
-  // ⑥ Side effects BEFORE ack. Eval scheduling is best-effort (impl swallows
-  // errors — replays may re-schedule, declared boundary); trace_sessions
-  // failures FAIL the job
+  // ⑥ Side effects BEFORE ack. trace_sessions failures FAIL the job
   // (createMany skipDuplicates is idempotent — replay is free; swallowing
   // the error would 404 session pages forever).
-  if (deps.scheduleEvals) await deps.scheduleEvals(transformed);
-
-  // Dedup on (projectId, sessionId) — trace_sessions' composite PK. A group
-  // spans projects, and the same sessionId (e.g. a generic "default") can
-  // legitimately exist in several of them; keying by sessionId alone would
-  // let the last project overwrite the others' rows.
-  const sessions = new Map<
-    string,
-    { id: string; projectId: string; environment: string }
-  >();
-  for (const t of transformed) {
-    for (const [sessionId, environment] of t.sessions) {
-      sessions.set(`${t.entry.projectId}\u0000${sessionId}`, {
-        id: sessionId,
-        projectId: t.entry.projectId,
-        environment,
-      });
-    }
-  }
   if (sessions.size > 0) {
     await deps.upsertSessions(Array.from(sessions.values()));
   }
+  sessions.clear();
 
   // ⑦ Ledger LAST (after both loads): its existence certifies "this group
   // completed once end-to-end" — which is exactly what the scalar gate and
@@ -613,7 +853,7 @@ export const buildTransformFile = (params: {
     fileKey: string,
   ) => Promise<EventRecordInsertType>;
 }): GroupJobDeps["transformFile"] => {
-  return async (entry, raw) => {
+  return async (entry, raw, onContentRecords) => {
     // No SDK-eligibility re-check here: the web OTel route hard-rejects
     // pre-v4 SDKs with a 400 BEFORE upload/registration, so every file in
     // the pipeline (including reconcile re-injections, which lose the SDK
@@ -628,8 +868,6 @@ export const buildTransformFile = (params: {
       processor.processToEvent(parsed);
 
     const eventRecords: EventRecordInsertType[] = [];
-    const scalarRecords: TraceScalarRecordInsertType[] = [];
-    const contentRecords = new Map<string, ContentRecordInsertType>();
     const sessions = new Map<string, string>();
     for (const input of eventInputs) {
       let record: EventRecordInsertType;
@@ -650,16 +888,14 @@ export const buildTransformFile = (params: {
         record.input,
         record.start_time,
       );
-      for (const contentRecord of deduplicated.contentEntries) {
-        contentRecords.set(
-          `${contentRecord.start_time}\u0000${contentRecord.content_hash}`,
-          contentRecord,
+      const eventRecord = { ...record, input: deduplicated.input };
+      if (deduplicated.contentEntries.length > 0 && onContentRecords) {
+        await onContentRecords(
+          deduplicated.contentEntries,
+          eventRecord.start_time,
         );
       }
-      const eventRecord = { ...record, input: deduplicated.input };
       eventRecords.push(eventRecord);
-      const scalar = toTraceScalarRecord(eventRecord);
-      if (scalar) scalarRecords.push(scalar);
       if (eventRecord.session_id) {
         sessions.set(
           eventRecord.session_id,
@@ -669,8 +905,7 @@ export const buildTransformFile = (params: {
     }
     return {
       eventRecords,
-      scalarRecords,
-      contentRecords: Array.from(contentRecords.values()),
+      contentRecords: [],
       sessions,
     };
   };

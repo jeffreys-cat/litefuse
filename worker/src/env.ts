@@ -104,6 +104,17 @@ const EnvSchema = z.object({
   // fan-out = N workers × this value — design §5.3).
   LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: z.coerce.number().positive().default(4),
   LITEFUSE_OTEL_LOAD_CONCURRENCY: z.coerce.number().positive().default(4),
+  // Per-group content_dict request bound. This is intentionally independent
+  // from the generic Doris writer: OTel groups write content while hashes are
+  // created, before their one deterministic events_full load.
+  LITEFUSE_OTEL_CONTENT_DICT_BATCH_BYTES: z.coerce
+    .number()
+    .positive()
+    .default(50 * 1024 * 1024),
+  LITEFUSE_OTEL_CONTENT_DICT_BATCH_ROWS: z.coerce
+    .number()
+    .positive()
+    .default(100_000),
   // DLQ redrive (design §3.4). LABEL_KEEP_MS must mirror the Doris FE's
   // label_keep_max_second (default 3 days): a job older than the label
   // retention window CANNOT be redriven — its dedup label has been purged,
