@@ -5,6 +5,8 @@ vi.mock("../env", () => ({
   env: {
     LITEFUSE_OTEL_LOAD_CONCURRENCY: 1,
     LITEFUSE_OTEL_TRANSFORM_CONCURRENCY: 1,
+    LITEFUSE_OTEL_CONTENT_DICT_BATCH_BYTES: 512,
+    LITEFUSE_OTEL_CONTENT_DICT_BATCH_ROWS: 100,
   },
 }));
 
@@ -20,6 +22,8 @@ import {
   __setSplitSnapshotForTest,
   handleMissingSplitTable,
   getSplitRetentionDays,
+  recordHistogram,
+  recordIncrement,
   type OtelGroupIngestionEventType,
   type OtelPendingEntryType,
   type StreamLoadBodySource,
@@ -27,12 +31,8 @@ import {
 import { ForbiddenError } from "@langfuse/shared";
 
 // Keep the whole shared barrel real (computeGroupId, labels, split routing,
-// __setSplitSnapshotForTest all read/mutate the real module state) — only stub
-// the two functions that otherwise hit PG: handleMissingSplitTable (its
-// scalar/events missing-table three-way is driven per test) and
-// getSplitRetentionDays (retention is single-sourced on Project.retentionDays in
-// PG; default to "effectively no TTL" so only the retention test opts into a
-// finite window).
+// __setSplitSnapshotForTest all read/mutate the real module state). Stub PG
+// routing and metrics so the processor's lifecycle can be asserted directly.
 vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@langfuse/shared/src/server")>();
@@ -40,6 +40,8 @@ vi.mock("@langfuse/shared/src/server", async (importOriginal) => {
     ...actual,
     handleMissingSplitTable: vi.fn(),
     getSplitRetentionDays: vi.fn(async () => Number.MAX_SAFE_INTEGER),
+    recordHistogram: vi.fn(),
+    recordIncrement: vi.fn(),
   };
 });
 
@@ -119,10 +121,9 @@ const makeDeps = (
     streamLoadBody: vi.fn(async (table, body, count, options) => {
       loads.push({ table, rows: decodeBody(body), count, options });
       return {
-        dedupedByLabel:
-          table.startsWith("events_full")
-            ? (overrides.dedupedByLabel ?? false)
-            : false,
+        dedupedByLabel: table.startsWith("events_full")
+          ? (overrides.dedupedByLabel ?? false)
+          : false,
       };
     }),
     ledgerExists: vi.fn(async () => overrides.ledger ?? false),
@@ -186,6 +187,451 @@ describe("processOtelGroupJob (core EO semantics)", () => {
       groupId: payload.groupId,
     });
     expect(deps.upsertSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes content_dict in bounded chunks before events_full", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    const contentStart = new Date().toISOString().slice(0, 10);
+    const content = (hash: string, value: string) => ({
+      start_time: contentStart,
+      content_hash: hash,
+      content: value,
+    });
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [
+        eventRecord("root", {
+          is_root: 1,
+          input: `${"a".repeat(64)} ${"b".repeat(64)} ${"c".repeat(64)}`,
+        }),
+      ],
+      scalarRecords: [],
+      contentRecords: [
+        content("a".repeat(64), "a".repeat(100)),
+        content("b".repeat(64), "b".repeat(100)),
+        content("c".repeat(64), "c".repeat(100)),
+      ],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    const contentLoads = loads.filter(
+      (load) => load.table === "content_dict_p1",
+    );
+    expect(contentLoads.map((load) => load.count)).toEqual([2, 1]);
+    expect(loads.map((load) => load.table)).toEqual([
+      "content_dict_p1",
+      "content_dict_p1",
+      "events_full_p1",
+      "traces_scalar_p1",
+      "pg:otel_file_ledger",
+    ]);
+  });
+
+  it("uses deterministic group-batch labels for content_dict batches", async () => {
+    const contentLabelFor = async (hash: string, fileKey: string) => {
+      const { deps, loads } = makeDeps();
+      deps.transformFile = vi.fn(async () => ({
+        eventRecords: [eventRecord("root", { input: hash })],
+        contentRecords: [
+          {
+            start_time: "2026-08-08",
+            content_hash: hash,
+            content: JSON.stringify([{ role: "user", content: "nested" }]),
+          },
+        ],
+        sessions: new Map(),
+      }));
+
+      await processOtelGroupJob(payloadFor([fileKey]), deps);
+      return loads.find((load) => load.table === "content_dict_p1")?.options
+        .label;
+    };
+
+    const first = await contentLabelFor("a".repeat(64), "same.json");
+    const replay = await contentLabelFor("a".repeat(64), "same.json");
+    const differentGroup = await contentLabelFor("b".repeat(64), "other.json");
+
+    expect(first).toEqual(expect.any(String));
+    expect(replay).toBe(first);
+    expect(differentGroup).not.toBe(first);
+  });
+
+  it("keeps content batch labels stable across concurrent transform ordering", async () => {
+    const fileKeys = ["first.json", "second.json"];
+    const contentLabelForCompletionOrder = async (
+      completionOrder: string[],
+    ) => {
+      const { deps, loads } = makeDeps();
+      deps.transformConcurrency = 2;
+      const resolvers = new Map<string, () => void>();
+      deps.transformFile = vi.fn(
+        (
+          entry: OtelPendingEntryType,
+          _raw: string,
+          onContentRecords: Parameters<GroupJobDeps["transformFile"]>[2],
+        ) =>
+          new Promise((resolve, reject) => {
+            const hash = entry.fileKey === "first.json" ? "a" : "b";
+            const contentHash = hash.repeat(64);
+            const startTime = Date.parse("2026-08-08T00:00:00.000Z");
+            resolvers.set(entry.fileKey, () => {
+              if (!onContentRecords) {
+                reject(new Error("content sink was not provided"));
+                return;
+              }
+              void onContentRecords(
+                [
+                  {
+                    start_time: "2026-08-08",
+                    content_hash: contentHash,
+                    content: JSON.stringify([
+                      { role: "user", content: `nested-${hash}` },
+                    ]),
+                  },
+                ],
+                startTime,
+              ).then(
+                () =>
+                  resolve({
+                    eventRecords: [
+                      eventRecord(entry.fileKey, {
+                        input: contentHash,
+                        start_time: startTime,
+                        event_ts: startTime,
+                      }),
+                    ],
+                    contentRecords: [],
+                    sessions: new Map(),
+                  }),
+                reject,
+              );
+            });
+          }),
+      );
+
+      const job = processOtelGroupJob(payloadFor(fileKeys), deps);
+      await vi.waitFor(() => expect(resolvers.size).toBe(fileKeys.length));
+      for (const fileKey of completionOrder) resolvers.get(fileKey)?.();
+      await job;
+
+      return loads
+        .filter((load) => load.table === "content_dict_p1")
+        .map((load) => load.options.label);
+    };
+
+    const forward = await contentLabelForCompletionOrder(fileKeys);
+    const reverse = await contentLabelForCompletionOrder(
+      [...fileKeys].reverse(),
+    );
+
+    expect(forward).toEqual(reverse);
+  });
+
+  it("isolates and measures a content row larger than the batch byte limit", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    vi.mocked(recordIncrement).mockClear();
+    vi.mocked(recordHistogram).mockClear();
+    const oversizedHash = "a".repeat(64);
+    const normalHash = "b".repeat(64);
+    const oversizedContent = "x".repeat(600);
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [
+        eventRecord("root", {
+          is_root: 1,
+          input: `${oversizedHash} ${normalHash}`,
+        }),
+      ],
+      contentRecords: [
+        {
+          start_time: new Date().toISOString().slice(0, 10),
+          content_hash: oversizedHash,
+          content: oversizedContent,
+        },
+        {
+          start_time: new Date().toISOString().slice(0, 10),
+          content_hash: normalHash,
+          content: '"small"',
+        },
+      ],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    const contentLoads = loads.filter(
+      (load) => load.table === "content_dict_p1",
+    );
+    expect(contentLoads.map((load) => load.count)).toEqual([1, 1]);
+    expect(contentLoads[0].rows).toEqual([
+      expect.objectContaining({ content: oversizedContent }),
+    ]);
+    expect(recordIncrement).toHaveBeenCalledWith(
+      "langfuse.otel_group.oversize_content_entry",
+      1,
+    );
+    expect(recordHistogram).toHaveBeenCalledWith(
+      "langfuse.otel_group.oversize_content_entry_bytes",
+      expect.any(Number),
+    );
+  });
+
+  it("deduplicates identical content keys within a batch", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    const hash = "a".repeat(64);
+    const startTime = new Date().toISOString().slice(0, 10);
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [eventRecord("root", { input: `${hash} ${hash}` })],
+      contentRecords: [
+        { start_time: startTime, content_hash: hash, content: '"same"' },
+        { start_time: startTime, content_hash: hash, content: '"same"' },
+      ],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    const contentLoads = loads.filter(
+      (load) => load.table === "content_dict_p1",
+    );
+    expect(contentLoads).toHaveLength(1);
+    expect(contentLoads[0].rows).toHaveLength(1);
+  });
+
+  it("does not enter events when a content chunk fails", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps } = makeDeps();
+    const hash = "a".repeat(64);
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [eventRecord("root", { input: hash })],
+      contentRecords: [
+        {
+          start_time: new Date().toISOString().slice(0, 10),
+          content_hash: hash,
+          content: '"will fail"',
+        },
+      ],
+      sessions: new Map(),
+    });
+    deps.streamLoadBody = vi.fn(async (table) => {
+      if (table === "content_dict_p1") throw new Error("content load down");
+      return { dedupedByLabel: false };
+    });
+
+    await expect(processOtelGroupJob(payload, deps)).rejects.toThrow(
+      "content load down",
+    );
+    expect(
+      vi
+        .mocked(deps.streamLoadBody)
+        .mock.calls.some(([table]) => table === "events_full_p1"),
+    ).toBe(false);
+  });
+
+  it("dead-letters a tombstoned project on content missing-table without events", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    const hash = "a".repeat(64);
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [eventRecord("root", { input: hash })],
+      contentRecords: [
+        {
+          start_time: new Date().toISOString().slice(0, 10),
+          content_hash: hash,
+          content: '"tombstoned"',
+        },
+      ],
+      sessions: new Map(),
+    });
+    vi.mocked(handleMissingSplitTable).mockResolvedValue("skip");
+    deps.streamLoadBody = vi.fn(async (table, body, count, options) => {
+      if (table === "content_dict_p1") {
+        throw new Error("table content_dict_p1 does not exist");
+      }
+      loads.push({ table, rows: decodeBody(body), count, options });
+      return { dedupedByLabel: false };
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    expect(loads.map((load) => load.table)).toEqual(["pg:otel_file_ledger"]);
+    vi.mocked(handleMissingSplitTable).mockReset();
+  });
+
+  it("passes a backpressured content sink into the transform", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    const contentHash = "a".repeat(64);
+    const contentRecord = {
+      start_time: new Date().toISOString().slice(0, 10),
+      content_hash: contentHash,
+      content: '"large input"',
+    };
+    let sinkCalled = false;
+    deps.transformFile = vi.fn(async (_entry, _raw, onContentRecords) => {
+      if (!onContentRecords) {
+        throw new Error("content sink was not provided to transform");
+      }
+      await onContentRecords([contentRecord], Date.now());
+      sinkCalled = true;
+      return {
+        eventRecords: [eventRecord("root", { is_root: 1, input: contentHash })],
+        contentRecords: [],
+        sessions: new Map(),
+      };
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    expect(sinkCalled).toBe(true);
+    expect(loads[0].table).toBe("content_dict_p1");
+    expect(loads[0].rows).toEqual([contentRecord]);
+  });
+
+  it("holds transform completion behind a pending content batch", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps } = makeDeps();
+    const firstHash = "a".repeat(64);
+    const secondHash = "b".repeat(64);
+    const startTime = new Date().toISOString().slice(0, 10);
+    let transformFinished = false;
+    let releaseContentLoad: () => void = () => {
+      throw new Error("content load was not started");
+    };
+    let signalContentLoadStarted!: () => void;
+    const contentLoadStarted = new Promise<void>((resolve) => {
+      signalContentLoadStarted = resolve;
+    });
+    deps.transformFile = vi.fn(async (_entry, _raw, onContentRecords) => {
+      if (!onContentRecords) throw new Error("content sink was not provided");
+      await onContentRecords(
+        [
+          {
+            start_time: startTime,
+            content_hash: firstHash,
+            content: "a".repeat(300),
+          },
+        ],
+        Date.now(),
+      );
+      await onContentRecords(
+        [
+          {
+            start_time: startTime,
+            content_hash: secondHash,
+            content: "b".repeat(300),
+          },
+        ],
+        Date.now(),
+      );
+      transformFinished = true;
+      return {
+        eventRecords: [
+          eventRecord("root", {
+            is_root: 1,
+            input: `${firstHash} ${secondHash}`,
+          }),
+        ],
+        contentRecords: [],
+        sessions: new Map(),
+      };
+    });
+    let contentLoadCount = 0;
+    deps.streamLoadBody = vi.fn(async (table) => {
+      if (table === "content_dict_p1" && ++contentLoadCount === 1) {
+        signalContentLoadStarted();
+        await new Promise<void>((resolve) => {
+          releaseContentLoad = resolve;
+        });
+      }
+      return { dedupedByLabel: false };
+    });
+
+    const job = processOtelGroupJob(payload, deps);
+    await contentLoadStarted;
+
+    expect(transformFinished).toBe(false);
+    expect(
+      vi
+        .mocked(deps.streamLoadBody)
+        .mock.calls.some(([table]) => table === "events_full_p1"),
+    ).toBe(false);
+
+    releaseContentLoad();
+    await job;
+    expect(transformFinished).toBe(true);
+  });
+
+  it("schedules evals after events_full and before traces_scalar", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps } = makeDeps();
+    const order: string[] = [];
+    deps.streamLoadBody = vi.fn(async (table) => {
+      order.push(table);
+      return { dedupedByLabel: false };
+    });
+    deps.scheduleEvals = vi.fn(async () => {
+      order.push("evals");
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    expect(order).toEqual(["events_full_p1", "evals", "traces_scalar_p1"]);
+  });
+
+  it("derives scalar rows from event records after events_full", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps, loads } = makeDeps();
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: [
+        eventRecord("root", { is_root: 1, trace_id: "derived-trace" }),
+      ],
+      scalarRecords: [
+        {
+          project_id: "p1",
+          id: "stale-scalar",
+          start_time: Date.now(),
+          event_ts: Date.now(),
+        } as never,
+      ],
+      contentRecords: [],
+      sessions: new Map(),
+    });
+
+    await processOtelGroupJob(payload, deps);
+
+    const scalar = loads.find((load) => load.table === "traces_scalar_p1");
+    expect(scalar?.rows).toMatchObject([{ id: "derived-trace" }]);
+  });
+
+  it("releases event records before traces_scalar begins", async () => {
+    const payload = payloadFor(["f1.json"]);
+    const { deps } = makeDeps();
+    const transformedEventRecords = [eventRecord("root", { is_root: 1 })];
+    (deps.transformFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      eventRecords: transformedEventRecords,
+      scalarRecords: [
+        {
+          project_id: "p1",
+          id: "stale-scalar",
+          start_time: Date.now(),
+          event_ts: Date.now(),
+        } as never,
+      ],
+      contentRecords: [],
+      sessions: new Map(),
+    });
+    deps.streamLoadBody = vi.fn(async (table) => {
+      if (table === "traces_scalar_p1") {
+        expect(transformedEventRecords).toHaveLength(0);
+      }
+      return { dedupedByLabel: false };
+    });
+
+    await processOtelGroupJob(payload, deps);
   });
 
   it("loads content records produced by the transform before events_full", async () => {
@@ -412,6 +858,7 @@ describe("processOtelGroupJob (split targets)", () => {
   it("drops over-retention rows before the split load (row dead-letter)", async () => {
     __setSplitSnapshotForTest([["p1", true]]);
     vi.mocked(getSplitRetentionDays).mockResolvedValue(7); // 7d retention
+    vi.mocked(recordIncrement).mockClear();
     const payload = payloadFor(["f1.json"]);
     const oldTs = Date.now() - 30 * 86_400_000; // 30d old, retention 7d
     const nowTs = Date.now();
@@ -450,6 +897,14 @@ describe("processOtelGroupJob (split targets)", () => {
       expect.objectContaining({ content_hash: recentHash }),
     ]);
     expect(contentLoad?.rows[0]).not.toHaveProperty("project_id");
+    expect(
+      vi
+        .mocked(recordIncrement)
+        .mock.calls.filter(
+          ([metric]) =>
+            metric === "langfuse.otel_group.retention_filtered_rows",
+        ),
+    ).toEqual([["langfuse.otel_group.retention_filtered_rows", 1]]);
   });
 
   it("a project not live in cache still targets its split tables", async () => {

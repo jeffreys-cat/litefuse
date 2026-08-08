@@ -426,13 +426,38 @@ describe("requiredLabelNumThreshold (capacity gate, Stage 1.8)", () => {
     // 0.5 groups/s, 2 labels/group, 3-day keep window
     const keepMs = 3 * 24 * 3600_000;
     expect(
-      requiredLabelNumThreshold({ groupsPerSecond: 0.5, labelKeepMs: keepMs }),
+      requiredLabelNumThreshold({
+        groupsPerSecond: 0.5,
+        labelKeepMs: keepMs,
+        contentLabelsPerGroup: 0,
+      }),
     ).toBe(Math.ceil(0.5 * LABELS_PER_GROUP * (keepMs / 1000)));
   });
   it("scales linearly with group rate (lane count raises it)", () => {
     const keepMs = 3600_000; // 1h
-    const a = requiredLabelNumThreshold({ groupsPerSecond: 1, labelKeepMs: keepMs });
-    const b = requiredLabelNumThreshold({ groupsPerSecond: 2, labelKeepMs: keepMs });
+    const a = requiredLabelNumThreshold({
+      groupsPerSecond: 1,
+      labelKeepMs: keepMs,
+      contentLabelsPerGroup: 4,
+    });
+    const b = requiredLabelNumThreshold({
+      groupsPerSecond: 2,
+      labelKeepMs: keepMs,
+      contentLabelsPerGroup: 4,
+    });
     expect(b).toBe(2 * a);
+  });
+  it("adds the bounded content_dict stream-load labels per group", () => {
+    const keepMs = 3600_000; // 1h
+    const contentLabelsPerGroup = 8;
+    expect(
+      requiredLabelNumThreshold({
+        groupsPerSecond: 1,
+        labelKeepMs: keepMs,
+        contentLabelsPerGroup,
+      }),
+    ).toBe(
+      Math.ceil((LABELS_PER_GROUP + contentLabelsPerGroup) * (keepMs / 1000)),
+    );
   });
 });

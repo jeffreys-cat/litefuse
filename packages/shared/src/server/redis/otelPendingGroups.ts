@@ -111,24 +111,29 @@ export const labelForGroupTable = (groupId: string, table: string): string =>
 export const eventsFullLabelForGroup = (groupId: string): string =>
   labelForGroupTable(groupId, "events_full");
 
-/** Labels a single group burns in the FE registry over its lifetime — one per
- * Doris load (events_full + traces_scalar), deterministic so retries reuse them. */
+/** Fixed labels a single group burns in the FE registry over its lifetime —
+ * one per events_full and traces_scalar load, deterministic so retries reuse
+ * them. content_dict labels are bounded separately by its batch count. */
 export const LABELS_PER_GROUP = 2;
 
 /**
  * Minimum Doris `label_num_threshold` the FE must be configured with (capacity
- * gate, Stage 1.8 / design §4.5). Each group holds LABELS_PER_GROUP labels for
- * the keep window; at a sustained group rate the registry must fit them all, or
- * labels get evicted early and a replay re-loads a committed batch (the
- * 2026-07-28 duplicate-data incident). Total group rate rises with lane count
- * (shared pool + Σ per-project lane cut rates) — plug the T8-measured rate in.
+ * gate, Stage 1.8 / design §4.5). Each group holds the fixed events/scalar
+ * labels plus its bounded content_dict batch labels for the keep window; at a
+ * sustained group rate the registry must fit them all, or labels get evicted
+ * early and a replay re-loads a committed batch (the 2026-07-28 duplicate-data
+ * incident). Total group rate rises with lane count (shared pool + Σ
+ * per-project lane cut rates) — plug the T8-measured rate in.
  */
 export const requiredLabelNumThreshold = (params: {
   groupsPerSecond: number;
   labelKeepMs: number;
+  contentLabelsPerGroup: number;
 }): number =>
   Math.ceil(
-    params.groupsPerSecond * LABELS_PER_GROUP * (params.labelKeepMs / 1000),
+    params.groupsPerSecond *
+      (LABELS_PER_GROUP + params.contentLabelsPerGroup) *
+      (params.labelKeepMs / 1000),
   );
 
 // ---------------------------------------------------------------------------
