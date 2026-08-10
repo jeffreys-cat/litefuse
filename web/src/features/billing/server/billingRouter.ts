@@ -45,7 +45,12 @@ export const billingRouter = createTRPCRouter({
       return getBillingStatus(input.orgId);
     }),
   createCheckoutSession: protectedOrganizationProcedure
-    .input(orgInput.extend({ targetPlan: billingTargetPlanSchema }))
+    .input(
+      orgInput.extend({
+        targetPlan: billingTargetPlanSchema,
+        testClockId: z.string().min(1).optional(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       await assertCanManageBilling({
         session: ctx.session,
@@ -56,12 +61,16 @@ export const billingRouter = createTRPCRouter({
         userId: ctx.session.user.id,
         userEmail: ctx.session.user.email,
         targetPlan: input.targetPlan,
+        testClockId: input.testClockId,
       });
       await auditBillingAction({
         userId: ctx.session.user.id,
         orgId: input.orgId,
         action: "billing.checkout.create",
-        after: { targetPlan: input.targetPlan },
+        after: {
+          targetPlan: input.targetPlan,
+          ...(input.testClockId ? { testClockId: input.testClockId } : {}),
+        },
       });
       return result;
     }),

@@ -49,6 +49,7 @@ export const env = createEnv({
     LITEFUSE_NEW_USER_SIGNUP_WEBHOOK: z.string().url().optional(),
     LITEFUSE_ADMIN_ACCESS_WEBHOOK: z.string().url().optional(),
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_TEST_CLOCK_ID: z.string().optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
     STRIPE_PRO_MONTHLY_PRICE_ID: z.string().min(1).optional(),
     STRIPE_TEAMS_MONTHLY_ADDON_PRICE_ID: z.string().min(1).optional(),
@@ -471,6 +472,7 @@ export const env = createEnv({
     NEXT_PUBLIC_LITEFUSE_CLOUD_REGION:
       process.env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION,
     NEXT_PUBLIC_SIGN_UP_DISABLED: process.env.NEXT_PUBLIC_SIGN_UP_DISABLED,
+    STRIPE_TEST_CLOCK_ID: process.env.STRIPE_TEST_CLOCK_ID,
     LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES:
       process.env.LITEFUSE_ENABLE_EXPERIMENTAL_FEATURES,
     LITEFUSE_TEAM_SLACK_WEBHOOK: process.env.LITEFUSE_TEAM_SLACK_WEBHOOK,

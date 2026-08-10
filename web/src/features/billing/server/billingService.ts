@@ -446,10 +446,28 @@ export async function getBillingStatus(
 async function ensureStripeCustomer(params: {
   org: Organization;
   userEmail?: string | null;
+  testClockId?: string;
 }): Promise<string> {
+  const testClockId = params.testClockId ?? env.STRIPE_TEST_CLOCK_ID;
+
+  if (testClockId && !env.STRIPE_SECRET_KEY?.startsWith("sk_test_")) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Stripe Test Clocks are only available with a test-mode key.",
+    });
+  }
+
   const cloudConfig = parseCloudConfig(params.org.cloudConfig);
   const existingCustomerId = cloudConfig?.stripe?.customerId;
   if (existingCustomerId) {
+    if (testClockId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "A Stripe Test Clock can only be assigned when the Customer is created.",
+      });
+    }
+
     await getStripeClient().customers.update(existingCustomerId, {
       metadata: {
         orgId: params.org.id,
@@ -462,6 +480,7 @@ async function ensureStripeCustomer(params: {
   const customer = await getStripeClient().customers.create({
     name: params.org.name,
     email: params.userEmail ?? undefined,
+    ...(testClockId ? { test_clock: testClockId } : {}),
     metadata: {
       orgId: params.org.id,
       cloudRegion: env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION ?? "",
@@ -483,6 +502,7 @@ export async function createCheckoutSession(params: {
   userId: string;
   userEmail?: string | null;
   targetPlan: BillingTargetPlan;
+  testClockId?: string;
 }) {
   ensureStripeConfigured("checkout");
   const entry = getBillingEntry(params.targetPlan);
@@ -508,6 +528,7 @@ export async function createCheckoutSession(params: {
   const customerId = await ensureStripeCustomer({
     org,
     userEmail: params.userEmail,
+    testClockId: params.testClockId,
   });
   const baseUrl = env.NEXTAUTH_URL.replace(/\/$/, "");
   const billingUrl = `${baseUrl}/organization/${encodeURIComponent(params.orgId)}/settings/billing`;
