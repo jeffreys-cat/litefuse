@@ -11,7 +11,12 @@ import {
   type Organization,
   type Prisma,
 } from "@langfuse/shared/src/db";
-import { getBillingCycleEnd, logger, redis } from "@langfuse/shared/src/server";
+import {
+  enqueueDorisSplitTableProvisioning,
+  getBillingCycleEnd,
+  logger,
+  redis,
+} from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 import type { Session } from "next-auth";
 import Stripe from "stripe";
@@ -781,9 +786,31 @@ export async function syncSubscriptionToOrganization(
   });
 
   await new ApiAuthService(prisma, redis).invalidateCachedOrgApiKeys(org.id);
+
+  const planChanged = previousPlan !== syncState.resolvedPlan;
+  if (planChanged) {
+    const projects = await prisma.project.findMany({
+      where: { orgId: org.id },
+      select: { id: true },
+    });
+    await Promise.all(
+      projects.map(({ id }) =>
+        enqueueDorisSplitTableProvisioning(id).catch((error) => {
+          // Billing state is already persisted; a temporary queue failure must
+          // not make Stripe retry the webhook. The provisioning reconciler can
+          // retry this project later.
+          logger.error(
+            `[table-split] failed to re-provision project ${id} after plan change`,
+            error,
+          );
+        }),
+      ),
+    );
+  }
+
   return {
     orgId: org.id,
-    planChanged: previousPlan !== syncState.resolvedPlan,
+    planChanged,
   };
 }
 
