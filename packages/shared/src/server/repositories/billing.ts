@@ -2,6 +2,9 @@ import { convertDateToAnalyticsDateTime } from "./analytics";
 import { queryDoris } from "./doris";
 import { executeDorisProjectFanout } from "../doris/crossProjectTableRouting";
 
+export const BILLING_METER_EVENT_NAME = "litefuse_units";
+export const CLOUD_USAGE_METERING_CRON_NAME = "cloud-usage-metering-hourly";
+
 export type BillingUnitCountByProjectAndDay = {
   projectId: string;
   date: string;
@@ -10,6 +13,32 @@ export type BillingUnitCountByProjectAndDay = {
   scores: number;
   total: number;
 };
+
+export type BillingUnitCount = {
+  traces: number;
+  observations: number;
+  scores: number;
+  total: number;
+};
+
+export async function getBillingUnitCountForProjects(params: {
+  projectIds: string[];
+  start: Date;
+  end: Date;
+}): Promise<BillingUnitCount> {
+  const rows = await getBillingUnitCountsByProjectAndDay({
+    ...params,
+  });
+  return rows.reduce(
+    (total, row) => ({
+      traces: total.traces + row.traces,
+      observations: total.observations + row.observations,
+      scores: total.scores + row.scores,
+      total: total.total + row.total,
+    }),
+    { traces: 0, observations: 0, scores: 0, total: 0 },
+  );
+}
 
 export async function getBillingUnitCountsByProjectAndDay(params: {
   start: Date;
