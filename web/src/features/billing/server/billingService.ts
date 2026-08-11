@@ -431,7 +431,10 @@ export async function getBillingStatus(
     reportedThrough,
     updatedAt: usageUpdatedAt,
   } = await usagePromise;
-  const cycleEnd = getBillingCycleEnd(org, new Date());
+  // Stripe's stored period end is authoritative for paid subscriptions. This
+  // is important for Test Clocks, whose Stripe time can be ahead of the app's
+  // real wall clock.
+  const cycleEnd = currentPeriodEnd ?? getBillingCycleEnd(org, new Date());
 
   return {
     plan,

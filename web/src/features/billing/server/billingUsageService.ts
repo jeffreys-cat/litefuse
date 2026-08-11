@@ -5,6 +5,7 @@ import {
   getBillingCycleStart,
   getBillingUnitCountForProjects,
   logger,
+  startOfDayUTC,
 } from "@langfuse/shared/src/server";
 
 const BILLING_USAGE_CACHE_MS = 5 * 60 * 1000;
@@ -60,7 +61,12 @@ export async function getPaidBillingUsage(params: {
   now?: Date;
 }): Promise<BillingUsageResult> {
   const now = params.now ?? new Date();
-  const cycleStart = getBillingCycleStart(params.organization, now);
+  // Stripe stores the active period start in cloudBillingCycleAnchor. Prefer
+  // it for paid usage so Stripe Test Clock advances are not recalculated from
+  // the application's real wall clock.
+  const cycleStart = params.organization.cloudBillingCycleAnchor
+    ? startOfDayUTC(params.organization.cloudBillingCycleAnchor)
+    : getBillingCycleStart(params.organization, now);
   const cron = await prisma.cronJobs.findUnique({
     where: { name: CLOUD_USAGE_METERING_CRON_NAME },
     select: { lastRun: true },

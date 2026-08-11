@@ -24,6 +24,7 @@ jest.mock("@langfuse/shared/src/server", () => ({
   CLOUD_USAGE_METERING_CRON_NAME: "cloud-usage-metering-hourly",
   getBillingCycleStart: jest.fn(),
   getBillingUnitCountForProjects: jest.fn(),
+  startOfDayUTC: jest.fn((date: Date) => date),
   logger: { debug: jest.fn(), warn: jest.fn() },
   redis: undefined,
 }));
