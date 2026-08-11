@@ -130,6 +130,8 @@ function cloudConfigToJson(
     subscriptionStatus?: string | null;
     cancelAtPeriodEnd?: boolean | null;
     currentPeriodEnd?: string | null;
+    meteringStartAt?: string | null;
+    meteringEndAt?: string | null;
   },
 ): Prisma.InputJsonObject {
   const next: Record<string, Prisma.InputJsonValue> = {};
@@ -183,6 +185,14 @@ function cloudConfigToJson(
       stripePatch.currentPeriodEnd,
       current?.stripe?.currentPeriodEnd,
     ),
+    meteringStartAt: patchOrCurrent(
+      stripePatch.meteringStartAt,
+      current?.stripe?.meteringStartAt,
+    ),
+    meteringEndAt: patchOrCurrent(
+      stripePatch.meteringEndAt,
+      current?.stripe?.meteringEndAt,
+    ),
   };
 
   return next as Prisma.InputJsonObject;
@@ -220,6 +230,26 @@ function subscriptionPeriodEnd(subscription: Stripe.Subscription): Date | null {
       (subscription as Stripe.Subscription & { current_period_end?: number })
         .current_period_end,
     ) ?? timestampSecondsToDate(firstItem?.current_period_end)
+  );
+}
+
+function subscriptionMeteringStart(
+  subscription: Stripe.Subscription,
+): Date | null {
+  return (
+    timestampSecondsToDate(subscription.start_date) ??
+    subscriptionPeriodStart(subscription)
+  );
+}
+
+function subscriptionMeteringEnd(
+  subscription: Stripe.Subscription,
+  effectiveAt: Date,
+): Date {
+  return (
+    timestampSecondsToDate(subscription.ended_at) ??
+    subscriptionPeriodEnd(subscription) ??
+    effectiveAt
   );
 }
 
@@ -288,11 +318,15 @@ function subscriptionSyncState(
       : null,
     resolvedPlan: paid ? subscriptionPlan.plan : null,
     subscriptionStatus: subscription.status,
-    cancelAtPeriodEnd: paid ? subscription.cancel_at_period_end : false,
+    cancelAtPeriodEnd: paid ? hasScheduledCancellation(subscription) : false,
     currentPeriodEnd:
       subscriptionPeriodEnd(subscription)?.toISOString() ?? null,
     paid,
   };
+}
+
+function hasScheduledCancellation(subscription: Stripe.Subscription): boolean {
+  return subscription.cancel_at_period_end || subscription.cancel_at != null;
 }
 
 function subscriptionNeedsSync(
@@ -301,6 +335,8 @@ function subscriptionNeedsSync(
 ): boolean {
   const current = cloudConfig?.stripe;
   const expected = subscriptionSyncState(subscription);
+  const expectedMeteringStart =
+    subscriptionMeteringStart(subscription)?.toISOString() ?? null;
 
   return (
     (current?.customerId ?? null) !== expected.customerId ||
@@ -312,7 +348,9 @@ function subscriptionNeedsSync(
     (current?.resolvedPlan ?? null) !== expected.resolvedPlan ||
     (current?.subscriptionStatus ?? null) !== expected.subscriptionStatus ||
     (current?.cancelAtPeriodEnd ?? false) !== expected.cancelAtPeriodEnd ||
-    (current?.currentPeriodEnd ?? null) !== expected.currentPeriodEnd
+    (current?.currentPeriodEnd ?? null) !== expected.currentPeriodEnd ||
+    (current?.meteringStartAt ?? null) !== expectedMeteringStart ||
+    (current?.meteringEndAt ?? null) !== null
   );
 }
 
@@ -366,11 +404,8 @@ export async function getBillingStatus(
       subscriptionId = cloudConfig?.stripe?.activeSubscriptionId;
     }
 
-    cancelAtPeriodEnd =
-      cloudConfig?.stripe?.cancelAtPeriodEnd ??
-      subscription.cancel_at_period_end;
-    currentPeriodEnd =
-      storedPeriodEnd(cloudConfig) ?? subscriptionPeriodEnd(subscription);
+    cancelAtPeriodEnd = hasScheduledCancellation(subscription);
+    currentPeriodEnd = subscriptionPeriodEnd(subscription);
     scheduledPlan = cancelAtPeriodEnd && subscriptionId ? "cloud:hobby" : null;
 
     if (subscriptionId && activeStripeClient) {
@@ -691,31 +726,40 @@ export async function cancelSubscription(orgId: string) {
   if (schedule && ["active", "not_started"].includes(schedule.status)) {
     await getStripeClient().subscriptionSchedules.release(schedule.id);
   }
-  await getStripeClient().subscriptions.update(subscription.id, {
-    cancel_at_period_end: true,
-  });
+  const updatedSubscription = await getStripeClient().subscriptions.update(
+    subscription.id,
+    { cancel_at_period_end: true },
+  );
+  await syncSubscriptionToOrganization(updatedSubscription);
   return { ok: true } as const;
 }
 
 export async function reactivateSubscription(orgId: string) {
   const subscription = await getActiveSubscription(orgId);
-  await getStripeClient().subscriptions.update(subscription.id, {
-    cancel_at_period_end: false,
-  });
+  const updatedSubscription = await getStripeClient().subscriptions.update(
+    subscription.id,
+    { cancel_at: "", cancel_at_period_end: false },
+  );
+  await syncSubscriptionToOrganization(updatedSubscription);
   return { ok: true } as const;
 }
 
 export async function clearScheduledChange(orgId: string) {
-  const subscription = await getActiveSubscription(orgId);
+  let subscription = await getActiveSubscription(orgId);
   const schedule = await getSubscriptionSchedule(subscription);
   if (schedule && ["active", "not_started"].includes(schedule.status)) {
     await getStripeClient().subscriptionSchedules.release(schedule.id);
   }
-  if (subscription.cancel_at_period_end) {
-    await getStripeClient().subscriptions.update(subscription.id, {
-      cancel_at_period_end: false,
-    });
+  if (hasScheduledCancellation(subscription)) {
+    subscription = await getStripeClient().subscriptions.update(
+      subscription.id,
+      {
+        cancel_at: "",
+        cancel_at_period_end: false,
+      },
+    );
   }
+  await syncSubscriptionToOrganization(subscription);
   return { ok: true } as const;
 }
 
@@ -734,7 +778,7 @@ export async function createPortalSession(params: { orgId: string }) {
     });
   }
   const baseUrl = env.NEXTAUTH_URL.replace(/\/$/, "");
-  const returnUrl = `${baseUrl}/organization/${encodeURIComponent(params.orgId)}/settings/billing`;
+  const returnUrl = `${baseUrl}/organization/${encodeURIComponent(params.orgId)}/settings/billing?billingPortal=return`;
   const session = await getStripeClient().billingPortal.sessions.create({
     customer: customerId,
     return_url: returnUrl,
@@ -745,6 +789,7 @@ export async function createPortalSession(params: { orgId: string }) {
 export async function syncSubscriptionToOrganization(
   subscription: Stripe.Subscription,
   forceClear: boolean = false,
+  effectiveAt: Date = new Date(),
 ): Promise<{ orgId: string | null; planChanged: boolean }> {
   const customerId = stripeId(subscription.customer);
   const metadataOrgId = jsonString(subscription.metadata?.orgId);
@@ -781,42 +826,72 @@ export async function syncSubscriptionToOrganization(
     return { orgId: null, planChanged: false };
   }
 
-  const cloudConfig = parseCloudConfig(org.cloudConfig);
-  const previousPlan = cloudConfig?.stripe?.resolvedPlan ?? null;
   const syncState = subscriptionSyncState(subscription, forceClear);
   const anchor = syncState.paid
     ? subscriptionPeriodStart(subscription)
-    : (subscriptionPeriodEnd(subscription) ?? new Date());
-  const anchorChanged =
-    Boolean(anchor) &&
-    org.cloudBillingCycleAnchor?.getTime() !== anchor?.getTime();
+    : subscriptionMeteringEnd(subscription, effectiveAt);
+  const meteringStartAt = subscriptionMeteringStart(subscription);
+  const meteringEndAt = syncState.paid
+    ? null
+    : subscriptionMeteringEnd(subscription, effectiveAt);
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM organizations WHERE id = ${org.id} FOR UPDATE
+    `;
+    const lockedOrg = await tx.organization.findUniqueOrThrow({
+      where: { id: org.id },
+    });
+    const cloudConfig = parseCloudConfig(lockedOrg.cloudConfig);
+    const previousPlan = cloudConfig?.stripe?.resolvedPlan ?? null;
+    const currentSubscriptionId =
+      cloudConfig?.stripe?.activeSubscriptionId ?? null;
+    if (
+      forceClear &&
+      currentSubscriptionId &&
+      currentSubscriptionId !== subscription.id
+    ) {
+      logger.info("Ignoring stale Stripe subscription deletion", {
+        orgId: org.id,
+        deletedSubscriptionId: subscription.id,
+        currentSubscriptionId,
+      });
+      return { applied: false, previousPlan };
+    }
 
-  await prisma.organization.update({
-    where: { id: org.id },
-    data: {
-      cloudConfig: cloudConfigToJson(cloudConfig, {
-        customerId: syncState.customerId,
-        activeSubscriptionId: syncState.activeSubscriptionId,
-        activeProductId: syncState.activeProductId,
-        activeUsageProductId: syncState.activeUsageProductId,
-        activeTeamsAddonProductId: syncState.activeTeamsAddonProductId,
-        resolvedPlan: syncState.resolvedPlan,
-        subscriptionStatus: syncState.subscriptionStatus,
-        cancelAtPeriodEnd: syncState.cancelAtPeriodEnd,
-        currentPeriodEnd: syncState.currentPeriodEnd,
-      }),
-      cloudBillingCycleAnchor: anchor ?? undefined,
-      cloudBillingCycleUpdatedAt: new Date(),
-      // Subscription updates and invoice events can occur many times in one
-      // cycle. Only reset usage when the actual billing-cycle anchor changes.
-      cloudCurrentCycleUsage: anchorChanged ? 0 : undefined,
-      cloudFreeTierUsageThresholdState: null,
-    },
+    const anchorChanged =
+      Boolean(anchor) &&
+      lockedOrg.cloudBillingCycleAnchor?.getTime() !== anchor?.getTime();
+    await tx.organization.update({
+      where: { id: org.id },
+      data: {
+        cloudConfig: cloudConfigToJson(cloudConfig, {
+          customerId: syncState.customerId,
+          activeSubscriptionId: syncState.activeSubscriptionId,
+          activeProductId: syncState.activeProductId,
+          activeUsageProductId: syncState.activeUsageProductId,
+          activeTeamsAddonProductId: syncState.activeTeamsAddonProductId,
+          resolvedPlan: syncState.resolvedPlan,
+          subscriptionStatus: syncState.subscriptionStatus,
+          cancelAtPeriodEnd: syncState.cancelAtPeriodEnd,
+          currentPeriodEnd: syncState.currentPeriodEnd,
+          meteringStartAt: meteringStartAt?.toISOString() ?? null,
+          meteringEndAt: meteringEndAt?.toISOString() ?? null,
+        }),
+        cloudBillingCycleAnchor: anchor ?? undefined,
+        cloudBillingCycleUpdatedAt: anchorChanged ? null : undefined,
+        cloudCurrentCycleUsage: anchorChanged ? null : undefined,
+        cloudFreeTierUsageThresholdState: null,
+      },
+    });
+    return { applied: true, previousPlan };
   });
 
-  await new ApiAuthService(prisma, redis).invalidateCachedOrgApiKeys(org.id);
+  if (result.applied) {
+    await new ApiAuthService(prisma, redis).invalidateCachedOrgApiKeys(org.id);
+  }
 
-  const planChanged = previousPlan !== syncState.resolvedPlan;
+  const planChanged =
+    result.applied && result.previousPlan !== syncState.resolvedPlan;
   if (planChanged) {
     const projects = await prisma.project.findMany({
       where: { orgId: org.id },
