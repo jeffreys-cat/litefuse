@@ -60,7 +60,15 @@ export async function getPaidBillingUsage(params: {
   now?: Date;
 }): Promise<BillingUsageResult> {
   const now = params.now ?? new Date();
-  const cycleStart = getBillingCycleStart(params.organization, now);
+  // Stripe webhooks persist the active subscription period start here. It is
+  // authoritative for Test Clocks, whose time can move independently of this
+  // application's wall clock.
+  const cycleStart =
+    params.organization.cloudBillingCycleAnchor ??
+    getBillingCycleStart(params.organization, now);
+  // Never issue a backwards [start, end) Doris query when a Test Clock has
+  // advanced beyond application time.
+  const billingNow = new Date(Math.max(now.getTime(), cycleStart.getTime()));
   const cron = await prisma.cronJobs.findUnique({
     where: { name: CLOUD_USAGE_METERING_CRON_NAME },
     select: { lastRun: true },
@@ -68,7 +76,7 @@ export async function getPaidBillingUsage(params: {
   const reportedThrough = cron?.lastRun
     ? new Date(
         Math.min(
-          now.getTime(),
+          billingNow.getTime(),
           Math.max(cycleStart.getTime(), cron.lastRun.getTime()),
         ),
       )
@@ -88,7 +96,7 @@ export async function getPaidBillingUsage(params: {
     getBillingUnitCountForProjects({
       projectIds: params.organization.projects.map((project) => project.id),
       start: committedEnd,
-      end: now,
+      end: billingNow,
     }),
   ]);
   const reportedUnits = reported._sum.aggregatedValue ?? 0;
@@ -98,6 +106,6 @@ export async function getPaidBillingUsage(params: {
     reportedUnits,
     pendingUnits,
     reportedThrough,
-    updatedAt: now,
+    updatedAt: billingNow,
   };
 }

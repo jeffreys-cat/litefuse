@@ -67,6 +67,10 @@ import { otelIngestionQueueProcessor } from "./queues/otelIngestionQueue";
 import { eventPropagationProcessor } from "./queues/eventPropagationQueue";
 import { notificationQueueProcessor } from "./queues/notificationQueue";
 import {
+  shouldRegisterCloudUsageMeteringQueue,
+  shouldRegisterFreeTierUsageThresholdQueue,
+} from "./features/billing/constants";
+import {
   cloudFreeTierUsageThresholdQueueProcessor,
   cloudUsageMeteringQueueProcessor,
 } from "./queues/cloudBillingQueues";
@@ -150,9 +154,10 @@ if (env.LITEFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
 }
 
 if (
-  env.QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED === "true" &&
-  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION &&
-  env.STRIPE_SECRET_KEY
+  shouldRegisterCloudUsageMeteringQueue({
+    consumerEnabled: env.QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED,
+    stripeSecretKey: env.STRIPE_SECRET_KEY,
+  })
 ) {
   CloudUsageMeteringQueue.getInstance();
   WorkerManager.register(
@@ -163,8 +168,9 @@ if (
 }
 
 if (
-  env.QUEUE_CONSUMER_FREE_TIER_USAGE_THRESHOLD_QUEUE_IS_ENABLED === "true" &&
-  env.NEXT_PUBLIC_LITEFUSE_CLOUD_REGION
+  shouldRegisterFreeTierUsageThresholdQueue(
+    env.QUEUE_CONSUMER_FREE_TIER_USAGE_THRESHOLD_QUEUE_IS_ENABLED,
+  )
 ) {
   CloudFreeTierUsageThresholdQueue.getInstance();
   WorkerManager.register(

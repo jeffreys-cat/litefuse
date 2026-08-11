@@ -21,6 +21,31 @@ export type BillingUnitCount = {
   total: number;
 };
 
+export type BillingProjectWindow = { projectId: string; start: Date };
+
+/**
+ * Return a total per project where each project may have a different start.
+ * The all-split Doris topology requires project fan-out, so deliberately
+ * reuse the split-safe aggregation rather than querying a shared table.
+ */
+export async function getBillingUnitCountsForProjectWindows(params: {
+  windows: BillingProjectWindow[];
+  end: Date;
+}): Promise<Map<string, number>> {
+  const counts = new Map(params.windows.map(({ projectId }) => [projectId, 0]));
+  await Promise.all(
+    params.windows.map(async ({ projectId, start }) => {
+      const { total } = await getBillingUnitCountForProjects({
+        projectIds: [projectId],
+        start,
+        end: params.end,
+      });
+      counts.set(projectId, total);
+    }),
+  );
+  return counts;
+}
+
 export async function getBillingUnitCountForProjects(params: {
   projectIds: string[];
   start: Date;
