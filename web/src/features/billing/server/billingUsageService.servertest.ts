@@ -84,13 +84,7 @@ describe("getFreshBillingUsage", () => {
       start: cycleStart,
       end: now,
     });
-    expect(mockedUpdateOrganization).toHaveBeenCalledWith({
-      where: { id: "org_test" },
-      data: {
-        cloudCurrentCycleUsage: 9,
-        cloudBillingCycleUpdatedAt: now,
-      },
-    });
+    expect(mockedUpdateOrganization).not.toHaveBeenCalled();
   });
 
   it("uses the cached value while it is fresh", async () => {
@@ -143,6 +137,47 @@ describe("getFreshBillingUsage", () => {
       pendingUnits: 9,
       reportedThrough,
       updatedAt: now,
+    });
+  });
+
+  it("starts paid usage at the Stripe period anchor after a Test Clock advance", async () => {
+    const stripeCycleStart = new Date("2026-09-10T04:41:00.000Z");
+    const applicationNow = new Date("2026-08-11T12:00:00.000Z");
+    const org = {
+      ...organization(),
+      cloudBillingCycleAnchor: stripeCycleStart,
+    };
+    mockedFindCron.mockResolvedValue({
+      lastRun: stripeCycleStart,
+    } as never);
+    mockedAggregateBackups.mockResolvedValue({
+      _sum: { aggregatedValue: null },
+    } as never);
+    mockedGetBillingUnitCount.mockResolvedValue({
+      traces: 0,
+      observations: 0,
+      scores: 0,
+      total: 0,
+    });
+
+    await getPaidBillingUsage({
+      organization: org,
+      customerId: "cus_test",
+      now: applicationNow,
+    });
+
+    expect(mockedAggregateBackups).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          startTime: { gte: stripeCycleStart },
+          endTime: { lte: stripeCycleStart },
+        }),
+      }),
+    );
+    expect(mockedGetBillingUnitCount).toHaveBeenCalledWith({
+      projectIds: ["project_a", "project_b"],
+      start: stripeCycleStart,
+      end: stripeCycleStart,
     });
   });
 });
