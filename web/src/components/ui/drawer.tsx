@@ -77,7 +77,7 @@ const useDrawerContext = () => React.useContext(DrawerContext);
 
 const Drawer = ({
   shouldScaleBackground = true,
-  dismissible = false,
+  dismissible = true,
   forceDirection = "responsive",
   blockTextSelection = false,
   ...props
