@@ -356,6 +356,9 @@ if (env.AUTH_GITHUB_CLIENT_ID && env.AUTH_GITHUB_CLIENT_SECRET)
     GitHubProvider({
       clientId: env.AUTH_GITHUB_CLIENT_ID,
       clientSecret: env.AUTH_GITHUB_CLIENT_SECRET,
+      // GitHub includes its issuer in OAuth callbacks (RFC 9207).
+      // NextAuth must be configured with the same value to validate it.
+      issuer: "https://github.com/login/oauth",
       allowDangerousEmailAccountLinking:
         env.AUTH_GITHUB_ALLOW_ACCOUNT_LINKING === "true",
       client: {
