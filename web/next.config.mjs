@@ -208,10 +208,6 @@ const nextConfig = {
       shimBase,
       "grafana-data.ts",
     );
-    config.resolve.alias["@grafana/runtime"] = path.resolve(
-      shimBase,
-      "grafana-runtime.ts",
-    );
     config.resolve.alias["react-i18next"] = path.resolve(
       shimBase,
       "react-i18next.ts",
